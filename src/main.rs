@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-use slog::{info, o, Drain, Logger};
+use slog::{debug, info, o, warn, Drain, Logger};
 use slog_async;
 use slog_term;
 
@@ -16,7 +16,7 @@ use clap::{command, value_parser, Arg, ArgAction};
 #[config]
 #[derive(Debug, Default)]
 struct Config {
-    #[serde(flatten)]
+    //#[serde(flatten)]
     endpoints: Vec<Endpoint>,
     indices: Vec<Indice>,
 }
@@ -70,16 +70,18 @@ fn main() {
         )
         .get_matches();
 
-    if let Some(config_path) = matches.get_one::<PathBuf>("config") {
-        println!("Config/path: {}", config_path.display());
-    }
-
     if let Some(debug) = matches.get_one::<bool>("debug") {
         println!("Config/debug: {}", debug);
     }
 
     if let Some(no_dry_run) = matches.get_one::<bool>("no-dry-run") {
         println!("Config/no-dry-run: {}", no_dry_run);
+    }
+
+    if let Some(config_path) = matches.get_one::<PathBuf>("config") {
+        println!("Config/path: {}", config_path.display());
+        let config = Config::with_layers(&[Layer::Yaml(config_path.into())]).unwrap();
+        info!(log, "{:#?}", config);
     }
 
     info!(log, "Application ready!");
