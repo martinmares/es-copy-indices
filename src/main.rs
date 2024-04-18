@@ -3,6 +3,7 @@
 #![allow(unused_variables)]
 
 mod conf;
+mod utils;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -81,13 +82,5 @@ async fn main() {
         panic!("Failed to load config file with name {:?}!", config_path)
     };
 
-    if debug {
-        debug!(log, "Config file loaded correctly ... {:#?}", config)
-    };
-
-    // if let Some(config_path) = matches.get_one::<PathBuf>("config") {
-    //     println!("Config/path: {}", config_path.display());
-    //     let _config = conf::Config::with_layers(&[Layer::Yaml(config_path.into())]).unwrap();
-    //     //info!(log, "{:#?}", config);
-    // }
+    debug_if!(debug, log, "Config file loaded correctly ... {:#?}", config)
 }
