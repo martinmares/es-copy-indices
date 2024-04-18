@@ -1,49 +1,32 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
+#![allow(unused_variables)]
 
-use slog::{debug, info, o, warn, Drain, Logger};
-use slog_async;
-use slog_term;
+mod conf;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use reqwest::{Certificate, ClientBuilder};
+use tokio::fs::File;
+use tokio::io::AsyncReadExt; // for read_to_end()
+
+use slog::{debug, error, info, o, warn, Drain, Logger};
+use slog_async;
+use slog_term;
+
+use clap::{arg, command, value_parser, Arg, ArgAction, Command};
 use twelf::reexports::serde::{Deserialize, Serialize};
 use twelf::{config, Layer};
 
-use clap::{command, value_parser, Arg, ArgAction};
-
-#[config]
-#[derive(Debug, Default)]
-struct Config {
-    //#[serde(flatten)]
-    endpoints: Vec<Endpoint>,
-    indices: Vec<Indice>,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct Endpoint {
-    name: String,
-    url: String,
-    auth_basic: String,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct Indice {
-    from: String,
-    to: String,
-    name: String,
-    append_timestamp: bool,
-    transfer_mapping: bool,
-    delete_if_exists: bool,
-}
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::CompactFormat::new(decorator).build().fuse();
     let drain = slog_async::Async::new(drain).build().fuse();
 
     let log = slog::Logger::root(drain, o!());
+    // env_logger::init();
 
     let matches = command!() // requires `cargo` feature
         .arg(
@@ -70,19 +53,41 @@ fn main() {
         )
         .get_matches();
 
-    if let Some(debug) = matches.get_one::<bool>("debug") {
-        println!("Config/debug: {}", debug);
-    }
+    info!(log, "Application started!");
 
-    if let Some(no_dry_run) = matches.get_one::<bool>("no-dry-run") {
-        println!("Config/no-dry-run: {}", no_dry_run);
-    }
+    let debug = matches
+        .get_one::<bool>("debug")
+        .unwrap_or_else(|| &false)
+        .to_owned();
+    let no_dry_run = matches
+        .get_one::<bool>("no-dry-run")
+        .unwrap_or_else(|| &false)
+        .to_owned();
 
-    if let Some(config_path) = matches.get_one::<PathBuf>("config") {
-        println!("Config/path: {}", config_path.display());
-        let config = Config::with_layers(&[Layer::Yaml(config_path.into())]).unwrap();
-        info!(log, "{:#?}", config);
-    }
+    let config_path = if let Some(value) = matches.get_one::<PathBuf>("config") {
+        value.to_owned()
+    } else {
+        panic!("Config path must be set!")
+    };
 
-    info!(log, "Application ready!");
+    info!(
+        log,
+        "Args debug={:?}, no-dry-run={:?}, config_path={:?}", debug, no_dry_run, config_path
+    );
+
+    let config = if let Ok(value) = conf::Config::with_layers(&[Layer::Yaml(config_path.clone())]) {
+        value
+    } else {
+        panic!("Failed to load config file with name {:?}!", config_path)
+    };
+
+    if debug {
+        debug!(log, "Config file loaded correctly ... {:#?}", config)
+    };
+
+    // if let Some(config_path) = matches.get_one::<PathBuf>("config") {
+    //     println!("Config/path: {}", config_path.display());
+    //     let _config = conf::Config::with_layers(&[Layer::Yaml(config_path.into())]).unwrap();
+    //     //info!(log, "{:#?}", config);
+    // }
 }
