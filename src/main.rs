@@ -3,18 +3,16 @@
 #![allow(unused_variables)]
 
 mod conf;
+mod es_utils;
 mod utils;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use reqwest::{Certificate, ClientBuilder};
+use log::{debug, error, info, warn};
+use reqwest::{Certificate, Client, ClientBuilder};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt; // for read_to_end()
-
-use slog::{debug, error, info, o, warn, Drain, Logger};
-use slog_async;
-use slog_term;
 
 use clap::{arg, command, value_parser, Arg, ArgAction, Command};
 use twelf::reexports::serde::{Deserialize, Serialize};
@@ -22,12 +20,7 @@ use twelf::{config, Layer};
 
 #[tokio::main]
 async fn main() {
-    let decorator = slog_term::TermDecorator::new().build();
-    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
-    let drain = slog_async::Async::new(drain).build().fuse();
-
-    let log = slog::Logger::root(drain, o!());
-    // env_logger::init();
+    env_logger::init();
 
     let matches = command!() // requires `cargo` feature
         .arg(
@@ -39,13 +32,6 @@ async fn main() {
                 .required(true),
         )
         .arg(
-            Arg::new("debug")
-                .short('d')
-                .long("debug")
-                .help("Enable debug mode")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
             Arg::new("no-dry-run")
                 .short('n')
                 .long("no-dry-run")
@@ -54,12 +40,8 @@ async fn main() {
         )
         .get_matches();
 
-    info!(log, "Application started!");
+    info!("Application started!");
 
-    let debug = matches
-        .get_one::<bool>("debug")
-        .unwrap_or_else(|| &false)
-        .to_owned();
     let no_dry_run = matches
         .get_one::<bool>("no-dry-run")
         .unwrap_or_else(|| &false)
@@ -72,8 +54,8 @@ async fn main() {
     };
 
     info!(
-        log,
-        "Args debug={:?}, no-dry-run={:?}, config_path={:?}", debug, no_dry_run, config_path
+        "Args no-dry-run={:?}, config_path={:?}",
+        no_dry_run, config_path
     );
 
     let config = if let Ok(value) = conf::Config::with_layers(&[Layer::Yaml(config_path.clone())]) {
@@ -82,5 +64,26 @@ async fn main() {
         panic!("Failed to load config file with name {:?}!", config_path)
     };
 
-    log_only_if!(debug, log, "Config file loaded correctly ... {:#?}", config)
+    let mut endpoint_connections: HashMap<String, utils::EndpointConnection> = HashMap::new();
+
+    for endpoint in config.get_endpoints() {
+        let name = endpoint.get_name();
+        let url = endpoint.get_url();
+        let connection =
+            utils::EndpointConnection::new(endpoint, endpoint.get_root_certificates(), url).await;
+        match connection {
+            Ok(endpoint_connection) => {
+                info!(
+                    "Endpoint connection for \"{}\" (url: {}) created",
+                    name, url
+                );
+                endpoint_connections.insert(name.to_owned(), endpoint_connection);
+            }
+            Err(err) => panic!("{:?}", err),
+        }
+    }
+
+    for index in config.get_indices() {
+        debug!("Copy index {:?}", index.get_name());
+    }
 }
