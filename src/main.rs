@@ -82,5 +82,5 @@ async fn main() {
         panic!("Failed to load config file with name {:?}!", config_path)
     };
 
-    debug_if!(debug, log, "Config file loaded correctly ... {:#?}", config)
+    log_only_if!(debug, log, "Config file loaded correctly ... {:#?}", config)
 }
