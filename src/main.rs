@@ -67,24 +67,28 @@ async fn main() {
     };
 
     for index in config.get_indices() {
+        let index_name = index.get_name();
         let from = index.get_from();
         let to = index.get_to();
-        info!(
-            "Copy index {}, from: {}, to: {}",
-            index.get_name(),
-            from,
-            to
-        );
+        info!("Copy index {}, from: {}, to: {}", index_name, from, to);
 
         let source_es_client = utils::create_es_client(config.get_endpoints(), from)
             .await
             .expect("Create source ES client failed!");
-        source_es_client.print_server_info(from).await;
+        source_es_client.clone().print_server_info(from).await;
 
         let destination_es_client = utils::create_es_client(config.get_endpoints(), to)
             .await
             .expect("Create destination ES client failed!");
         destination_es_client.print_server_info(to).await;
+
+        let scroll_response = source_es_client.scroll_start(index_name, "5m", 10).await;
+        if let Some(response) = scroll_response {
+            info!("Scroll id = {}", response.get_scroll_id());
+            info!("Has docs = {}", response.has_docs());
+            info!("Current size = {}", response.get_current_size());
+            info!("Total size = {}", response.get_total_size());
+        }
     }
 
     // Copy indices

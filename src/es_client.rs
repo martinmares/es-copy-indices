@@ -1,4 +1,5 @@
 use crate::conf::Endpoint;
+use crate::models::scroll_response::ScrollResponse;
 use crate::models::server_info::ServerInfo;
 use core::panic;
 use log::{debug, error, info, warn};
@@ -9,7 +10,7 @@ use reqwest::{Certificate, Client, ClientBuilder, RequestBuilder};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt; // for read_to_end()
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EsClient {
     endpoint: Endpoint,
     http_client: Client,
@@ -51,16 +52,37 @@ impl EsClient {
 
         todo!("Implement empty response!")
     }
+
+    async fn call_post(self, path: &str, body: &str) -> Option<String> {
+        let mut request_builder =
+            self.http_client
+                .post(format!("{}{}", self.endpoint.get_url(), path));
+
+        let endpoint = self.endpoint.clone();
+        request_builder = inject_auth(request_builder, endpoint);
+
+        let call = request_builder.send().await;
+        if let Ok(call) = call {
+            let text = call.text().await;
+            if let Ok(text) = text {
+                return Some(text);
+            }
+        }
+
+        todo!("Implement empty response!")
+    }
+
     pub async fn server_info(self) -> Option<ServerInfo> {
         let resp = self.call_get("/").await;
         if let Some(value) = resp {
-            let json: ServerInfo = serde_json::from_str(&value)
-                .expect("Incorrect response to deserialize data to ServerInfo struct");
+            let json: ServerInfo =
+                serde_json::from_str(&value).expect("Incorrect response for ServerInfo struct");
             return Some(json);
         }
 
         None
     }
+
     pub async fn print_server_info(self, prefix: &str) {
         if let Some(server_info) = self.server_info().await {
             info!(
@@ -73,5 +95,33 @@ impl EsClient {
                 server_info.get_lucene_version()
             );
         }
+    }
+
+    pub async fn scroll_start(
+        self,
+        index_name: &str,
+        keep_alive: &str,
+        size: usize,
+    ) -> Option<ScrollResponse> {
+        let body = format!(
+            "{{ \"size\": {}, \"query\": {{ \"match_all\": {{}} }} }}",
+            size
+        );
+        let resp = self
+            .call_post(
+                &format!("/{}/_search?scroll={}", index_name, keep_alive),
+                &body,
+            )
+            .await;
+        if let Some(value) = resp {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                let scroll_response = ScrollResponse::new(json_value);
+                return Some(scroll_response);
+            }
+        }
+
+        None
     }
 }
