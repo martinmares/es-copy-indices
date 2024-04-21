@@ -1,4 +1,5 @@
 use crate::conf::Endpoint;
+use crate::es_client::EsClient;
 use core::panic;
 use log::{debug, error, info, warn};
 use rustls::client;
@@ -18,7 +19,7 @@ async fn create_certificate_from(
     Ok(cert)
 }
 
-pub async fn create_http_client(
+async fn create_http_client(
     endpoint: &Endpoint,
     root_certificates: &Vec<String>,
 ) -> Result<reqwest::Client, Box<dyn std::error::Error>> {
@@ -40,4 +41,21 @@ pub async fn create_http_client(
             endpoint.get_url()
         )
     }
+}
+
+pub async fn create_es_client(endpoints: &Vec<Endpoint>, which_one: &String) -> Option<EsClient> {
+    for endpoint in endpoints {
+        if endpoint.get_name() == which_one {
+            let name = endpoint.get_name();
+            let url = endpoint.get_url();
+
+            let http_client = create_http_client(endpoint, endpoint.get_root_certificates()).await;
+
+            if let Ok(http_client) = http_client {
+                let es_client = EsClient::new(endpoint.clone(), http_client);
+                return Some(es_client);
+            }
+        }
+    }
+    None
 }

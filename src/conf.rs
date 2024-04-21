@@ -94,4 +94,10 @@ impl Indice {
     pub fn get_name(&self) -> &String {
         &self.name
     }
+    pub fn get_from(&self) -> &String {
+        &self.from
+    }
+    pub fn get_to(&self) -> &String {
+        &self.to
+    }
 }

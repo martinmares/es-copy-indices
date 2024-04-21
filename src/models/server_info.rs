@@ -15,6 +15,7 @@ pub struct ServerInfo {
 #[derive(Serialize, Deserialize)]
 pub struct Version {
     number: String,
+    lucene_version: String,
 }
 
 impl ServerInfo {
@@ -29,5 +30,8 @@ impl ServerInfo {
     }
     pub fn get_version(&self) -> &String {
         &self.version.number
+    }
+    pub fn get_lucene_version(&self) -> &String {
+        &self.version.lucene_version
     }
 }

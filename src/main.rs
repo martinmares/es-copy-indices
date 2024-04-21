@@ -66,30 +66,43 @@ async fn main() {
         panic!("Failed to load config file with name {:?}!", config_path)
     };
 
-    for endpoint in config.get_endpoints() {
-        let name = endpoint.get_name();
-        let url = endpoint.get_url();
-
-        let http_client =
-            utils::create_http_client(endpoint, endpoint.get_root_certificates()).await;
-
-        if let Ok(http_client) = http_client {
-            let es_client = EsClient::new(endpoint.clone(), http_client);
-            let server_info = es_client.server_info().await;
-            if let Some(server_info) = server_info {
-                info!(
-                    "Server info: hostname={}, name={}, uuid={}, version={}",
-                    server_info.get_hostname(),
-                    server_info.get_name(),
-                    server_info.get_uuid(),
-                    server_info.get_version()
-                );
-            }
-        }
-    }
-
     for index in config.get_indices() {
-        debug!("Copy index {:?}", index.get_name());
+        let from = index.get_from();
+        let to = index.get_to();
+        info!(
+            "Copy index {}, from: {}, to: {}",
+            index.get_name(),
+            from,
+            to
+        );
+
+        let source_es_client = utils::create_es_client(config.get_endpoints(), from)
+            .await
+            .expect("Create source ES client failed!");
+        if let Some(server_info) = source_es_client.server_info().await {
+            info!(
+                "From ES: hostname={}, name={}, uuid={}, version={}, lucene={}",
+                server_info.get_hostname(),
+                server_info.get_name(),
+                server_info.get_uuid(),
+                server_info.get_version(),
+                server_info.get_lucene_version()
+            );
+        }
+
+        let source_es_client = utils::create_es_client(config.get_endpoints(), to)
+            .await
+            .expect("Create source ES client failed!");
+        if let Some(server_info) = source_es_client.server_info().await {
+            info!(
+                "To ES: hostname={}, name={}, uuid={}, version={}, lucene={}",
+                server_info.get_hostname(),
+                server_info.get_name(),
+                server_info.get_uuid(),
+                server_info.get_version(),
+                server_info.get_lucene_version()
+            );
+        }
     }
 
     // Copy indices
