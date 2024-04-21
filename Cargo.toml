@@ -16,6 +16,7 @@ log = "0.4.21"
 reqwest = { version = "0.12.3", default-features = false, features = ["rustls-tls"] }
 rustls = "0.23.4"
 serde = { version = "1.0.198", features = ["derive"] }
+serde_json = "1.0.116"
 slog-async = "2.8.0"
 slog-term = "2.9.1"
 tokio = { version = "1.37.0", features = ["full"] }
