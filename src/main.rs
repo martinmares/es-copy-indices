@@ -82,7 +82,7 @@ async fn main() {
             .expect("Create destination ES client failed!");
         destination_es_client.print_server_info(to).await;
 
-        let scroll_response = source_es_client.scroll_start(index_name, "5m", 10).await;
+        let scroll_response = source_es_client.scroll_start(index).await;
         if let Some(response) = scroll_response {
             info!("Scroll id = {}", response.get_scroll_id());
             info!("Has docs = {}", response.has_docs());

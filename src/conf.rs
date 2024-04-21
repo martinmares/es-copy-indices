@@ -6,7 +6,7 @@ use twelf::{config, Layer};
 #[derive(Debug, Default)]
 pub struct Config {
     endpoints: Vec<Endpoint>,
-    indices: Vec<Indice>,
+    indices: Vec<Index>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -26,9 +26,11 @@ pub struct BasicAuth {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub struct Indice {
+pub struct Index {
     from: String,
     to: String,
+    buffer_size: u64,
+    keep_alive: String,
     name: String,
     add_timestamp: bool,
     mapping: bool,
@@ -37,7 +39,7 @@ pub struct Indice {
 }
 
 impl Config {
-    pub fn get_indices(&self) -> &Vec<Indice> {
+    pub fn get_indices(&self) -> &Vec<Index> {
         &self.indices
     }
     pub fn get_endpoints(&self) -> &Vec<Endpoint> {
@@ -90,7 +92,7 @@ impl Endpoint {
     }
 }
 
-impl Indice {
+impl Index {
     pub fn get_name(&self) -> &String {
         &self.name
     }
@@ -99,5 +101,11 @@ impl Indice {
     }
     pub fn get_to(&self) -> &String {
         &self.to
+    }
+    pub fn get_buffer_size(&self) -> u64 {
+        *&self.buffer_size
+    }
+    pub fn get_keep_alive(&self) -> &String {
+        &self.keep_alive
     }
 }

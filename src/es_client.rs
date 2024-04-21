@@ -1,4 +1,4 @@
-use crate::conf::Endpoint;
+use crate::conf::{Endpoint, Index};
 use crate::models::scroll_response::ScrollResponse;
 use crate::models::server_info::ServerInfo;
 use core::panic;
@@ -97,15 +97,14 @@ impl EsClient {
         }
     }
 
-    pub async fn scroll_start(
-        self,
-        index_name: &str,
-        keep_alive: &str,
-        size: usize,
-    ) -> Option<ScrollResponse> {
+    pub async fn scroll_start(self, index: &Index) -> Option<ScrollResponse> {
+        let index_name = index.get_name();
+        let keep_alive = index.get_keep_alive();
+        let buffer_size = index.get_buffer_size();
+
         let body = format!(
             "{{ \"size\": {}, \"query\": {{ \"match_all\": {{}} }} }}",
-            size
+            buffer_size
         );
         let resp = self
             .call_post(
