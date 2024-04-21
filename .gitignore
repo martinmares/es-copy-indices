@@ -11,6 +11,7 @@ certs/
 ca_certificates/
 root_certificates/
 root_ca/
+README.local.md
 
 # Icon must end with two \r
 Icon

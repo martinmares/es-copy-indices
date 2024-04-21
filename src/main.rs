@@ -3,9 +3,10 @@
 #![allow(unused_variables)]
 
 mod conf;
-mod es_utils;
+mod es_client;
 mod utils;
 
+use es_client::EsClient;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -64,26 +65,25 @@ async fn main() {
         panic!("Failed to load config file with name {:?}!", config_path)
     };
 
-    let mut endpoint_connections: HashMap<String, utils::EndpointConnection> = HashMap::new();
-
     for endpoint in config.get_endpoints() {
         let name = endpoint.get_name();
         let url = endpoint.get_url();
-        let connection =
-            utils::EndpointConnection::new(endpoint, endpoint.get_root_certificates(), url).await;
-        match connection {
-            Ok(endpoint_connection) => {
-                info!(
-                    "Endpoint connection for \"{}\" (url: {}) created",
-                    name, url
-                );
-                endpoint_connections.insert(name.to_owned(), endpoint_connection);
+
+        let http_client =
+            utils::create_http_client(endpoint, endpoint.get_root_certificates()).await;
+
+        if let Ok(http_client) = http_client {
+            let es_client = EsClient::new(endpoint.clone(), http_client);
+            let server_info = es_client.server_info().await;
+            if let Some(server_info) = server_info {
+                info!("Server info -> {}", server_info);
             }
-            Err(err) => panic!("{:?}", err),
         }
     }
 
     for index in config.get_indices() {
         debug!("Copy index {:?}", index.get_name());
     }
+
+    // Copy indices
 }
