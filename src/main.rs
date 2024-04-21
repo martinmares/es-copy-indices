@@ -79,30 +79,12 @@ async fn main() {
         let source_es_client = utils::create_es_client(config.get_endpoints(), from)
             .await
             .expect("Create source ES client failed!");
-        if let Some(server_info) = source_es_client.server_info().await {
-            info!(
-                "From ES: hostname={}, name={}, uuid={}, version={}, lucene={}",
-                server_info.get_hostname(),
-                server_info.get_name(),
-                server_info.get_uuid(),
-                server_info.get_version(),
-                server_info.get_lucene_version()
-            );
-        }
+        source_es_client.print_server_info(from).await;
 
-        let source_es_client = utils::create_es_client(config.get_endpoints(), to)
+        let destination_es_client = utils::create_es_client(config.get_endpoints(), to)
             .await
-            .expect("Create source ES client failed!");
-        if let Some(server_info) = source_es_client.server_info().await {
-            info!(
-                "To ES: hostname={}, name={}, uuid={}, version={}, lucene={}",
-                server_info.get_hostname(),
-                server_info.get_name(),
-                server_info.get_uuid(),
-                server_info.get_version(),
-                server_info.get_lucene_version()
-            );
-        }
+            .expect("Create destination ES client failed!");
+        destination_es_client.print_server_info(to).await;
     }
 
     // Copy indices

@@ -61,4 +61,17 @@ impl EsClient {
 
         None
     }
+    pub async fn print_server_info(self, prefix: &str) {
+        if let Some(server_info) = self.server_info().await {
+            info!(
+                "{}: hostname={}, name={}, uuid={}, version={}, lucene={}",
+                prefix,
+                server_info.get_hostname(),
+                server_info.get_name(),
+                server_info.get_uuid(),
+                server_info.get_version(),
+                server_info.get_lucene_version()
+            );
+        }
+    }
 }
