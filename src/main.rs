@@ -4,6 +4,7 @@
 
 mod conf;
 mod es_client;
+mod models;
 mod utils;
 
 use es_client::EsClient;
@@ -76,7 +77,13 @@ async fn main() {
             let es_client = EsClient::new(endpoint.clone(), http_client);
             let server_info = es_client.server_info().await;
             if let Some(server_info) = server_info {
-                info!("Server info -> {}", server_info);
+                info!(
+                    "Server info: hostname={}, name={}, uuid={}, version={}",
+                    server_info.get_hostname(),
+                    server_info.get_name(),
+                    server_info.get_uuid(),
+                    server_info.get_version()
+                );
             }
         }
     }

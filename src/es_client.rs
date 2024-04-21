@@ -1,4 +1,5 @@
 use crate::conf::Endpoint;
+use crate::models::server_info::ServerInfo;
 use core::panic;
 use log::{debug, error, info, warn};
 use rustls::client;
@@ -41,9 +42,16 @@ impl EsClient {
             }
         }
 
-        Some("empty response".to_string())
+        todo!("Implement empty response!")
     }
-    pub async fn server_info(self) -> Option<String> {
-        self.call_get("/").await
+    pub async fn server_info(self) -> Option<ServerInfo> {
+        let resp = self.call_get("/").await;
+        if let Some(value) = resp {
+            let json: ServerInfo = serde_json::from_str(&value)
+                .expect("Incorrect response to deserialize data to ServerInfo struct");
+            return Some(json);
+        }
+
+        None
     }
 }
