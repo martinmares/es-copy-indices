@@ -5,21 +5,13 @@ mod es_client;
 mod models;
 mod utils;
 
-use std::path::PathBuf;
-// use std::thread;
-// use std::time::Duration;
-
 use log::info;
-
-// use indicatif::{ProgressBar, ProgressStyle};
+use std::path::PathBuf;
 
 use clap::{command, value_parser, Arg, ArgAction};
 use twelf::Layer;
 
-// use crate::models::scroll_response::ScrollResponse;
-
-#[tokio::main]
-async fn main() {
+fn main() {
     env_logger::init();
 
     let matches = command!() // requires `cargo` feature
@@ -70,65 +62,38 @@ async fn main() {
         let to = index.get_to();
         info!("Copy index {}, from: {}, to: {}", index_name, from, to);
 
-        let source_es_client = utils::create_es_client(config.get_endpoints(), from)
-            .await
+        let source_es_client = utils::build_es_client(config.get_endpoints(), from)
             .expect("Create source ES client failed!");
-        source_es_client.clone().print_server_info(from).await;
+        source_es_client.clone().print_server_info(from);
 
-        let destination_es_client = utils::create_es_client(config.get_endpoints(), to)
-            .await
+        let destination_es_client = utils::build_es_client(config.get_endpoints(), to)
             .expect("Create destination ES client failed!");
-        destination_es_client.print_server_info(to).await;
+        destination_es_client.print_server_info(to);
 
-        // memory_stats!();
-        let mut scroll_response = source_es_client.clone().scroll_start(index).await.unwrap();
+        memory_stats!();
+
+        let mut scroll_response = source_es_client.clone().scroll_start(index).unwrap();
         let mut docs_counter: u64 = 0;
         while scroll_response.has_docs() {
             docs_counter += scroll_response.get_current_size();
             scroll_response = source_es_client
                 .clone()
                 .scroll_next(index, scroll_response.get_scroll_id())
-                .await
                 .unwrap();
             info!(
                 "Iter docs {}/{}",
                 docs_counter,
                 scroll_response.get_total_size()
             );
-            // memory_stats!();
+
+            memory_stats!();
         }
 
         source_es_client
             .clone()
-            .scroll_stop(scroll_response.get_scroll_id())
-            .await;
+            .scroll_stop(scroll_response.get_scroll_id());
 
-        // memory_stats!();
-
-        //if let Some(response) = scroll_response {
-        //     info!("Scroll id = {}", response.get_scroll_id());
-        //     info!("Has docs = {}", response.has_docs());
-        //     info!("Docs.len() = {}", response.get_docs().len());
-        //     info!("Current size = {}", response.get_current_size());
-        //     info!("Total size = {}", response.get_total_size());
-        //}
-
-        // let total_size = 1000;
-
-        // let pb = ProgressBar::new(total_size);
-        // let pb_style = ProgressStyle::with_template(
-        //     "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
-        // )
-        // .unwrap()
-        // .progress_chars("##-");
-        // pb.set_style(pb_style);
-        // pb.set_message("documents");
-
-        // for _ in 0..(total_size / 10) {
-        //     thread::sleep(Duration::from_millis(50));
-        //     pb.inc(10);
-        // }
-        // pb.finish_with_message("copying done");
+        memory_stats!();
     }
 
     // Copy indices
