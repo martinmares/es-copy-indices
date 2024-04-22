@@ -1,11 +1,9 @@
 use crate::conf::Endpoint;
 use crate::es_client::EsClient;
 use core::panic;
-use log::{debug, error, info, warn};
-use rustls::client;
-use std::fmt::Error;
+use log::debug;
 
-use reqwest::{Certificate, ClientBuilder};
+use reqwest::Certificate;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt; // for read_to_end()
 
@@ -46,9 +44,6 @@ async fn create_http_client(
 pub async fn create_es_client(endpoints: &Vec<Endpoint>, which_one: &String) -> Option<EsClient> {
     for endpoint in endpoints {
         if endpoint.get_name() == which_one {
-            let name = endpoint.get_name();
-            let url = endpoint.get_url();
-
             let http_client = create_http_client(endpoint, endpoint.get_root_certificates()).await;
 
             if let Ok(http_client) = http_client {

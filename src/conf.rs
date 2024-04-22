@@ -1,6 +1,5 @@
-use reqwest::Certificate;
+use twelf::config;
 use twelf::reexports::serde::{Deserialize, Serialize};
-use twelf::{config, Layer};
 
 #[config]
 #[derive(Debug, Default)]
@@ -69,7 +68,7 @@ impl Endpoint {
     pub fn has_basic_auth(&self) -> bool {
         let mut result = false;
         if let Some(basic_auth) = &self.basic_auth {
-            if let Some(password) = basic_auth.get_password() {
+            if let Some(_) = basic_auth.get_password() {
                 result = true;
             }
         }

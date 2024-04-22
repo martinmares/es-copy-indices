@@ -1,14 +1,9 @@
 use crate::conf::{Endpoint, Index};
 use crate::models::scroll_response::ScrollResponse;
 use crate::models::server_info::ServerInfo;
-use core::panic;
-use log::{debug, error, info, warn};
-use rustls::client;
-use std::fmt::Error;
+use log::{debug, info};
 
-use reqwest::{Certificate, Client, ClientBuilder, RequestBuilder};
-use tokio::fs::File;
-use tokio::io::AsyncReadExt; // for read_to_end()
+use reqwest::{Client, RequestBuilder};
 
 #[derive(Debug, Clone)]
 pub struct EsClient {
@@ -41,7 +36,7 @@ impl EsClient {
         headers: &Vec<(String, String)>,
     ) -> Option<String> {
         let url = format!("{}{}", self.endpoint.get_url(), path);
-        info!("Get url: {}", url);
+        debug!("Get url: {}", url);
         let mut request_builder = self.http_client.get(url).query(&query);
 
         for (key, val) in headers {
@@ -70,8 +65,42 @@ impl EsClient {
         body: &String,
     ) -> Option<String> {
         let url = format!("{}{}", self.endpoint.get_url(), path);
-        info!("Post url: {}", url);
+        debug!("Post url: {}", url);
         let mut request_builder = self.http_client.post(url).query(&query).body(body.clone());
+
+        for (key, val) in headers {
+            request_builder = request_builder.header(key, val);
+        }
+
+        let endpoint = self.endpoint.clone();
+        request_builder = inject_auth(request_builder, endpoint);
+
+        let call = request_builder.send().await;
+        if let Ok(call) = call {
+            let text = call.text().await;
+            if let Ok(text) = text {
+                debug!("Post response text: {}", text);
+                return Some(text);
+            }
+        }
+
+        todo!("Implement empty response!")
+    }
+
+    async fn call_delete(
+        self,
+        path: &str,
+        query: &Vec<(String, String)>,
+        headers: &Vec<(String, String)>,
+        body: &String,
+    ) -> Option<String> {
+        let url = format!("{}{}", self.endpoint.get_url(), path);
+        debug!("Delete url: {}", url);
+        let mut request_builder = self
+            .http_client
+            .delete(url)
+            .query(&query)
+            .body(body.clone());
 
         for (key, val) in headers {
             request_builder = request_builder.header(key, val);
@@ -126,7 +155,7 @@ impl EsClient {
             "{{ \"size\": {}, \"query\": {{ \"match_all\": {{}} }} }}",
             buffer_size
         );
-        info!("Query: {}", body);
+        debug!("Query: {}", body);
         let resp = self
             .call_post(
                 &format!("/{}/_search", index_name),
@@ -139,11 +168,63 @@ impl EsClient {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
             if let Ok(json_value) = json_value_result {
+                debug!("scroll_start json_value: {:#?}", json_value);
                 let scroll_response = ScrollResponse::new(json_value);
-                return Some(scroll_response);
+                return Some(scroll_response.clone());
             }
         }
 
         None
+    }
+
+    pub async fn scroll_next(self, index: &Index, scroll_id: &str) -> Option<ScrollResponse> {
+        let keep_alive = index.get_keep_alive();
+
+        let body = format!(
+            "{{ \"scroll\": \"{}\", \"scroll_id\": \"{}\" }}",
+            keep_alive, scroll_id
+        );
+        debug!("Query: {}", body);
+        let resp = self
+            .call_post(
+                &format!("/_search/scroll"),
+                &vec![],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &body,
+            )
+            .await;
+        if let Some(value) = resp {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                debug!("scroll_next json_value: {:#?}", json_value);
+                let scroll_response = ScrollResponse::new(json_value);
+                return Some(scroll_response.clone());
+            }
+        }
+
+        None
+    }
+
+    pub async fn scroll_stop(self, scroll_id: &str) {
+        let body = format!("{{ \"scroll_id\": \"{}\" }}", scroll_id);
+        debug!("Query: {}", body);
+        let resp = self
+            .call_delete(
+                &format!("/_search/scroll"),
+                &vec![],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &body,
+            )
+            .await;
+        if let Some(value) = resp {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                debug!("scroll_stop json_value: {:#?}", json_value);
+                //let scroll_response = ScrollResponse::new(json_value);
+                //return Some(scroll_response.clone());
+            }
+        }
     }
 }

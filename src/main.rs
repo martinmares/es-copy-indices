@@ -1,24 +1,22 @@
 #![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
 
 mod conf;
 mod es_client;
 mod models;
 mod utils;
 
-use es_client::EsClient;
-use std::collections::HashMap;
 use std::path::PathBuf;
+// use std::thread;
+// use std::time::Duration;
 
-use log::{debug, error, info, warn};
-use reqwest::{Certificate, Client, ClientBuilder};
-use tokio::fs::File;
-use tokio::io::AsyncReadExt; // for read_to_end()
+use log::info;
 
-use clap::{arg, command, value_parser, Arg, ArgAction, Command};
-use twelf::reexports::serde::{Deserialize, Serialize};
-use twelf::{config, Layer};
+// use indicatif::{ProgressBar, ProgressStyle};
+
+use clap::{command, value_parser, Arg, ArgAction};
+use twelf::Layer;
+
+// use crate::models::scroll_response::ScrollResponse;
 
 #[tokio::main]
 async fn main() {
@@ -82,14 +80,50 @@ async fn main() {
             .expect("Create destination ES client failed!");
         destination_es_client.print_server_info(to).await;
 
-        let scroll_response = source_es_client.scroll_start(index).await;
-        if let Some(response) = scroll_response {
-            info!("Scroll id = {}", response.get_scroll_id());
-            info!("Has docs = {}", response.has_docs());
-            info!("Docs.len() = {}", response.get_docs().len());
-            info!("Current size = {}", response.get_current_size());
-            info!("Total size = {}", response.get_total_size());
+        let mut scroll_response = source_es_client.clone().scroll_start(index).await.unwrap();
+        let mut docs_counter: u64 = 0;
+        while scroll_response.has_docs() {
+            docs_counter += scroll_response.get_current_size();
+            scroll_response = source_es_client
+                .clone()
+                .scroll_next(index, scroll_response.get_scroll_id())
+                .await
+                .unwrap();
+            info!(
+                "Iter docs {}/{}",
+                docs_counter,
+                scroll_response.get_total_size()
+            );
         }
+        source_es_client
+            .clone()
+            .scroll_stop(scroll_response.get_scroll_id())
+            .await;
+
+        //if let Some(response) = scroll_response {
+        //     info!("Scroll id = {}", response.get_scroll_id());
+        //     info!("Has docs = {}", response.has_docs());
+        //     info!("Docs.len() = {}", response.get_docs().len());
+        //     info!("Current size = {}", response.get_current_size());
+        //     info!("Total size = {}", response.get_total_size());
+        //}
+
+        // let total_size = 1000;
+
+        // let pb = ProgressBar::new(total_size);
+        // let pb_style = ProgressStyle::with_template(
+        //     "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+        // )
+        // .unwrap()
+        // .progress_chars("##-");
+        // pb.set_style(pb_style);
+        // pb.set_message("documents");
+
+        // for _ in 0..(total_size / 10) {
+        //     thread::sleep(Duration::from_millis(50));
+        //     pb.inc(10);
+        // }
+        // pb.finish_with_message("copying done");
     }
 
     // Copy indices
