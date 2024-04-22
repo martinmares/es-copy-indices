@@ -80,6 +80,7 @@ async fn main() {
             .expect("Create destination ES client failed!");
         destination_es_client.print_server_info(to).await;
 
+        // memory_stats!();
         let mut scroll_response = source_es_client.clone().scroll_start(index).await.unwrap();
         let mut docs_counter: u64 = 0;
         while scroll_response.has_docs() {
@@ -94,11 +95,15 @@ async fn main() {
                 docs_counter,
                 scroll_response.get_total_size()
             );
+            // memory_stats!();
         }
+
         source_es_client
             .clone()
             .scroll_stop(scroll_response.get_scroll_id())
             .await;
+
+        // memory_stats!();
 
         //if let Some(response) = scroll_response {
         //     info!("Scroll id = {}", response.get_scroll_id());

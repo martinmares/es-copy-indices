@@ -160,7 +160,10 @@ impl EsClient {
             .call_post(
                 &format!("/{}/_search", index_name),
                 &vec![(String::from("scroll"), format!("{}", keep_alive))],
-                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Accept-encoding".to_string(), "gzip".to_string()),
+                ],
                 &body,
             )
             .await;
@@ -189,7 +192,10 @@ impl EsClient {
             .call_post(
                 &format!("/_search/scroll"),
                 &vec![],
-                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Accept-encoding".to_string(), "gzip".to_string()),
+                ],
                 &body,
             )
             .await;
@@ -213,7 +219,10 @@ impl EsClient {
             .call_delete(
                 &format!("/_search/scroll"),
                 &vec![],
-                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Accept-encoding".to_string(), "gzip".to_string()),
+                ],
                 &body,
             )
             .await;

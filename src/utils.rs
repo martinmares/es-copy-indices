@@ -1,5 +1,6 @@
 use crate::conf::Endpoint;
 use crate::es_client::EsClient;
+
 use core::panic;
 use log::debug;
 
@@ -53,4 +54,16 @@ pub async fn create_es_client(endpoints: &Vec<Endpoint>, which_one: &String) -> 
         }
     }
     None
+}
+
+#[macro_export]
+macro_rules! memory_stats {
+    () => {
+        if let Some(usage) = memory_stats::memory_stats() {
+            info!(
+                "Mem: {}",
+                human_bytes::human_bytes(usage.physical_mem as f64)
+            );
+        }
+    };
 }
