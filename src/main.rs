@@ -86,6 +86,7 @@ async fn main() {
         if let Some(response) = scroll_response {
             info!("Scroll id = {}", response.get_scroll_id());
             info!("Has docs = {}", response.has_docs());
+            info!("Docs.len() = {}", response.get_docs().len());
             info!("Current size = {}", response.get_current_size());
             info!("Total size = {}", response.get_total_size());
         }

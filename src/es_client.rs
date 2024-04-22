@@ -34,10 +34,19 @@ impl EsClient {
         }
     }
 
-    async fn call_get(self, path: &str) -> Option<String> {
-        let mut request_builder =
-            self.http_client
-                .get(format!("{}{}", self.endpoint.get_url(), path));
+    async fn call_get(
+        self,
+        path: &str,
+        query: &Vec<(String, String)>,
+        headers: &Vec<(String, String)>,
+    ) -> Option<String> {
+        let url = format!("{}{}", self.endpoint.get_url(), path);
+        info!("Get url: {}", url);
+        let mut request_builder = self.http_client.get(url).query(&query);
+
+        for (key, val) in headers {
+            request_builder = request_builder.header(key, val);
+        }
 
         let endpoint = self.endpoint.clone();
         request_builder = inject_auth(request_builder, endpoint);
@@ -53,10 +62,20 @@ impl EsClient {
         todo!("Implement empty response!")
     }
 
-    async fn call_post(self, path: &str, body: &str) -> Option<String> {
-        let mut request_builder =
-            self.http_client
-                .post(format!("{}{}", self.endpoint.get_url(), path));
+    async fn call_post(
+        self,
+        path: &str,
+        query: &Vec<(String, String)>,
+        headers: &Vec<(String, String)>,
+        body: &String,
+    ) -> Option<String> {
+        let url = format!("{}{}", self.endpoint.get_url(), path);
+        info!("Post url: {}", url);
+        let mut request_builder = self.http_client.post(url).query(&query).body(body.clone());
+
+        for (key, val) in headers {
+            request_builder = request_builder.header(key, val);
+        }
 
         let endpoint = self.endpoint.clone();
         request_builder = inject_auth(request_builder, endpoint);
@@ -65,6 +84,7 @@ impl EsClient {
         if let Ok(call) = call {
             let text = call.text().await;
             if let Ok(text) = text {
+                debug!("Post response text: {}", text);
                 return Some(text);
             }
         }
@@ -73,7 +93,7 @@ impl EsClient {
     }
 
     pub async fn server_info(self) -> Option<ServerInfo> {
-        let resp = self.call_get("/").await;
+        let resp = self.call_get("/", &vec![], &vec![]).await;
         if let Some(value) = resp {
             let json: ServerInfo =
                 serde_json::from_str(&value).expect("Incorrect response for ServerInfo struct");
@@ -106,9 +126,12 @@ impl EsClient {
             "{{ \"size\": {}, \"query\": {{ \"match_all\": {{}} }} }}",
             buffer_size
         );
+        info!("Query: {}", body);
         let resp = self
             .call_post(
-                &format!("/{}/_search?scroll={}", index_name, keep_alive),
+                &format!("/{}/_search", index_name),
+                &vec![(String::from("scroll"), format!("{}", keep_alive))],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
                 &body,
             )
             .await;
