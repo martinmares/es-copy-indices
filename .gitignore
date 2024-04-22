@@ -7,7 +7,7 @@
 conf/
 doc/*.pdf
 .tmp/
-certs/
+# certs/
 ca_certificates/
 root_certificates/
 root_ca/
