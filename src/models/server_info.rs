@@ -1,6 +1,7 @@
+use semver::Version as Semver;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ServerInfo {
     #[serde(rename = "name")]
     hostname: String,
@@ -11,7 +12,7 @@ pub struct ServerInfo {
     version: Version,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Version {
     number: String,
     lucene_version: String,
@@ -32,5 +33,10 @@ impl ServerInfo {
     }
     pub fn get_lucene_version(&self) -> &String {
         &self.version.lucene_version
+    }
+
+    pub fn get_version_major(&self) -> u64 {
+        let version = Semver::parse(&self.version.number).unwrap();
+        version.major
     }
 }

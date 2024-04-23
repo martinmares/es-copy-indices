@@ -66,12 +66,13 @@ async fn main() {
         let mut source_es_client = utils::create_es_client(config.get_endpoints(), from)
             .await
             .expect("create source ES client failed!");
-        source_es_client.print_server_info(from).await;
+        source_es_client.print_server_info(from);
+        // source_es_client.print_server_info(from).await;
 
-        let mut destination_es_client = utils::create_es_client(config.get_endpoints(), to)
-            .await
-            .expect("create destination ES client failed!");
-        destination_es_client.print_server_info(to).await;
+        // let mut destination_es_client = utils::create_es_client(config.get_endpoints(), to)
+        //     .await
+        //     .expect("create destination ES client failed!");
+        // destination_es_client.print_server_info(to).await;
 
         memory_stats!();
 

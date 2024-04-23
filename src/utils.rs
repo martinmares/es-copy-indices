@@ -48,7 +48,8 @@ pub async fn create_es_client(endpoints: &Vec<Endpoint>, which_one: &String) -> 
             let http_client = create_http_client(endpoint, endpoint.get_root_certificates()).await;
 
             if let Ok(http_client) = http_client {
-                let es_client = EsClient::new(endpoint.clone(), http_client);
+                let mut es_client = EsClient::new(endpoint.clone(), http_client);
+                es_client.detect_server().await;
                 return Some(es_client);
             }
         }

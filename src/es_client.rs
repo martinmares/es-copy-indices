@@ -9,6 +9,7 @@ use reqwest::{Client, RequestBuilder};
 pub struct EsClient {
     endpoint: Endpoint,
     http_client: Client,
+    server_info: Option<ServerInfo>,
     scroll_response: Option<ScrollResponse>,
     scroll_id: Option<String>,
     current_size: u64,
@@ -31,6 +32,7 @@ impl EsClient {
         Self {
             endpoint,
             http_client,
+            server_info: None,
             scroll_response: None,
             scroll_id: None,
             current_size: 0,
@@ -131,7 +133,7 @@ impl EsClient {
         todo!("implement empty response!")
     }
 
-    pub async fn server_info(&mut self) -> Option<ServerInfo> {
+    async fn server_info(&mut self) -> Option<ServerInfo> {
         let resp = self.call_get("/", &vec![], &vec![]).await;
         if let Some(value) = resp {
             let json: ServerInfo =
@@ -142,14 +144,19 @@ impl EsClient {
         None
     }
 
-    pub async fn print_server_info(&mut self, prefix: &str) {
-        if let Some(server_info) = self.server_info().await {
+    pub async fn detect_server(&mut self) {
+        self.server_info = self.server_info().await;
+    }
+
+    pub fn print_server_info(&mut self, prefix: &str) {
+        if let Some(server_info) = &self.server_info {
             info!(
-                "{}: hostname={}, name={}, uuid={}, version={}, lucene={}",
+                "info about \"{}\" (hostname={}, name={}, uuid={}, version_major={}, version={}, lucene={})",
                 prefix,
                 server_info.get_hostname(),
                 server_info.get_name(),
                 server_info.get_uuid(),
+                server_info.get_version_major(),
                 server_info.get_version(),
                 server_info.get_lucene_version()
             );
