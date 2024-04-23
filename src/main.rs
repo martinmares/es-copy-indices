@@ -33,7 +33,7 @@ async fn main() {
         )
         .get_matches();
 
-    info!("application started!");
+    info!("Application started!");
 
     let no_dry_run = matches
         .get_one::<bool>("no-dry-run")
@@ -47,7 +47,7 @@ async fn main() {
     };
 
     info!(
-        "args no-dry-run={:?}, config_path={:?}",
+        "Args no-dry-run={:?}, config_path={:?}",
         no_dry_run, config_path
     );
 
@@ -62,7 +62,7 @@ async fn main() {
         let from = index.get_from();
         let to = index.get_to();
 
-        info!("copying index {} (from: {}, to: {})", index_name, from, to);
+        info!("Copying index {} (from: {}, to: {})", index_name, from, to);
 
         let mut source_es_client = utils::create_es_client(config.get_endpoints(), from)
             .await
@@ -83,7 +83,7 @@ async fn main() {
             let counter = source_es_client.get_docs_counter();
 
             info!(
-                "{} - docs {}/{} ({:.2} %)",
+                "Iterate {} - docs {}/{} ({:.2} %)",
                 index_name,
                 counter,
                 total,
@@ -102,10 +102,10 @@ async fn main() {
 
         source_es_client.scroll_stop().await;
 
-        info!("copying index {} done!", index_name);
+        info!("Copying index {} done!", index_name);
     }
 
-    info!("completed!");
+    info!("Completed!");
 
     // Copy indices
 }

@@ -53,7 +53,7 @@ impl EsClient {
         headers: &Vec<(String, String)>,
     ) -> Option<String> {
         let url = format!("{}{}", self.endpoint.get_url(), path);
-        debug!("get url: {}", url);
+        debug!("Getting url: {}", url);
         let mut request_builder = self.http_client.get(url).query(&query);
 
         for (key, val) in headers {
@@ -82,7 +82,7 @@ impl EsClient {
         body: &String,
     ) -> Option<String> {
         let url = format!("{}{}", self.endpoint.get_url(), path);
-        debug!("post url: {}", url);
+        debug!("Posting url: {}", url);
         let mut request_builder = self.http_client.post(url).query(&query).body(body.clone());
 
         for (key, val) in headers {
@@ -96,7 +96,7 @@ impl EsClient {
         if let Ok(call) = call {
             let text = call.text().await;
             if let Ok(text) = text {
-                debug!("post response text: {}", text);
+                debug!("Post response text: {}", text);
                 return Some(text);
             }
         }
@@ -112,7 +112,7 @@ impl EsClient {
         body: &String,
     ) -> Option<String> {
         let url = format!("{}{}", self.endpoint.get_url(), path);
-        debug!("delete url: {}", url);
+        debug!("Deleting url: {}", url);
         let mut request_builder = self
             .http_client
             .delete(url)
@@ -130,7 +130,7 @@ impl EsClient {
         if let Ok(call) = call {
             let text = call.text().await;
             if let Ok(text) = text {
-                debug!("post response text: {}", text);
+                debug!("Post response text: {}", text);
                 return Some(text);
             }
         }
@@ -168,7 +168,7 @@ impl EsClient {
         }
     }
 
-    #[time("info")]
+    #[time("debug")]
     pub async fn scroll_start(&mut self, index: &Index) -> &mut Self {
         let index_name = index.get_name();
         let keep_alive = index.get_keep_alive();
@@ -178,7 +178,7 @@ impl EsClient {
             "{{ \"size\": {}, \"query\": {{ \"match_all\": {{}} }} }}",
             buffer_size
         );
-        debug!("query: {}", body);
+        debug!("Querying: {}", body);
         let resp = self
             .call_post(
                 &format!("/{}/_search", index_name),
@@ -194,7 +194,6 @@ impl EsClient {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
             if let Ok(json_value) = json_value_result {
-                debug!("scroll_start json_value: {:#?}", json_value);
                 let new_scroll_response = ScrollResponse::new(json_value);
 
                 self.current_size = new_scroll_response.get_current_size();
@@ -210,7 +209,7 @@ impl EsClient {
         self
     }
 
-    #[time("info")]
+    #[time("debug")]
     pub async fn scroll_next(&mut self, index: &Index) -> &mut Self {
         let keep_alive = index.get_keep_alive();
 
@@ -219,7 +218,7 @@ impl EsClient {
             keep_alive,
             self.scroll_id.clone().unwrap()
         );
-        debug!("query: {}", body);
+        debug!("Querying: {}", body);
         let resp = self
             .call_post(
                 &format!("/_search/scroll"),
@@ -235,7 +234,6 @@ impl EsClient {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
             if let Ok(json_value) = json_value_result {
-                debug!("scroll_next json_value: {:#?}", json_value);
                 let new_scroll_response = ScrollResponse::new(json_value);
 
                 self.current_size = new_scroll_response.get_current_size();
@@ -251,14 +249,14 @@ impl EsClient {
         self
     }
 
-    #[time("info")]
-    pub async fn scroll_stop(&mut self) {
+    #[time("debug")]
+    pub async fn scroll_stop(&mut self) -> &mut Self {
         let body = format!(
             "{{ \"scroll_id\": \"{}\" }}",
             self.scroll_id.clone().unwrap()
         );
-        debug!("query: {}", body);
-        let resp = self
+        debug!("Querying: {}", body);
+        let _ = self
             .call_delete(
                 &format!("/_search/scroll"),
                 &vec![],
@@ -269,16 +267,12 @@ impl EsClient {
                 &body,
             )
             .await;
-        if let Some(value) = resp {
-            let json_value_result: Result<serde_json::Value, serde_json::Error> =
-                serde_json::from_str(&value);
-            if let Ok(json_value) = json_value_result {
-                debug!("scroll_stop json_value: {:#?}", json_value);
-            }
-        }
+
+        // TODO: implement check status code?
+        self
     }
 
-    #[time("info")]
+    #[time("debug")]
     pub async fn send_bulk_to(&mut self, es_client: &mut EsClient, index_name: &String) -> &Self {
         let index_name_cloned = format!("{}_cloned", index_name);
         let mut bulk_body = String::new();
@@ -297,7 +291,7 @@ impl EsClient {
                 }
             }
         }
-        let resp = es_client
+        let _ = es_client
             .call_post(
                 &format!("/{}/_bulk", index_name_cloned), // ! This is NEW one CLONED index name!
                 &vec![],
@@ -309,14 +303,7 @@ impl EsClient {
             )
             .await;
 
-        if let Some(value) = resp {
-            let json_value_result: Result<serde_json::Value, serde_json::Error> =
-                serde_json::from_str(&value);
-            if let Ok(json_value) = json_value_result {
-                debug!("bulk_index json_value: {:#?}", json_value);
-            }
-        }
-
+        // TODO: implement check status code?
         self
     }
 
