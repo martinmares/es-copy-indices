@@ -82,7 +82,8 @@ async fn main() {
             let counter = source_es_client.get_docs_counter();
 
             info!(
-                "docs {}/{} ({:.2} %)",
+                "{} - docs {}/{} ({:.2} %)",
+                index_name,
                 counter,
                 total,
                 (counter as f64 / total as f64) * 100.00
