@@ -156,7 +156,7 @@ impl EsClient {
     pub fn print_server_info(&mut self, prefix: &str) {
         if let Some(server_info) = &self.server_info {
             info!(
-                "info about \"{}\" (hostname={}, name={}, uuid={}, version_major={}, version={}, lucene={})",
+                "Server details about \"{}\" (hostname={}, name={}, uuid={}, version_major={}, version={}, lucene={})",
                 prefix,
                 server_info.get_hostname(),
                 server_info.get_name(),

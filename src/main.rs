@@ -105,7 +105,7 @@ async fn main() {
         info!("Copying index {} done!", index_name);
     }
 
-    info!("Completed!");
+    info!("Application completed!");
 
     // Copy indices
 }
