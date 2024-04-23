@@ -26,7 +26,7 @@ async fn create_http_client(
 
     for certificate_file_name in root_certificates {
         if let Ok(cert) = create_certificate_from(certificate_file_name.to_string()).await {
-            debug!("Add root certificate: {:?}", cert);
+            debug!("add root certificate: {:?}", cert);
             builder = builder.add_root_certificate(cert);
         }
     }
@@ -60,8 +60,8 @@ pub async fn create_es_client(endpoints: &Vec<Endpoint>, which_one: &String) -> 
 macro_rules! memory_stats {
     () => {
         if let Some(usage) = memory_stats::memory_stats() {
-            info!(
-                "Mem: {}",
+            log::debug!(
+                "memory usage {}",
                 human_bytes::human_bytes(usage.physical_mem as f64)
             );
         }

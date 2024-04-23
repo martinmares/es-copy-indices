@@ -28,15 +28,15 @@ impl ScrollResponse {
         let mut docs: Vec<Document> = vec![];
 
         for hit in hits {
-            debug!("hit ... {:#?}", hit);
+            debug!("hit: {:#?}", hit);
             let id = hit["_id"].as_str().unwrap().to_string();
             let index_name = hit["_index"].as_str().unwrap().to_string();
             let doc_type = hit["_type"].as_str().unwrap().to_string();
             let source_value = hit["_source"].as_object().unwrap();
             let source = serde_json::to_string(&source_value)
-                .expect("Failed convert Objec to String (serde_json)");
-            debug!("_source (Value) ... {:#?}", source_value);
-            debug!("_source (String) ... {}", source);
+                .expect("failed convert Objec to String (serde_json)");
+            debug!("source_value: {:#?}", source_value);
+            debug!("source_string: {}", source);
 
             docs.push(Document {
                 id,
@@ -53,7 +53,7 @@ impl ScrollResponse {
         }
     }
 
-    pub fn get_scroll_id(&self) -> &str {
+    pub fn get_scroll_id(&self) -> &String {
         &self.scroll_id
     }
     pub fn get_docs(&self) -> &Vec<Document> {
