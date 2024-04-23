@@ -61,18 +61,18 @@ async fn main() {
         let index_name = index.get_name();
         let from = index.get_from();
         let to = index.get_to();
-        info!("copy index {}, from: {}, to: {}", index_name, from, to);
+
+        info!("copying index {} (from: {}, to: {})", index_name, from, to);
 
         let mut source_es_client = utils::create_es_client(config.get_endpoints(), from)
             .await
-            .expect("create source ES client failed!");
+            .expect("create source elastic client failed!");
         source_es_client.print_server_info(from);
-        // source_es_client.print_server_info(from).await;
 
-        // let mut destination_es_client = utils::create_es_client(config.get_endpoints(), to)
-        //     .await
-        //     .expect("create destination ES client failed!");
-        // destination_es_client.print_server_info(to).await;
+        let mut destination_es_client = utils::create_es_client(config.get_endpoints(), to)
+            .await
+            .expect("create destination elastic client failed!");
+        destination_es_client.print_server_info(to);
 
         memory_stats!();
 
@@ -90,6 +90,9 @@ async fn main() {
                 (counter as f64 / total as f64) * 100.00
             );
 
+            source_es_client
+                .send_bulk_to(&mut destination_es_client, &index_name)
+                .await;
             source_es_client.scroll_next(index).await;
 
             memory_stats!();

@@ -69,3 +69,15 @@ impl ScrollResponse {
         *&self.total_docs
     }
 }
+
+impl Document {
+    pub fn get_id(&self) -> &String {
+        &self.id
+    }
+    pub fn get_doc_type(&self) -> &String {
+        &self.doc_type
+    }
+    pub fn get_source(&self) -> &String {
+        &self.source
+    }
+}

@@ -1,9 +1,14 @@
+use logging_timer::time;
+
 use crate::conf::{Endpoint, Index};
-use crate::models::scroll_response::ScrollResponse;
+use crate::models::scroll_response::{Document, ScrollResponse};
 use crate::models::server_info::ServerInfo;
 use log::{debug, info};
 
 use reqwest::{Client, RequestBuilder};
+
+const BULK_OPER_INDEX: &str = "index";
+const DEFAULT_DOC_TYPE: &str = "_doc"; // ! from elastic version_major=7 is "_doc" default type!
 
 #[derive(Debug, Clone)]
 pub struct EsClient {
@@ -163,6 +168,7 @@ impl EsClient {
         }
     }
 
+    #[time("info")]
     pub async fn scroll_start(&mut self, index: &Index) -> &mut Self {
         let index_name = index.get_name();
         let keep_alive = index.get_keep_alive();
@@ -204,6 +210,7 @@ impl EsClient {
         self
     }
 
+    #[time("info")]
     pub async fn scroll_next(&mut self, index: &Index) -> &mut Self {
         let keep_alive = index.get_keep_alive();
 
@@ -244,6 +251,7 @@ impl EsClient {
         self
     }
 
+    #[time("info")]
     pub async fn scroll_stop(&mut self) {
         let body = format!(
             "{{ \"scroll_id\": \"{}\" }}",
@@ -270,6 +278,48 @@ impl EsClient {
         }
     }
 
+    #[time("info")]
+    pub async fn send_bulk_to(&mut self, es_client: &mut EsClient, index_name: &String) -> &Self {
+        let index_name_cloned = format!("{}_cloned", index_name);
+        let mut bulk_body = String::new();
+        if self.has_docs() {
+            if let Some(docs) = self.get_docs() {
+                for doc in docs {
+                    // index name + id + type
+                    bulk_body.push_str(&format!("{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                        BULK_OPER_INDEX,
+                        index_name_cloned,
+                        doc.get_doc_type(),doc.get_id()));
+                    bulk_body.push_str("\n");
+                    // document source
+                    bulk_body.push_str(doc.get_source());
+                    bulk_body.push_str("\n");
+                }
+            }
+        }
+        let resp = es_client
+            .call_post(
+                &format!("/{}/_bulk", index_name_cloned), // ! This is NEW one CLONED index name!
+                &vec![],
+                &vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Accept-encoding".to_string(), "gzip".to_string()),
+                ],
+                &bulk_body,
+            )
+            .await;
+
+        if let Some(value) = resp {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                debug!("bulk_index json_value: {:#?}", json_value);
+            }
+        }
+
+        self
+    }
+
     pub fn get_scroll_id(&self) -> &Option<String> {
         &self.scroll_id
     }
@@ -279,6 +329,13 @@ impl EsClient {
             return scroll_response.has_docs();
         }
         false
+    }
+
+    pub fn get_docs(&self) -> Option<&Vec<Document>> {
+        if let Some(scroll_response) = &self.scroll_response {
+            return Some(scroll_response.get_docs());
+        }
+        None
     }
 
     pub fn get_current_size(&self) -> u64 {

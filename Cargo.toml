@@ -10,6 +10,7 @@ clap = { version = "4.5.4", features = ["cargo", "derive"] }
 env_logger = "0.11.3"
 human_bytes = { version = "0.4.3", features = ["fast"] }
 log = "0.4.21"
+logging_timer = "1.1.1"
 memory-stats = "1.1.0"
 reqwest = { version = "0.12.4", default-features = false, features = ["rustls-tls"] }
 rustls = "0.23.5"
