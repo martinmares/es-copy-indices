@@ -1,3 +1,4 @@
+// use std::time::Duration;
 use std::vec;
 
 use logging_timer::time;
@@ -6,7 +7,7 @@ use serde_json::Value;
 use crate::conf::{Endpoint, Index};
 use crate::models::scroll_response::{Document, ScrollResponse};
 use crate::models::server_info::ServerInfo;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 
 use reqwest::{Client, RequestBuilder};
 
@@ -83,7 +84,7 @@ impl EsClient {
         query: &Vec<(String, String)>,
         headers: &Vec<(String, String)>,
         body: &String,
-    ) -> Option<String> {
+    ) -> Option<(u16, String)> {
         let url = format!("{}{}", self.endpoint.get_url(), path);
         debug!("Posting url: {}", url);
         let mut request_builder = self.http_client.post(url).query(&query).body(body.clone());
@@ -96,11 +97,14 @@ impl EsClient {
         request_builder = inject_auth(request_builder, endpoint);
 
         let call = request_builder.send().await;
+
         if let Ok(call) = call {
+            let code = call.status().as_u16();
+
             let text = call.text().await;
             if let Ok(text) = text {
-                debug!("Post response text: {}", text);
-                return Some(text);
+                debug!("Post response code: {}, text: {}", code, text);
+                return Some((code, text));
             }
         }
 
@@ -207,10 +211,48 @@ impl EsClient {
         let keep_alive = index.get_keep_alive();
         let buffer_size = index.get_buffer_size();
 
+        let q_query = match index.get_custom() {
+            Some(custom) => custom.get_query().clone(),
+            _ => format!("{{ \"match_all\": {{}} }}"),
+        };
+        let q_sort = match index.get_custom() {
+            Some(custom) => custom.get_sort().clone(),
+            _ => format!("[{{\"{}\": \"asc\"}}]", DEFAULT_DOC_TYPE),
+        };
+
         let body = format!(
-            "{{ \"size\": {}, \"query\": {{ \"match_all\": {{}} }} }}",
-            buffer_size
+            "{{ {} }}",
+            vec![
+                format!("\"size\": {}", buffer_size),
+                format!("\"query\": {}", q_query),
+                format!("\"sort\": {}", q_sort)
+            ]
+            .join(",")
         );
+        debug!("##### {} #####", body);
+
+        // let body = r#"
+        //     {
+        //         "size": 10,
+        //         "query": {
+        //         "bool": {
+        //             "must": [
+        //                 { "match_all": {} }
+        //             ],
+        //             "filter": {
+        //                 "term": {
+        //                     "joinField": "Ticket"
+        //                 }
+        //             }
+        //         }
+        //         },
+        //         "sort": [
+        //             {"_doc": "asc"}
+        //         ]
+        //     }
+        // "#
+        // .to_string();
+
         debug!("Querying: {}", body);
         let resp = self
             .call_post(
@@ -224,7 +266,7 @@ impl EsClient {
             )
             .await;
 
-        if let Some(value) = resp {
+        if let Some((_, value)) = resp {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
             if let Ok(json_value) = json_value_result {
@@ -265,7 +307,7 @@ impl EsClient {
             )
             .await;
 
-        if let Some(value) = resp {
+        if let Some((_, value)) = resp {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
             if let Ok(json_value) = json_value_result {
@@ -316,10 +358,21 @@ impl EsClient {
             if let Some(docs) = self.get_docs() {
                 for doc in docs {
                     // index name + id + type
-                    bulk_body.push_str(&format!("{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                    let server_major_version =
+                        es_client.server_info.as_ref().unwrap().get_version_major();
+                    if server_major_version <= 7 {
+                        bulk_body.push_str(&format!("{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
                         BULK_OPER_INDEX,
                         index_name_of_copy,
                         doc.get_doc_type(),doc.get_id()));
+                    } else {
+                        bulk_body.push_str(&format!(
+                            "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                            BULK_OPER_INDEX,
+                            index_name_of_copy,
+                            doc.get_id()
+                        ));
+                    }
                     bulk_body.push_str("\n");
                     // document source
                     bulk_body.push_str(doc.get_source());
@@ -328,7 +381,7 @@ impl EsClient {
             }
         }
 
-        let _ = es_client
+        let resp = es_client
             .call_post(
                 &format!("/{}/_bulk", index_name_of_copy), // ! This is NEW one CLONED index name!
                 &vec![],
@@ -339,6 +392,32 @@ impl EsClient {
                 &bulk_body,
             )
             .await;
+
+        if let Some((_, text)) = resp {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&text);
+            if let Ok(json_value) = json_value_result {
+                if let Some(obj) = json_value.as_object() {
+                    if let Some(errors) = obj.get("errors") {
+                        if errors.as_bool().unwrap() {
+                            error!(
+                                "Copy content failed ... {} ... {}",
+                                text[0..100].to_string(),
+                                text[text.len() - 100..].to_string(),
+                            );
+                        } else {
+                            info!(
+                                "Content copy success ... {} ... {}",
+                                text[0..100].to_string(),
+                                text[text.len() - 100..].to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // std::thread::sleep(Duration::from_secs(10));
 
         // TODO: implement check status code?
         self

@@ -30,6 +30,8 @@ pub struct Index {
     to: String,
     buffer_size: u64,
     keep_alive: String,
+    #[serde(default)]
+    custom: Option<Custom>,
     name: String,
     name_of_copy: String,
     delete_if_exists: bool,
@@ -53,6 +55,21 @@ impl Default for Alias {
         Self {
             name: String::default(),
             remove_if_exists: false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Custom {
+    query: String,
+    sort: String,
+}
+
+impl Default for Custom {
+    fn default() -> Self {
+        Self {
+            query: String::default(),
+            sort: "[]".to_string(),
         }
     }
 }
@@ -157,6 +174,15 @@ impl Index {
     pub fn get_keep_alive(&self) -> &String {
         &self.keep_alive
     }
+    pub fn is_custom(&self) -> bool {
+        match &self.custom {
+            Some(_) => true,
+            _ => false,
+        }
+    }
+    pub fn get_custom(&self) -> &Option<Custom> {
+        &self.custom
+    }
     pub fn is_copy_mapping(&self) -> bool {
         *&self.copy_mapping
     }
@@ -165,5 +191,14 @@ impl Index {
     }
     pub fn is_delete_if_exists(&self) -> bool {
         *&self.delete_if_exists
+    }
+}
+
+impl Custom {
+    pub fn get_query(&self) -> &String {
+        &self.query
+    }
+    pub fn get_sort(&self) -> &String {
+        &self.sort
     }
 }
