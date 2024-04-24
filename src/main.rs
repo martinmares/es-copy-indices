@@ -5,7 +5,7 @@ mod es_client;
 mod models;
 mod utils;
 
-use log::info;
+use log::{info, warn};
 use std::path::PathBuf;
 
 use clap::{command, value_parser, Arg, ArgAction};
@@ -59,48 +59,70 @@ async fn main() {
 
     for index in config.get_indices() {
         let index_name = index.get_name();
+        let index_name_of_copy = index.get_name_of_copy();
         let from = index.get_from();
         let to = index.get_to();
 
-        info!("Copying index {} (from: {}, to: {})", index_name, from, to);
-
+        // Initialize SOURCE client
         let mut source_es_client = utils::create_es_client(config.get_endpoints(), from)
             .await
-            .expect("create source elastic client failed!");
+            .expect("Create source elastic client failed!");
         source_es_client.print_server_info(from);
 
+        // Initialize DESTINATION client
         let mut destination_es_client = utils::create_es_client(config.get_endpoints(), to)
             .await
-            .expect("create destination elastic client failed!");
+            .expect("Create destination elastic client failed!");
         destination_es_client.print_server_info(to);
 
-        memory_stats!();
-
-        source_es_client.scroll_start(index).await;
-
-        while source_es_client.has_docs() {
-            let total = source_es_client.get_total_size();
-            let counter = source_es_client.get_docs_counter();
-
+        if index.is_copy_mapping() {
             info!(
-                "Iterate {} - docs {}/{} ({:.2} %)",
-                index_name,
-                counter,
-                total,
-                (counter as f64 / total as f64) * 100.00
+                "Copying mapping for {} (from: {}, to: {})",
+                index_name, from, to
+            );
+            source_es_client
+                .copy_mapping_to(&mut destination_es_client, index)
+                .await;
+        }
+
+        if index.is_copy_content() {
+            info!(
+                "Copying index content {} (from: {}, to: {})",
+                index_name, from, to
             );
 
-            source_es_client
-                .send_bulk_to(&mut destination_es_client, &index_name)
-                .await;
-            source_es_client.scroll_next(index).await;
+            source_es_client.scroll_start(index).await;
 
             memory_stats!();
+
+            while source_es_client.has_docs() {
+                let total = source_es_client.get_total_size();
+                let counter = source_es_client.get_docs_counter();
+
+                info!(
+                    "Iterate {} - docs {}/{} ({:.2} %)",
+                    index_name,
+                    counter,
+                    total,
+                    (counter as f64 / total as f64) * 100.00
+                );
+
+                source_es_client
+                    .copy_content_to(&mut destination_es_client, &index_name_of_copy)
+                    .await;
+                source_es_client.scroll_next(index).await;
+
+                memory_stats!();
+            }
+            source_es_client.scroll_stop().await;
+        } else {
+            warn!(
+                "Copying index content for {} is disabled in config!",
+                index_name
+            );
         }
 
         memory_stats!();
-
-        source_es_client.scroll_stop().await;
 
         info!("Copying index {} done!", index_name);
     }

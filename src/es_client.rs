@@ -1,4 +1,5 @@
 use logging_timer::time;
+use serde_json::Value;
 
 use crate::conf::{Endpoint, Index};
 use crate::models::scroll_response::{Document, ScrollResponse};
@@ -273,8 +274,11 @@ impl EsClient {
     }
 
     #[time("debug")]
-    pub async fn send_bulk_to(&mut self, es_client: &mut EsClient, index_name: &String) -> &Self {
-        let index_name_cloned = format!("{}_cloned", index_name);
+    pub async fn copy_content_to(
+        &mut self,
+        es_client: &mut EsClient,
+        index_name_of_copy: &String,
+    ) -> &Self {
         let mut bulk_body = String::new();
         if self.has_docs() {
             if let Some(docs) = self.get_docs() {
@@ -282,7 +286,7 @@ impl EsClient {
                     // index name + id + type
                     bulk_body.push_str(&format!("{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
                         BULK_OPER_INDEX,
-                        index_name_cloned,
+                        index_name_of_copy,
                         doc.get_doc_type(),doc.get_id()));
                     bulk_body.push_str("\n");
                     // document source
@@ -293,7 +297,7 @@ impl EsClient {
         }
         let _ = es_client
             .call_post(
-                &format!("/{}/_bulk", index_name_cloned), // ! This is NEW one CLONED index name!
+                &format!("/{}/_bulk", index_name_of_copy), // ! This is NEW one CLONED index name!
                 &vec![],
                 &vec![
                     ("Content-Type".to_string(), "application/json".to_string()),
@@ -304,6 +308,90 @@ impl EsClient {
             .await;
 
         // TODO: implement check status code?
+        self
+    }
+
+    #[time("debug")]
+    pub async fn copy_mapping_to(&mut self, es_client: &mut EsClient, index: &Index) -> &Self {
+        let index_name = index.get_name();
+        let index_name_of_copy = index.get_name_of_copy();
+        let mut mapping: Option<Value> = None;
+        let mut settings: Option<Value> = None;
+
+        // mapping
+        let resp = self
+            .call_get(&format!("/{}/_mapping", index_name), &vec![], &vec![])
+            .await;
+        if let Some(value) = resp {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                if let Some(obj) = json_value.as_object() {
+                    let keys = obj.keys();
+                    if keys.len() == 1 {
+                        for key in keys {
+                            if let Some(value_want) = obj.get(key) {
+                                mapping = Some(value_want.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // settings
+        let resp = self
+            .call_get(&format!("/{}/_settings", index_name), &vec![], &vec![])
+            .await;
+        if let Some(value) = resp {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                if let Some(obj) = json_value.as_object() {
+                    let keys = obj.keys();
+                    if keys.len() == 1 {
+                        for key in keys {
+                            if let Some(value_want) = obj.get(key) {
+                                let mut fix_value_want = value_want.clone();
+                                if let Some(settings_val) = fix_value_want.get_mut("settings") {
+                                    if let Some(index_val) = settings_val.get_mut("index") {
+                                        let names = vec![
+                                            "provided_name",
+                                            "creation_date",
+                                            "version",
+                                            "number_of_shards",
+                                            "number_of_replicas",
+                                        ];
+                                        for name in names {
+                                            if let Some(_) = index_val.get_mut(name) {
+                                                index_val.as_object_mut().unwrap().remove(name);
+                                            }
+                                        }
+                                        index_val.as_object_mut().unwrap().insert(
+                                            "number_of_shards".to_string(),
+                                            index.get_number_of_shards().into(),
+                                        );
+                                        index_val.as_object_mut().unwrap().insert(
+                                            "number_of_replicas".to_string(),
+                                            index.get_number_of_replicas().into(),
+                                        );
+                                    }
+                                }
+                                settings = Some(fix_value_want);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(value) = mapping {
+            info!("Mapping found {}", value.to_string());
+        }
+        if let Some(value) = settings {
+            info!("Settings found {}", value.to_string());
+        }
+
         self
     }
 

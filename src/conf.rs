@@ -31,9 +31,13 @@ pub struct Index {
     buffer_size: u64,
     keep_alive: String,
     name: String,
-    add_timestamp: bool,
-    mapping: bool,
-    content: bool,
+    name_of_copy: String,
+    #[serde(default)]
+    create_alias: Option<String>,
+    number_of_shards: u64,
+    number_of_replicas: u64,
+    copy_mapping: bool,
+    copy_content: bool,
     delete_if_exists: bool,
 }
 
@@ -92,19 +96,43 @@ impl Endpoint {
 }
 
 impl Index {
-    pub fn get_name(&self) -> &String {
-        &self.name
-    }
     pub fn get_from(&self) -> &String {
         &self.from
     }
     pub fn get_to(&self) -> &String {
         &self.to
     }
+    pub fn get_name(&self) -> &String {
+        &self.name
+    }
+    pub fn get_name_of_copy(&self) -> &String {
+        &self.name_of_copy
+    }
+    pub fn get_create_alias(&self) -> &Option<String> {
+        &self.create_alias
+    }
+    pub fn is_create_alias(&self) -> bool {
+        match &self.create_alias {
+            Some(_) => true,
+            _ => false,
+        }
+    }
+    pub fn get_number_of_shards(&self) -> u64 {
+        *&self.number_of_shards
+    }
+    pub fn get_number_of_replicas(&self) -> u64 {
+        *&self.number_of_replicas
+    }
     pub fn get_buffer_size(&self) -> u64 {
         *&self.buffer_size
     }
     pub fn get_keep_alive(&self) -> &String {
         &self.keep_alive
+    }
+    pub fn is_copy_mapping(&self) -> bool {
+        *&self.copy_mapping
+    }
+    pub fn is_copy_content(&self) -> bool {
+        *&self.copy_content
     }
 }
