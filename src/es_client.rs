@@ -105,6 +105,36 @@ impl EsClient {
         todo!("Implement empty response!")
     }
 
+    async fn call_put(
+        &mut self,
+        path: &str,
+        query: &Vec<(String, String)>,
+        headers: &Vec<(String, String)>,
+        body: &String,
+    ) -> Option<String> {
+        let url = format!("{}{}", self.endpoint.get_url(), path);
+        debug!("Posting url: {}", url);
+        let mut request_builder = self.http_client.put(url).query(&query).body(body.clone());
+
+        for (key, val) in headers {
+            request_builder = request_builder.header(key, val);
+        }
+
+        let endpoint = self.endpoint.clone();
+        request_builder = inject_auth(request_builder, endpoint);
+
+        let call = request_builder.send().await;
+        if let Ok(call) = call {
+            let text = call.text().await;
+            if let Ok(text) = text {
+                debug!("Put response text: {}", text);
+                return Some(text);
+            }
+        }
+
+        todo!("Implement empty response!")
+    }
+
     async fn call_delete(
         &mut self,
         path: &str,
@@ -312,10 +342,10 @@ impl EsClient {
     }
 
     #[time("debug")]
-    pub async fn copy_mapping_to(&mut self, es_client: &mut EsClient, index: &Index) -> &Self {
+    pub async fn copy_mappings_to(&mut self, es_client: &mut EsClient, index: &Index) -> &Self {
         let index_name = index.get_name();
         let index_name_of_copy = index.get_name_of_copy();
-        let mut mapping: Option<Value> = None;
+        let mut mappings: Option<Value> = None;
         let mut settings: Option<Value> = None;
 
         // mapping
@@ -331,7 +361,7 @@ impl EsClient {
                     if keys.len() == 1 {
                         for key in keys {
                             if let Some(value_want) = obj.get(key) {
-                                mapping = Some(value_want.clone());
+                                mappings = Some(value_want.clone());
                             }
                         }
                     }
@@ -352,10 +382,11 @@ impl EsClient {
                     if keys.len() == 1 {
                         for key in keys {
                             if let Some(value_want) = obj.get(key) {
-                                let mut fix_value_want = value_want.clone();
-                                if let Some(settings_val) = fix_value_want.get_mut("settings") {
+                                let mut fixed_value = value_want.clone();
+                                if let Some(settings_val) = fixed_value.get_mut("settings") {
                                     if let Some(index_val) = settings_val.get_mut("index") {
                                         let names = vec![
+                                            "uuid",
                                             "provided_name",
                                             "creation_date",
                                             "version",
@@ -377,7 +408,7 @@ impl EsClient {
                                         );
                                     }
                                 }
-                                settings = Some(fix_value_want);
+                                settings = Some(fixed_value);
                             }
                         }
                     }
@@ -385,14 +416,38 @@ impl EsClient {
             }
         }
 
-        if let Some(value) = mapping {
-            info!("Mapping found {}", value.to_string());
-        }
-        if let Some(value) = settings {
-            info!("Settings found {}", value.to_string());
-        }
+        // ! "mappings" and "settings" are crucial!
+        if let Some(mappings_value) = mappings {
+            info!("Mappings found {}", mappings_value.to_string());
+            if let Some(settings_value) = settings {
+                info!("Settings found {}", settings_value.to_string());
+                let resp = es_client
+                    .call_put(
+                        &format!("/{}", index_name_of_copy),
+                        &vec![],
+                        &vec![
+                            ("Content-Type".to_string(), "application/json".to_string()),
+                            ("Accept-encoding".to_string(), "gzip".to_string()),
+                        ],
+                        &format!(
+                            "{{ \"settings\": {}, \"mappings\": {} }}",
+                            settings_value["settings"].to_string(),
+                            mappings_value["mappings"].to_string()
+                        ),
+                    )
+                    .await;
 
-        self
+                if let Some(resp_value) = resp {
+                    info!("Index mappings and settings (response: {})", resp_value);
+                }
+
+                return self;
+            } else {
+                panic!("No settings found!");
+            }
+        } else {
+            panic!("No mappings found!");
+        }
     }
 
     pub fn get_scroll_id(&self) -> &Option<String> {

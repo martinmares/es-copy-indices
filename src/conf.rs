@@ -33,12 +33,13 @@ pub struct Index {
     name: String,
     name_of_copy: String,
     #[serde(default)]
-    create_alias: Option<String>,
+    name_of_alias: Option<String>,
     number_of_shards: u64,
     number_of_replicas: u64,
     copy_mapping: bool,
     copy_content: bool,
-    delete_if_exists: bool,
+    delete_index_before: bool,
+    delete_alias_after: bool,
 }
 
 impl Config {
@@ -108,11 +109,11 @@ impl Index {
     pub fn get_name_of_copy(&self) -> &String {
         &self.name_of_copy
     }
-    pub fn get_create_alias(&self) -> &Option<String> {
-        &self.create_alias
+    pub fn get_name_of_alias(&self) -> &Option<String> {
+        &self.name_of_alias
     }
     pub fn is_create_alias(&self) -> bool {
-        match &self.create_alias {
+        match &self.name_of_alias {
             Some(_) => true,
             _ => false,
         }
@@ -134,5 +135,11 @@ impl Index {
     }
     pub fn is_copy_content(&self) -> bool {
         *&self.copy_content
+    }
+    pub fn is_delete_index_before(&self) -> bool {
+        *&self.delete_index_before
+    }
+    pub fn is_delete_alias_after(&self) -> bool {
+        *&self.delete_alias_after
     }
 }

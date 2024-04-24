@@ -81,7 +81,7 @@ async fn main() {
                 index_name, from, to
             );
             source_es_client
-                .copy_mapping_to(&mut destination_es_client, index)
+                .copy_mappings_to(&mut destination_es_client, index)
                 .await;
         }
 
@@ -124,7 +124,10 @@ async fn main() {
 
         memory_stats!();
 
-        info!("Copying index {} done!", index_name);
+        info!(
+            "Copying index {} => {} done!",
+            index_name, index_name_of_copy
+        );
     }
 
     info!("Application completed!");
