@@ -8,7 +8,7 @@ pub struct Config {
     indices: Vec<Index>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Endpoint {
     name: String,
     url: String,
@@ -17,14 +17,14 @@ pub struct Endpoint {
     root_certificates: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BasicAuth {
     username: String,
     #[serde(default)]
     password: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Index {
     from: String,
     to: String,
@@ -32,14 +32,29 @@ pub struct Index {
     keep_alive: String,
     name: String,
     name_of_copy: String,
+    delete_if_exists: bool,
     #[serde(default)]
-    name_of_alias: Option<String>,
+    alias: Option<Alias>,
     number_of_shards: u64,
     number_of_replicas: u64,
     copy_mapping: bool,
     copy_content: bool,
-    delete_index_before: bool,
-    delete_alias_after: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Alias {
+    name: String,
+    #[serde(default)]
+    remove_if_exists: bool,
+}
+
+impl Default for Alias {
+    fn default() -> Self {
+        Self {
+            name: String::default(),
+            remove_if_exists: false,
+        }
+    }
 }
 
 impl Config {
@@ -70,7 +85,7 @@ impl Endpoint {
     pub fn get_root_certificates(&self) -> &Vec<String> {
         &self.root_certificates
     }
-    pub fn has_basic_auth(&self) -> bool {
+    pub fn is_basic_auth(&self) -> bool {
         let mut result = false;
         if let Some(basic_auth) = &self.basic_auth {
             if let Some(_) = basic_auth.get_password() {
@@ -109,13 +124,25 @@ impl Index {
     pub fn get_name_of_copy(&self) -> &String {
         &self.name_of_copy
     }
-    pub fn get_name_of_alias(&self) -> &Option<String> {
-        &self.name_of_alias
+    pub fn get_alias_name(&self) -> Option<String> {
+        if let Some(alias) = &self.alias {
+            Some(alias.name.clone())
+        } else {
+            None
+        }
     }
-    pub fn is_create_alias(&self) -> bool {
-        match &self.name_of_alias {
-            Some(_) => true,
-            _ => false,
+    pub fn is_alias(&self) -> bool {
+        if let Some(alias) = &self.alias {
+            !alias.name.is_empty()
+        } else {
+            false
+        }
+    }
+    pub fn is_alias_remove_if_exists(&self) -> bool {
+        if let Some(alias) = &self.alias {
+            alias.remove_if_exists
+        } else {
+            false
         }
     }
     pub fn get_number_of_shards(&self) -> u64 {
@@ -136,10 +163,7 @@ impl Index {
     pub fn is_copy_content(&self) -> bool {
         *&self.copy_content
     }
-    pub fn is_delete_index_before(&self) -> bool {
-        *&self.delete_index_before
-    }
-    pub fn is_delete_alias_after(&self) -> bool {
-        *&self.delete_alias_after
+    pub fn is_delete_if_exists(&self) -> bool {
+        *&self.delete_if_exists
     }
 }

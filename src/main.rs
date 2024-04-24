@@ -108,7 +108,7 @@ async fn main() {
                 );
 
                 source_es_client
-                    .copy_content_to(&mut destination_es_client, &index_name_of_copy)
+                    .copy_content_to(&mut destination_es_client, &index)
                     .await;
                 source_es_client.scroll_next(index).await;
 
@@ -117,10 +117,12 @@ async fn main() {
             source_es_client.scroll_stop().await;
         } else {
             warn!(
-                "Copying index content for {} is disabled in config!",
+                "Copying index content for {} is disabled by config!",
                 index_name
             );
         }
+
+        destination_es_client.create_alias(index).await;
 
         memory_stats!();
 

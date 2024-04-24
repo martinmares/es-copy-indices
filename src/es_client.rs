@@ -1,10 +1,12 @@
+use std::vec;
+
 use logging_timer::time;
 use serde_json::Value;
 
 use crate::conf::{Endpoint, Index};
 use crate::models::scroll_response::{Document, ScrollResponse};
 use crate::models::server_info::ServerInfo;
-use log::{debug, info};
+use log::{debug, info, warn};
 
 use reqwest::{Client, RequestBuilder};
 
@@ -24,7 +26,7 @@ pub struct EsClient {
 }
 
 fn inject_auth(request_builder: RequestBuilder, endpoint: Endpoint) -> RequestBuilder {
-    if endpoint.has_basic_auth() {
+    if endpoint.is_basic_auth() {
         request_builder.basic_auth(endpoint.get_username(), endpoint.get_password())
     } else {
         request_builder
@@ -221,6 +223,7 @@ impl EsClient {
                 &body,
             )
             .await;
+
         if let Some(value) = resp {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
@@ -261,6 +264,7 @@ impl EsClient {
                 &body,
             )
             .await;
+
         if let Some(value) = resp {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
@@ -304,12 +308,10 @@ impl EsClient {
     }
 
     #[time("debug")]
-    pub async fn copy_content_to(
-        &mut self,
-        es_client: &mut EsClient,
-        index_name_of_copy: &String,
-    ) -> &Self {
+    pub async fn copy_content_to(&mut self, es_client: &mut EsClient, index: &Index) -> &Self {
+        let index_name_of_copy = index.get_name_of_copy();
         let mut bulk_body = String::new();
+
         if self.has_docs() {
             if let Some(docs) = self.get_docs() {
                 for doc in docs {
@@ -325,6 +327,7 @@ impl EsClient {
                 }
             }
         }
+
         let _ = es_client
             .call_post(
                 &format!("/{}/_bulk", index_name_of_copy), // ! This is NEW one CLONED index name!
@@ -352,6 +355,7 @@ impl EsClient {
         let resp = self
             .call_get(&format!("/{}/_mapping", index_name), &vec![], &vec![])
             .await;
+
         if let Some(value) = resp {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
@@ -373,6 +377,7 @@ impl EsClient {
         let resp = self
             .call_get(&format!("/{}/_settings", index_name), &vec![], &vec![])
             .await;
+
         if let Some(value) = resp {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
@@ -448,6 +453,85 @@ impl EsClient {
         } else {
             panic!("No mappings found!");
         }
+    }
+
+    #[time("debug")]
+    pub async fn create_alias(&mut self, index: &Index) -> &Self {
+        if index.is_alias() {
+            let alias_name = index.get_alias_name().unwrap();
+            let index_name_of_copy = index.get_name_of_copy();
+
+            let resp = self
+                .call_get(&format!("/_alias/{}", alias_name), &vec![], &vec![])
+                .await;
+
+            let mut indices_with_same_alias: Vec<String> = vec![];
+
+            if let Some(value) = resp {
+                let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                    serde_json::from_str(&value);
+                if let Ok(json_value) = json_value_result {
+                    if let Some(keys) = json_value.as_object() {
+                        if !keys.contains_key("error") && !keys.contains_key("status") {
+                            for (key, _) in keys {
+                                indices_with_same_alias.push(key.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut actions: Vec<String> = vec![];
+
+            debug!("Indices with same alias: {:#?}", indices_with_same_alias);
+
+            if indices_with_same_alias.len() > 0 {
+                if index.is_alias_remove_if_exists() {
+                    warn!(
+                        "Removing alias is enabled by config, refences found {:?}!",
+                        indices_with_same_alias
+                    );
+                    for index_with_same_alias in indices_with_same_alias {
+                        info!(
+                            "Add action \"remove\" alias \"{}\" for \"{}\"",
+                            alias_name, index_with_same_alias
+                        );
+                        let action = format!(
+                            "{{ \"remove\": {{ \"index\": \"{}\", \"alias\": \"{}\" }} }}",
+                            index_with_same_alias, alias_name
+                        );
+                        actions.push(action);
+                    }
+                } else {
+                    warn!("Removing alias is disabled by config!");
+                    return self;
+                }
+            }
+
+            info!(
+                "Add action \"add\" alias \"{}\" for \"{}\"",
+                alias_name, index_name_of_copy
+            );
+            let action = format!(
+                "{{ \"add\": {{ \"index\": \"{}\", \"alias\": \"{}\" }} }}",
+                index_name_of_copy, alias_name
+            );
+            actions.push(action);
+
+            let _ = self
+                .call_post(
+                    &format!("/_aliases"),
+                    &vec![],
+                    &vec![
+                        ("Content-Type".to_string(), "application/json".to_string()),
+                        ("Accept-encoding".to_string(), "gzip".to_string()),
+                    ],
+                    &format!("{{ \"actions\": [ {} ]  }}", actions.join(",")),
+                )
+                .await;
+        }
+
+        self
     }
 
     pub fn get_scroll_id(&self) -> &Option<String> {
