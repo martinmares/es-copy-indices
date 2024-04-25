@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 // use std::time::Duration;
 use std::vec;
 
@@ -12,6 +13,7 @@ use log::{debug, error, info, warn};
 use reqwest::{Client, RequestBuilder};
 
 const BULK_OPER_INDEX: &str = "index";
+const BULK_OPER_CREATE: &str = "create";
 const DEFAULT_DOC_TYPE: &str = "_doc"; // ! from elastic version_major=7 is "_doc" default type!
 
 #[derive(Debug, Clone)]
@@ -352,32 +354,139 @@ impl EsClient {
     #[time("debug")]
     pub async fn copy_content_to(&mut self, es_client: &mut EsClient, index: &Index) -> &Self {
         let index_name_of_copy = index.get_name_of_copy();
+        let mut bulk_body_pre_create = String::new();
         let mut bulk_body = String::new();
+
+        let is_routing_field = index.is_routing_field();
+        let mut routing_field = String::new();
+
+        if is_routing_field {
+            if let Some(value) = index.get_routing_field() {
+                routing_field = value.clone();
+            }
+        }
+        let server_major_version = es_client.server_info.as_ref().unwrap().get_version_major();
 
         if self.has_docs() {
             if let Some(docs) = self.get_docs() {
+                let mut pre_create_doc_ids: HashSet<String> = HashSet::new();
+
+                // ! PRE-CREATING DOCs !
                 for doc in docs {
+                    let mut add_routing_to_bulk: Option<String> = None;
+
+                    if is_routing_field {
+                        //for pre_create_pointer in &pre_create_pointers {
+                        // debug!("Finding pre create pointer ... {}", pre_create_pointer);
+                        let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                            serde_json::from_str(doc.get_source());
+
+                        // warn!("json_value = {:#?}", json_value_result);
+                        // std::thread::sleep(Duration::from_secs(10));
+
+                        if let Ok(json_value) = json_value_result {
+                            let value = json_value.pointer(&routing_field);
+                            if let Some(pointer_id) = value {
+                                // debug!("Pointer id found ... {}", pointer_id);
+                                if let Some(id) = pointer_id.as_str() {
+                                    let id = id.to_string();
+                                    add_routing_to_bulk = Some(id.clone());
+                                    pre_create_doc_ids.insert(id);
+                                }
+                            }
+                        }
+                        //}
+                    }
+
                     // index name + id + type
-                    let server_major_version =
-                        es_client.server_info.as_ref().unwrap().get_version_major();
+                    let id = doc.get_id();
                     if server_major_version <= 7 {
-                        bulk_body.push_str(&format!("{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
-                        BULK_OPER_INDEX,
-                        index_name_of_copy,
-                        doc.get_doc_type(),doc.get_id()));
+                        if let Some(id_routing) = add_routing_to_bulk {
+                            bulk_body.push_str(&format!(
+                                "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\", \"routing\": \"{}\" }} }}",
+                                BULK_OPER_INDEX,
+                                index_name_of_copy,
+                                doc.get_doc_type(),
+                                id,
+                                id_routing));
+                        } else {
+                            bulk_body.push_str(&format!(
+                                "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                BULK_OPER_INDEX,
+                                index_name_of_copy,
+                                doc.get_doc_type(),
+                                id));
+                        }
+                    // index name + id
                     } else {
-                        bulk_body.push_str(&format!(
-                            "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
-                            BULK_OPER_INDEX,
-                            index_name_of_copy,
-                            doc.get_id()
-                        ));
+                        if let Some(id_routing) = add_routing_to_bulk {
+                            bulk_body.push_str(&format!(
+                                "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\", \"routing\": \"{}\" }} }}",
+                                BULK_OPER_INDEX, index_name_of_copy, id, id_routing
+                            ));
+                        } else {
+                            bulk_body.push_str(&format!(
+                                "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                BULK_OPER_INDEX, index_name_of_copy, id
+                            ));
+                        }
                     }
                     bulk_body.push_str("\n");
                     // document source
                     bulk_body.push_str(doc.get_source());
                     bulk_body.push_str("\n");
                 }
+
+                if pre_create_doc_ids.len() > 0 {
+                    info!("Pre create doc ids ... {:?}", pre_create_doc_ids);
+                }
+                for id in pre_create_doc_ids {
+                    // index name + id + type
+                    if server_major_version <= 7 {
+                        bulk_body_pre_create.push_str(
+                            &format!("{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                    BULK_OPER_CREATE, // ! must be "create" instead of "index" !
+                                    index_name_of_copy,
+                                    DEFAULT_DOC_TYPE,
+                                    id));
+                    // index name + id
+                    } else {
+                        bulk_body_pre_create.push_str(&format!(
+                            "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                            BULK_OPER_CREATE, // ! must be "create" instead of "index" !
+                            index_name_of_copy,
+                            id
+                        ));
+                    }
+                    bulk_body_pre_create.push_str("\n");
+                    // document source
+                    bulk_body_pre_create.push_str("{}"); // ! must be empty - this is ONLY PRE-CREATE !
+                    bulk_body_pre_create.push_str("\n");
+                }
+            }
+        }
+
+        if is_routing_field && !bulk_body_pre_create.is_empty() {
+            debug!("Pre creating some documents ... {}", bulk_body_pre_create);
+            let resp = es_client
+                .call_post(
+                    &format!("/{}/_bulk", index_name_of_copy), // ! This is NEW one CLONED index name!
+                    &vec![],
+                    // &vec![("refresh".to_string(), "true".to_string())],
+                    &vec![
+                        ("Content-Type".to_string(), "application/json".to_string()),
+                        ("Accept-encoding".to_string(), "gzip".to_string()),
+                    ],
+                    &bulk_body_pre_create,
+                )
+                .await;
+
+            if let Some((_, text)) = resp {
+                info!(
+                    "Pre create result ... {} ... {}",
+                    text[0..100].to_string(),
+                    text[text.len() - 100..].to_string(),
+                );
             }
         }
 

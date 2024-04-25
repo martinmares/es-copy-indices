@@ -31,6 +31,8 @@ pub struct Index {
     buffer_size: u64,
     keep_alive: String,
     #[serde(default)]
+    routing_field: Option<String>,
+    #[serde(default)]
     custom: Option<Custom>,
     name: String,
     name_of_copy: String,
@@ -182,6 +184,15 @@ impl Index {
     }
     pub fn get_custom(&self) -> &Option<Custom> {
         &self.custom
+    }
+    pub fn is_routing_field(&self) -> bool {
+        match &self.routing_field {
+            Some(_) => true,
+            _ => false,
+        }
+    }
+    pub fn get_routing_field(&self) -> &Option<String> {
+        &self.routing_field
     }
     pub fn is_copy_mapping(&self) -> bool {
         *&self.copy_mapping
