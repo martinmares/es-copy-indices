@@ -9,11 +9,16 @@ use log::{info, warn};
 use std::path::PathBuf;
 
 use clap::{command, value_parser, Arg, ArgAction};
+use env_logger::{Builder, Target};
 use twelf::Layer;
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    // default logging is to Target::Stderr, switch to Target::Stdout
+    // env_logger::init();
+    let mut builder = Builder::from_default_env();
+    builder.target(Target::Stdout);
+    builder.init();
 
     let matches = command!()
         .arg(
