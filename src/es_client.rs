@@ -441,7 +441,7 @@ impl EsClient {
                 if pre_create_doc_ids.len() > 0 {
                     info!(
                         "Pre create doc ids ... {:?}",
-                        pre_create_doc_ids.iter().take(5)
+                        pre_create_doc_ids.iter().take(5).collect::<Vec<_>>()
                     );
                 }
                 for id in pre_create_doc_ids {
