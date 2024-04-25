@@ -107,9 +107,12 @@ async fn main() {
                     (counter as f64 / total as f64) * 100.00
                 );
 
+                // pre create parent->child docs and post bulk insert docs
                 source_es_client
                     .copy_content_to(&mut destination_es_client, &index)
                     .await;
+
+                // next docs?
                 source_es_client.scroll_next(index).await;
 
                 memory_stats!();
