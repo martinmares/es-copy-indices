@@ -385,6 +385,7 @@ impl EsClient {
                         // std::thread::sleep(Duration::from_secs(10));
 
                         if let Ok(json_value) = json_value_result {
+                            // More details about JSON RFC6901 (pointers): https://tools.ietf.org/html/rfc6901
                             let value = json_value.pointer(&routing_field);
                             if let Some(pointer_id) = value {
                                 // debug!("Pointer id found ... {}", pointer_id);
@@ -438,7 +439,10 @@ impl EsClient {
                 }
 
                 if pre_create_doc_ids.len() > 0 {
-                    info!("Pre create doc ids ... {:?}", pre_create_doc_ids);
+                    info!(
+                        "Pre create doc ids ... {:?}",
+                        pre_create_doc_ids.iter().take(5)
+                    );
                 }
                 for id in pre_create_doc_ids {
                     // index name + id + type
