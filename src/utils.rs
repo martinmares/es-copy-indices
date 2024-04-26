@@ -20,9 +20,9 @@ async fn create_certificate_from(
 
 async fn create_http_client(
     endpoint: &Endpoint,
-    root_certificates: &Vec<String>,
 ) -> Result<reqwest::Client, Box<dyn std::error::Error>> {
     let mut builder = reqwest::Client::builder();
+    let root_certificates = endpoint.get_root_certificates();
 
     for certificate_file_name in root_certificates {
         if let Ok(cert) = create_certificate_from(certificate_file_name.to_string()).await {
@@ -45,7 +45,7 @@ async fn create_http_client(
 pub async fn create_es_client(endpoints: &Vec<Endpoint>, which_one: &String) -> Option<EsClient> {
     for endpoint in endpoints {
         if endpoint.get_name() == which_one {
-            let http_client = create_http_client(endpoint, endpoint.get_root_certificates()).await;
+            let http_client = create_http_client(endpoint).await;
 
             if let Ok(http_client) = http_client {
                 let mut es_client = EsClient::new(endpoint.clone(), http_client);
