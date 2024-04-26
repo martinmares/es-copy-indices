@@ -2,7 +2,7 @@ use crate::conf::Endpoint;
 use crate::es_client::EsClient;
 
 use core::panic;
-use log::debug;
+use log::info;
 
 use reqwest::Certificate;
 use tokio::fs::File;
@@ -22,11 +22,20 @@ async fn create_http_client(
     endpoint: &Endpoint,
 ) -> Result<reqwest::Client, Box<dyn std::error::Error>> {
     let mut builder = reqwest::Client::builder();
-    let root_certificates = endpoint.get_root_certificates();
+    let mut root_certificates: Vec<String> = vec![];
+
+    if let Some(root_certificates_path) = endpoint.get_root_certificates() {
+        let dir = tokio::fs::read_dir(root_certificates_path).await;
+        if let Ok(mut entry) = dir {
+            while let Ok(Some(item)) = entry.next_entry().await {
+                root_certificates.push(item.path().to_str().unwrap().to_string());
+            }
+        }
+    }
 
     for certificate_file_name in root_certificates {
         if let Ok(cert) = create_certificate_from(certificate_file_name.to_string()).await {
-            debug!("add root certificate: {:?}", cert);
+            info!("Add root certificate \"{}\"", certificate_file_name);
             builder = builder.add_root_certificate(cert);
         }
     }

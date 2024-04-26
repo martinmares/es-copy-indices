@@ -14,7 +14,8 @@ pub struct Endpoint {
     url: String,
     #[serde(default)]
     basic_auth: Option<BasicAuth>,
-    root_certificates: Vec<String>,
+    #[serde(default)]
+    root_certificates: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -101,7 +102,7 @@ impl Endpoint {
     pub fn get_url(&self) -> &String {
         &self.url
     }
-    pub fn get_root_certificates(&self) -> &Vec<String> {
+    pub fn get_root_certificates(&self) -> &Option<String> {
         &self.root_certificates
     }
     pub fn is_basic_auth(&self) -> bool {
