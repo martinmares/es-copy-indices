@@ -6,7 +6,7 @@ mod models;
 mod utils;
 
 use clap::{command, value_parser, Arg};
-use log::{info, warn};
+use log::{error, info, warn};
 use std::path::PathBuf;
 // use env_logger::Env;
 use twelf::Layer;
@@ -35,11 +35,17 @@ async fn main() {
 
     info!("Args config_path={:?}", config_path);
 
-    let config = if let Ok(value) = conf::Config::with_layers(&[Layer::Yaml(config_path.clone())]) {
-        value
-    } else {
-        panic!("Failed to load config file with name {:?}!", config_path)
-    };
+    let config: conf::Config;
+
+    match conf::Config::with_layers(&[Layer::Yaml(config_path.clone())]) {
+        Ok(value) => {
+            config = value;
+        }
+        Err(e) => {
+            error!("Error loading config {:?}, error: {:?}", config_path, e);
+            panic!("Failed to load config file with name {:?}!", config_path)
+        }
+    }
 
     for index in config.get_indices() {
         let index_name = index.get_name();
