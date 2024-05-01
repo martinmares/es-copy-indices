@@ -231,30 +231,6 @@ impl EsClient {
             ]
             .join(",")
         );
-        debug!("##### {} #####", body);
-
-        // let body = r#"
-        //     {
-        //         "size": 10,
-        //         "query": {
-        //         "bool": {
-        //             "must": [
-        //                 { "match_all": {} }
-        //             ],
-        //             "filter": {
-        //                 "term": {
-        //                     "joinField": "Ticket"
-        //                 }
-        //             }
-        //         }
-        //         },
-        //         "sort": [
-        //             {"_doc": "asc"}
-        //         ]
-        //     }
-        // "#
-        // .to_string();
-
         debug!("Querying: {}", body);
         let resp = self
             .call_post(

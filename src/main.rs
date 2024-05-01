@@ -37,7 +37,7 @@ async fn main() {
 
     let config: conf::Config;
 
-    match conf::Config::with_layers(&[Layer::Yaml(config_path.clone())]) {
+    match conf::Config::with_layers(&[Layer::Toml(config_path.clone())]) {
         Ok(value) => {
             config = value;
         }
