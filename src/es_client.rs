@@ -194,12 +194,16 @@ impl EsClient {
 
     pub fn print_server_info(&mut self, prefix: &str) {
         if let Some(server_info) = &self.server_info {
+            let mut uuid = String::default();
+            if let Some(value) = server_info.get_uuid() {
+                uuid = value.clone();
+            }
             info!(
                 "Server details about \"{}\" (hostname={}, name={}, uuid={}, version_major={}, version={}, lucene={})",
                 prefix,
                 server_info.get_hostname(),
                 server_info.get_name(),
-                server_info.get_uuid(),
+                uuid,
                 server_info.get_version_major(),
                 server_info.get_version(),
                 server_info.get_lucene_version()
@@ -248,7 +252,7 @@ impl EsClient {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
             if let Ok(json_value) = json_value_result {
-                let new_scroll_response = ScrollResponse::new(json_value);
+                let new_scroll_response = ScrollResponse::new(json_value, None);
 
                 self.current_size = new_scroll_response.get_current_size();
                 self.total_size = new_scroll_response.get_total_size();
@@ -266,30 +270,39 @@ impl EsClient {
     #[time("debug")]
     pub async fn scroll_next(&mut self, index: &Index) -> &mut Self {
         let keep_alive = index.get_keep_alive();
-
-        let body = format!(
+        let mut body = format!(
             "{{ \"scroll\": \"{}\", \"scroll_id\": \"{}\" }}",
             keep_alive,
             self.scroll_id.clone().unwrap()
         );
         debug!("Querying: {}", body);
-        let resp = self
-            .call_post(
-                &format!("/_search/scroll"),
-                &vec![],
-                &vec![
-                    ("Content-Type".to_string(), "application/json".to_string()),
-                    ("Accept-encoding".to_string(), "gzip".to_string()),
-                ],
-                &body,
+        let mut query: Vec<(String, String)> = vec![];
+        let mut headers: Vec<(String, String)> = vec![];
+
+        if self.server_info.as_ref().unwrap().get_version_major() <= 2 {
+            query.push(("scroll".to_string(), keep_alive.clone()));
+            headers.push(("Content-Type".to_string(), "text/plain".to_string()));
+            body = self.scroll_id.clone().unwrap();
+            warn!(
+                "Client is old one, query={:?}, headers={:?}, body={:?}",
+                query, headers, body
             )
+        } else {
+            headers.push(("Content-Type".to_string(), "application/json".to_string()));
+        }
+
+        headers.push(("Accept-encoding".to_string(), "gzip".to_string()));
+
+        let resp = self
+            .call_post(&"/_search/scroll", &query, &headers, &body)
             .await;
 
         if let Some((_, value)) = resp {
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&value);
             if let Ok(json_value) = json_value_result {
-                let new_scroll_response = ScrollResponse::new(json_value);
+                let new_scroll_response =
+                    ScrollResponse::new(json_value, Some(self.scroll_id.clone().unwrap()));
 
                 self.current_size = new_scroll_response.get_current_size();
                 self.total_size = new_scroll_response.get_total_size();

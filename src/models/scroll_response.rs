@@ -1,4 +1,5 @@
-use log::debug;
+use log::{debug, warn};
+use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct ScrollResponse {
@@ -16,15 +17,34 @@ pub struct Document {
 }
 
 impl ScrollResponse {
-    pub fn new(json_value: serde_json::Value) -> Self {
-        let scroll_id = json_value["_scroll_id"].as_str().unwrap().to_string();
-        let total_docs = json_value["hits"]["total"]["value"]
-            .as_number()
-            .unwrap()
-            .as_u64()
-            .unwrap();
-        let hits = json_value["hits"]["hits"].as_array().unwrap();
+    pub fn new(json_value: serde_json::Value, preview_scroll_id: Option<String>) -> Self {
+        let mut scroll_id = String::default();
 
+        if let Some(value) = json_value["_scroll_id"].as_str() {
+            scroll_id = value.to_string();
+        }
+        let mut total_docs: u64 = 0;
+
+        // try parse from new one -> ES >= 5
+        if let Some(value) = json_value["hits"]["total"]["value"].as_number() {
+            total_docs = value.as_u64().unwrap();
+        // try parse from old one -> ES >= 2
+        } else if let Some(value) = json_value["hits"]["total"].as_number() {
+            total_docs = value.as_u64().unwrap();
+        }
+
+        let mut hits: &Vec<Value> = &vec![];
+
+        if let Some(value) = json_value["hits"]["hits"].as_array() {
+            hits = &value;
+        }
+
+        if scroll_id.is_empty() {
+            if let Some(value) = preview_scroll_id {
+                scroll_id = value;
+                warn!("Setting scroll id from preview one {:?}", scroll_id);
+            }
+        }
         let mut docs: Vec<Document> = vec![];
 
         for hit in hits {

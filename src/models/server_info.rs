@@ -8,7 +8,7 @@ pub struct ServerInfo {
     #[serde(rename = "cluster_name")]
     name: String,
     #[serde(rename = "cluster_uuid")]
-    uuid: String,
+    uuid: Option<String>,
     version: Version,
 }
 
@@ -25,7 +25,7 @@ impl ServerInfo {
     pub fn get_name(&self) -> &String {
         &self.name
     }
-    pub fn get_uuid(&self) -> &String {
+    pub fn get_uuid(&self) -> &Option<String> {
         &self.uuid
     }
     pub fn get_version(&self) -> &String {
