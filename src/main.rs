@@ -6,6 +6,7 @@ mod models;
 mod utils;
 
 use clap::{command, value_parser, Arg};
+use env_logger::Env;
 use log::{error, info, warn};
 use std::path::PathBuf;
 // use env_logger::Env;
@@ -13,7 +14,7 @@ use twelf::Layer;
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let matches = command!()
         .arg(
             Arg::new("config")
