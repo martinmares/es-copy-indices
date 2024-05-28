@@ -211,9 +211,44 @@ impl EsClient {
         }
     }
 
+    pub async fn get_indices_names(&mut self, pattern: &str) -> Vec<String> {
+        let mut result: Vec<String> = vec![];
+
+        let resp = self
+            .call_get(
+                &format!("/_cat/indices/{}", pattern),
+                &vec![
+                    ("h".to_string(),"health,status,index,id,pri,rep,docs.count,docs.deleted,store.size,creation.date.string".to_string()),
+                    ("v".to_string(),"".to_string())],
+                &vec![
+                    ("Accept".to_string(), "application/json".to_string()),
+                    ("Accept-encoding".to_string(), "gzip".to_string()),
+                ],
+            )
+            .await;
+
+        if let Some(value) = resp {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                if let Some(indices) = json_value.as_array() {
+                    for index in indices {
+                        if let Some(obj) = index.as_object() {
+                            if let Some(index_name) = obj["index"].as_str() {
+                                result.push(index_name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     #[time("debug")]
-    pub async fn scroll_start(&mut self, index: &Index) -> &mut Self {
-        let index_name = index.get_name();
+    pub async fn scroll_start(&mut self, index: &Index, index_name: &String) -> &mut Self {
+        // let index_name = index.get_name();
         let keep_alive = index.get_keep_alive();
         let buffer_size = index.get_buffer_size();
 
@@ -319,6 +354,9 @@ impl EsClient {
 
     #[time("debug")]
     pub async fn scroll_stop(&mut self) -> &mut Self {
+        self.current_size = 0;
+        self.total_size = 0;
+        self.docs_counter = 0;
         let body = format!(
             "{{ \"scroll_id\": \"{}\" }}",
             self.scroll_id.clone().unwrap()
@@ -341,8 +379,17 @@ impl EsClient {
     }
 
     #[time("debug")]
-    pub async fn copy_content_to(&mut self, es_client: &mut EsClient, index: &Index) -> &Self {
-        let index_name_of_copy = index.get_name_of_copy();
+    pub async fn copy_content_to(
+        &mut self,
+        es_client: &mut EsClient,
+        index: &Index,
+        index_name_of_copy: &String,
+    ) -> &Self {
+        // let index_name = index.get_name();
+        // let index_name_of_copy = match index.get_name_of_copy() {
+        //     Some(name) => name,
+        //     None => index_name,
+        // };
         let mut bulk_body_pre_create = String::new();
         let mut bulk_body = String::new();
 
@@ -526,9 +573,18 @@ impl EsClient {
     }
 
     #[time("debug")]
-    pub async fn copy_mappings_to(&mut self, es_client: &mut EsClient, index: &Index) -> &Self {
-        let index_name = index.get_name();
-        let index_name_of_copy = index.get_name_of_copy();
+    pub async fn copy_mappings_to(
+        &mut self,
+        es_client: &mut EsClient,
+        index: &Index,
+        index_name: &String,
+        index_name_of_copy: &String,
+    ) -> &Self {
+        // let index_name = index.get_name();
+        // let index_name_of_copy = match index.get_name_of_copy() {
+        //     Some(name) => name,
+        //     None => index_name,
+        // };
         let mut mappings: Option<Value> = None;
         let mut settings: Option<Value> = None;
 
@@ -640,7 +696,11 @@ impl EsClient {
     pub async fn create_alias(&mut self, index: &Index) -> &Self {
         if index.is_alias() {
             let alias_name = index.get_alias_name().unwrap();
-            let index_name_of_copy = index.get_name_of_copy();
+            let index_name = index.get_name();
+            let index_name_of_copy = match index.get_name_of_copy() {
+                Some(name) => name,
+                None => index_name,
+            };
 
             let resp = self
                 .call_get(&format!("/_alias/{}", alias_name), &vec![], &vec![])

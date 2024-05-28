@@ -36,7 +36,10 @@ pub struct Index {
     #[serde(default)]
     custom: Option<Custom>,
     name: String,
-    name_of_copy: String,
+    #[serde(default)]
+    multiple: bool,
+    name_of_copy: Option<String>,
+    #[serde(default)]
     delete_if_exists: bool,
     #[serde(default)]
     alias: Option<Alias>,
@@ -141,7 +144,7 @@ impl Index {
     pub fn get_name(&self) -> &String {
         &self.name
     }
-    pub fn get_name_of_copy(&self) -> &String {
+    pub fn get_name_of_copy(&self) -> &Option<String> {
         &self.name_of_copy
     }
     pub fn get_alias_name(&self) -> Option<String> {
@@ -203,6 +206,9 @@ impl Index {
     }
     pub fn is_delete_if_exists(&self) -> bool {
         *&self.delete_if_exists
+    }
+    pub fn is_multiple(&self) -> bool {
+        *&self.multiple
     }
 }
 

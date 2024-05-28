@@ -5,6 +5,9 @@ mod es_client;
 mod models;
 mod utils;
 
+// use std::thread;
+// use std::time::Duration;
+
 use clap::{command, value_parser, Arg};
 use env_logger::Env;
 use log::{error, info, warn};
@@ -49,8 +52,15 @@ async fn main() {
     }
 
     for index in config.get_indices() {
-        let index_name = index.get_name();
-        let index_name_of_copy = index.get_name_of_copy();
+        let mut indices_names: Vec<String> = vec![];
+        // if index.is_multiple() {
+        //     index_names.push(index.get_name().clone());
+        //     info!("Copy multiple indices! ({:?})", index_names);
+        // } else {
+        //     index_names.push(index.get_name().clone());
+        // }
+        // for index_name in &index_names {
+        // let index_name = index.get_name();
         let from = index.get_from();
         let to = index.get_to();
 
@@ -66,64 +76,91 @@ async fn main() {
             .expect("Create destination elastic client failed!");
         destination_es_client.print_server_info(to);
 
-        if index.is_copy_mapping() {
+        let mut index_name_of_copy = match index.get_name_of_copy() {
+            Some(name) => name,
+            None => index.get_name(),
+        };
+
+        if index.is_multiple() {
+            indices_names = source_es_client.get_indices_names(&index.get_name()).await;
             info!(
-                "Copying mapping for {} (from: {}, to: {})",
-                index_name, from, to
+                "Copying multiple indices ... {:?} ...",
+                indices_names.iter().take(5).collect::<Vec<_>>()
             );
-            source_es_client
-                .copy_mappings_to(&mut destination_es_client, index)
-                .await;
+            // thread::sleep(Duration::from_secs(120));
+        } else {
+            indices_names.push(index.get_name().clone());
         }
 
-        if index.is_copy_content() {
-            info!(
-                "Copying index content {} (from: {}, to: {})",
-                index_name, from, to
-            );
+        for index_name in &indices_names {
+            if index.is_multiple() {
+                index_name_of_copy = index_name;
+            }
 
-            source_es_client.scroll_start(index).await;
+            if index.is_copy_mapping() && !index.is_multiple() {
+                info!(
+                    "Copying mapping for {} (from: {}, to: {})",
+                    index_name, from, to
+                );
+                source_es_client
+                    .copy_mappings_to(
+                        &mut destination_es_client,
+                        &index,
+                        index_name,
+                        index_name_of_copy,
+                    )
+                    .await;
+            }
+
+            if index.is_copy_content() {
+                info!(
+                    "Copying index content {} (from: {}, to: {})",
+                    index_name, from, to
+                );
+
+                source_es_client.scroll_start(index, index_name).await;
+
+                memory_stats!();
+
+                while source_es_client.has_docs() {
+                    let total = source_es_client.get_total_size();
+                    let counter = source_es_client.get_docs_counter();
+
+                    info!(
+                        "Iterate {} - docs {}/{} ({:.2} %)",
+                        index_name,
+                        counter,
+                        total,
+                        (counter as f64 / total as f64) * 100.00
+                    );
+
+                    // pre create parent->child docs and post bulk insert docs
+                    source_es_client
+                        .copy_content_to(&mut destination_es_client, &index, index_name_of_copy)
+                        .await;
+
+                    // next docs?
+                    source_es_client.scroll_next(index).await;
+
+                    memory_stats!();
+                }
+                source_es_client.scroll_stop().await;
+            } else {
+                warn!(
+                    "Copying index content for {} is disabled by config!",
+                    index_name
+                );
+            }
+
+            destination_es_client.create_alias(index).await;
 
             memory_stats!();
 
-            while source_es_client.has_docs() {
-                let total = source_es_client.get_total_size();
-                let counter = source_es_client.get_docs_counter();
-
-                info!(
-                    "Iterate {} - docs {}/{} ({:.2} %)",
-                    index_name,
-                    counter,
-                    total,
-                    (counter as f64 / total as f64) * 100.00
-                );
-
-                // pre create parent->child docs and post bulk insert docs
-                source_es_client
-                    .copy_content_to(&mut destination_es_client, &index)
-                    .await;
-
-                // next docs?
-                source_es_client.scroll_next(index).await;
-
-                memory_stats!();
-            }
-            source_es_client.scroll_stop().await;
-        } else {
-            warn!(
-                "Copying index content for {} is disabled by config!",
-                index_name
+            info!(
+                "Copying index {} => {} done!",
+                index_name, index_name_of_copy
             );
         }
-
-        destination_es_client.create_alias(index).await;
-
-        memory_stats!();
-
-        info!(
-            "Copying index {} => {} done!",
-            index_name, index_name_of_copy
-        );
     }
 
     info!("Application completed!");
