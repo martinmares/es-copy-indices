@@ -13,7 +13,11 @@ root_certificates/
 root_ca/
 README.local.md
 flamegraph.svg
-log/**
+log/
+doc/
+docs/
+cert/
+certs/
 
 # Icon must end with two \r
 Icon
