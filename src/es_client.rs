@@ -222,7 +222,6 @@ impl EsClient {
                     ("v".to_string(),"".to_string())],
                 &vec![
                     ("Accept".to_string(), "application/json".to_string()),
-                    ("Accept-encoding".to_string(), "gzip".to_string()),
                 ],
             )
             .await;
@@ -275,10 +274,7 @@ impl EsClient {
             .call_post(
                 &format!("/{}/_search", index_name),
                 &vec![(String::from("scroll"), format!("{}", keep_alive))],
-                &vec![
-                    ("Content-Type".to_string(), "application/json".to_string()),
-                    ("Accept-encoding".to_string(), "gzip".to_string()),
-                ],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
                 &body,
             )
             .await;
@@ -326,8 +322,6 @@ impl EsClient {
             headers.push(("Content-Type".to_string(), "application/json".to_string()));
         }
 
-        headers.push(("Accept-encoding".to_string(), "gzip".to_string()));
-
         let resp = self
             .call_post(&"/_search/scroll", &query, &headers, &body)
             .await;
@@ -366,10 +360,7 @@ impl EsClient {
             .call_delete(
                 &format!("/_search/scroll"),
                 &vec![],
-                &vec![
-                    ("Content-Type".to_string(), "application/json".to_string()),
-                    ("Accept-encoding".to_string(), "gzip".to_string()),
-                ],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
                 &body,
             )
             .await;
@@ -513,10 +504,7 @@ impl EsClient {
                     &format!("/{}/_bulk", index_name_of_copy), // ! This is NEW one CLONED index name!
                     &vec![],
                     // &vec![("refresh".to_string(), "true".to_string())],
-                    &vec![
-                        ("Content-Type".to_string(), "application/json".to_string()),
-                        ("Accept-encoding".to_string(), "gzip".to_string()),
-                    ],
+                    &vec![("Content-Type".to_string(), "application/json".to_string())],
                     &bulk_body_pre_create,
                 )
                 .await;
@@ -534,10 +522,7 @@ impl EsClient {
             .call_post(
                 &format!("/{}/_bulk", index_name_of_copy), // ! This is NEW one CLONED index name!
                 &vec![],
-                &vec![
-                    ("Content-Type".to_string(), "application/json".to_string()),
-                    ("Accept-encoding".to_string(), "gzip".to_string()),
-                ],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
                 &bulk_body,
             )
             .await;
@@ -667,10 +652,7 @@ impl EsClient {
                     .call_put(
                         &format!("/{}", index_name_of_copy),
                         &vec![],
-                        &vec![
-                            ("Content-Type".to_string(), "application/json".to_string()),
-                            ("Accept-encoding".to_string(), "gzip".to_string()),
-                        ],
+                        &vec![("Content-Type".to_string(), "application/json".to_string())],
                         &format!(
                             "{{ \"settings\": {}, \"mappings\": {} }}",
                             settings_value["settings"].to_string(),
@@ -763,10 +745,7 @@ impl EsClient {
                 .call_post(
                     &format!("/_aliases"),
                     &vec![],
-                    &vec![
-                        ("Content-Type".to_string(), "application/json".to_string()),
-                        ("Accept-encoding".to_string(), "gzip".to_string()),
-                    ],
+                    &vec![("Content-Type".to_string(), "application/json".to_string())],
                     &format!("{{ \"actions\": [ {} ]  }}", actions.join(",")),
                 )
                 .await;
