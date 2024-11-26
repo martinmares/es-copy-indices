@@ -1,5 +1,6 @@
 use crate::conf::Endpoint;
 use crate::es_client::EsClient;
+use serde_json::Value;
 
 use core::panic;
 use log::info;
@@ -8,13 +9,18 @@ use reqwest::Certificate;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt; // for read_to_end()
 
+async fn read_content_from(file_name: String) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut file = File::open(file_name).await?;
+    let mut content = vec![];
+    file.read_to_end(&mut content).await?;
+    Ok(content)
+}
+
 async fn create_certificate_from(
     file_name: String,
 ) -> Result<Certificate, Box<dyn std::error::Error>> {
-    let mut file = File::open(file_name).await?;
-    let mut contents = vec![];
-    file.read_to_end(&mut contents).await?;
-    let cert = reqwest::Certificate::from_pem(&contents)?;
+    let content = read_content_from(file_name).await?;
+    let cert = reqwest::Certificate::from_pem(&content)?;
     Ok(cert)
 }
 
@@ -64,6 +70,19 @@ pub async fn create_es_client(endpoints: &Vec<Endpoint>, which_one: &String) -> 
         }
     }
     None
+}
+
+pub async fn string_to_json(file_name: &String) -> Option<Value> {
+    if file_name.is_empty() {
+        None
+    } else {
+        if let Ok(content) = read_content_from(file_name.clone()).await {
+            if let Ok(value) = String::from_utf8(content) {
+                return serde_json::from_str(&value).ok();
+            }
+        }
+        None
+    }
 }
 
 #[macro_export]

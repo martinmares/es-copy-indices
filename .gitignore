@@ -5,6 +5,7 @@
 .AppleDouble
 .LSOverride
 conf/
+custom/
 doc/*.pdf
 .tmp/
 # certs/

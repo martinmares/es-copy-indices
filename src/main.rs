@@ -97,19 +97,33 @@ async fn main() {
                 index_name_of_copy = index_name;
             }
 
-            if index.is_copy_mapping() && !index.is_multiple() {
-                info!(
-                    "Copying mapping for {} (from: {}, to: {})",
-                    index_name, from, to
-                );
-                source_es_client
-                    .copy_mappings_to(
-                        &mut destination_es_client,
-                        &index,
-                        index_name,
-                        index_name_of_copy,
-                    )
-                    .await;
+            if !index.is_multiple() {
+                if index.is_copy_mapping() {
+                    info!(
+                        "Copying mapping for {} (from: {}, to: {})",
+                        index_name, from, to
+                    );
+                    source_es_client
+                        .copy_mappings_to(
+                            &mut destination_es_client,
+                            &index,
+                            index_name,
+                            index_name_of_copy,
+                        )
+                        .await;
+                } else if index.is_custom_mapping() {
+                    info!(
+                        "Copying custom mapping for {} (from: {}, to: {})",
+                        index_name, from, to
+                    );
+                    source_es_client
+                        .copy_custom_mappings_to(
+                            &mut destination_es_client,
+                            &index,
+                            index_name_of_copy,
+                        )
+                        .await;
+                }
             }
 
             if index.is_copy_content() {

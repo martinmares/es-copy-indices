@@ -37,7 +37,7 @@ pub struct Index {
     custom: Option<Custom>,
     name: String,
     #[serde(default)]
-    multiple: bool,
+    multiple: bool, // tohle zn. že chci víc indexů, typicky "tsm-log-*"
     name_of_copy: Option<String>,
     #[serde(default)]
     delete_if_exists: bool,
@@ -67,15 +67,19 @@ impl Default for Alias {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Custom {
-    query: String,
-    sort: String,
+    query: Option<String>,
+    sort: Option<String>,
+    doc_type: Option<String>,
+    mapping: Option<String>,
 }
 
 impl Default for Custom {
     fn default() -> Self {
         Self {
-            query: String::default(),
-            sort: "[]".to_string(),
+            query: None,
+            sort: None,
+            doc_type: None,
+            mapping: None,
         }
     }
 }
@@ -186,6 +190,24 @@ impl Index {
             _ => false,
         }
     }
+    pub fn is_custom_doc_type(&self) -> bool {
+        match &self.custom {
+            Some(custom) => match custom.doc_type {
+                Some(_) => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    pub fn is_custom_mapping(&self) -> bool {
+        match &self.custom {
+            Some(custom) => match custom.mapping {
+                Some(_) => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
     pub fn get_custom(&self) -> &Option<Custom> {
         &self.custom
     }
@@ -193,6 +215,18 @@ impl Index {
         match &self.routing_field {
             Some(_) => true,
             _ => false,
+        }
+    }
+    pub fn get_custom_doc_type(&self) -> &Option<String> {
+        match &self.custom {
+            Some(custom) => &custom.doc_type,
+            _ => &None,
+        }
+    }
+    pub fn get_custom_mapping(&self) -> &Option<String> {
+        match &self.custom {
+            Some(custom) => &custom.mapping,
+            _ => &None,
         }
     }
     pub fn get_routing_field(&self) -> &Option<String> {
@@ -213,10 +247,16 @@ impl Index {
 }
 
 impl Custom {
-    pub fn get_query(&self) -> &String {
+    pub fn get_query(&self) -> &Option<String> {
         &self.query
     }
-    pub fn get_sort(&self) -> &String {
+    pub fn get_sort(&self) -> &Option<String> {
         &self.sort
+    }
+    pub fn get_doc_type(&self) -> &Option<String> {
+        &self.doc_type
+    }
+    pub fn get_mapping(&self) -> &Option<String> {
+        &self.mapping
     }
 }

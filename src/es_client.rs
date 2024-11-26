@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::conf::{Endpoint, Index};
 use crate::models::scroll_response::{Document, ScrollResponse};
 use crate::models::server_info::ServerInfo;
+use crate::utils;
 use log::{debug, error, info, warn};
 
 use reqwest::{Client, RequestBuilder};
@@ -15,6 +16,8 @@ use reqwest::{Client, RequestBuilder};
 const BULK_OPER_INDEX: &str = "index";
 const BULK_OPER_CREATE: &str = "create";
 const DEFAULT_DOC_TYPE: &str = "_doc"; // ! from elastic version_major=7 is "_doc" default type!
+const DEFAULT_QUERY: &str = "{ \"match_all\": {} }";
+const DEFAULT_SORT: &str = "{ \"_doc\": \"asc\" }"; // ! from elastic version_major=7 is "_doc" default type!
 
 #[derive(Debug, Clone)]
 pub struct EsClient {
@@ -75,6 +78,8 @@ impl EsClient {
             if let Ok(text) = text {
                 return Some(text);
             }
+        } else {
+            debug!("{:#?}", &call);
         }
 
         todo!("Implement empty response!")
@@ -108,6 +113,8 @@ impl EsClient {
                 debug!("Post response code: {}, text: {}", code, text);
                 return Some((code, text));
             }
+        } else {
+            error!("Call: {:#?}", call);
         }
 
         todo!("Implement empty response!")
@@ -252,12 +259,18 @@ impl EsClient {
         let buffer_size = index.get_buffer_size();
 
         let q_query = match index.get_custom() {
-            Some(custom) => custom.get_query().clone(),
-            _ => format!("{{ \"match_all\": {{}} }}"),
+            Some(custom) => match custom.get_query() {
+                Some(query) => query,
+                _ => DEFAULT_QUERY,
+            },
+            _ => DEFAULT_QUERY,
         };
         let q_sort = match index.get_custom() {
-            Some(custom) => custom.get_sort().clone(),
-            _ => format!("[{{\"{}\": \"asc\"}}]", DEFAULT_DOC_TYPE),
+            Some(custom) => match custom.get_sort() {
+                Some(sort) => sort,
+                _ => DEFAULT_SORT,
+            },
+            _ => DEFAULT_SORT,
         };
 
         let body = format!(
@@ -272,7 +285,10 @@ impl EsClient {
         debug!("Querying: {}", body);
         let resp = self
             .call_post(
-                &format!("/{}/_search", index_name),
+                &(match index.get_custom_doc_type() {
+                    Some(doc_type) => format!("/{}/{}/_search", index_name, doc_type),
+                    _ => format!("/{}/_search", index_name),
+                }),
                 &vec![(String::from("scroll"), format!("{}", keep_alive))],
                 &vec![("Content-Type".to_string(), "application/json".to_string())],
                 &body,
@@ -619,6 +635,7 @@ impl EsClient {
                                             "version",
                                             "number_of_shards",
                                             "number_of_replicas",
+                                            "mapper",
                                         ];
                                         for name in names {
                                             if let Some(_) = index_val.get_mut(name) {
@@ -671,6 +688,44 @@ impl EsClient {
             }
         } else {
             panic!("No mappings found!");
+        }
+    }
+
+    #[time("debug")]
+    pub async fn copy_custom_mappings_to(
+        &mut self,
+        es_client: &mut EsClient,
+        index: &Index,
+        index_name_of_copy: &String,
+    ) -> &Self {
+        let custom_mapping = match index.get_custom_mapping() {
+            Some(value) => utils::string_to_json(value).await,
+            _ => None,
+        };
+
+        // ! "mappings" and "settings" are crucial!
+        if let Some(custom_mapping_value) = custom_mapping {
+            let custom_mapping = custom_mapping_value.to_string();
+            info!("Custom mappings and settings found {}", &custom_mapping);
+            let resp = es_client
+                .call_put(
+                    &format!("/{}", index_name_of_copy),
+                    &vec![],
+                    &vec![("Content-Type".to_string(), "application/json".to_string())],
+                    &custom_mapping,
+                )
+                .await;
+
+            if let Some(resp_value) = resp {
+                info!(
+                    "Index custom mappings and settings (response: {})",
+                    resp_value
+                );
+            }
+
+            return self;
+        } else {
+            panic!("No custom mappings found!");
         }
     }
 
