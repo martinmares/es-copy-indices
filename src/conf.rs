@@ -16,6 +16,8 @@ pub struct Endpoint {
     basic_auth: Option<BasicAuth>,
     #[serde(default)]
     root_certificates: Option<String>,
+    #[serde(default)]
+    timeout: Option<Timeout>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -23,6 +25,20 @@ pub struct BasicAuth {
     username: String,
     #[serde(default)]
     password: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct Timeout {
+    connect: Option<u64>,
+    read: Option<u64>,
+}
+
+fn default_shards() -> u64 {
+    1
+}
+fn default_replicas() -> u64 {
+    1
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -43,7 +59,9 @@ pub struct Index {
     delete_if_exists: bool,
     #[serde(default)]
     alias: Option<Alias>,
+    #[serde(default = "default_shards")]
     number_of_shards: u64,
+    #[serde(default = "default_replicas")]
     number_of_replicas: u64,
     copy_mapping: bool,
     copy_content: bool,
@@ -80,6 +98,15 @@ impl Default for Custom {
             sort: None,
             doc_type: None,
             mapping: None,
+        }
+    }
+}
+
+impl Default for Timeout {
+    fn default() -> Self {
+        Self {
+            connect: Some(10),
+            read: Some(30),
         }
     }
 }
@@ -135,6 +162,20 @@ impl Endpoint {
             return password.clone();
         }
         None
+    }
+    pub fn get_timeout_connect(&self) -> u64 {
+        (&self.timeout)
+            .clone()
+            .unwrap_or_default()
+            .connect
+            .unwrap_or_default()
+    }
+    pub fn get_timeout_read(self) -> u64 {
+        (&self.timeout)
+            .clone()
+            .unwrap_or_default()
+            .read
+            .unwrap_or_default()
     }
 }
 
