@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use core::panic;
 use log::info;
+use std::time::Duration;
 
 use reqwest::Certificate;
 use tokio::fs::File;
@@ -27,7 +28,13 @@ async fn create_certificate_from(
 async fn create_http_client(
     endpoint: &Endpoint,
 ) -> Result<reqwest::Client, Box<dyn std::error::Error>> {
-    let mut builder = reqwest::Client::builder();
+    let timeout_connect = endpoint.clone().get_timeout_connect();
+    let timeout_read = endpoint.clone().get_timeout_read();
+    info!("Connect timeout: {}", timeout_connect);
+    info!("Read timeout: {}", timeout_read);
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::new(timeout_connect, 0))
+        .read_timeout(Duration::new(timeout_read, 0));
     let mut root_certificates: Vec<String> = vec![];
 
     if let Some(root_certificates_path) = endpoint.get_root_certificates() {
