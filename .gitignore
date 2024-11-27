@@ -19,6 +19,7 @@ doc/
 docs/
 cert/
 certs/
+es-copy-indices
 
 # Icon must end with two \r
 Icon

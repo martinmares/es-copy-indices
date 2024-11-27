@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::Duration;
 // use std::time::Duration;
 use std::vec;
 
@@ -72,7 +73,10 @@ impl EsClient {
         let endpoint = self.endpoint.clone();
         request_builder = inject_auth(request_builder, endpoint);
 
-        let call = request_builder.send().await;
+        let call = request_builder
+            .timeout(Duration::from_secs(*self.endpoint.get_timeout()))
+            .send()
+            .await;
         if let Ok(call) = call {
             let text = call.text().await;
             if let Ok(text) = text {
@@ -103,7 +107,10 @@ impl EsClient {
         let endpoint = self.endpoint.clone();
         request_builder = inject_auth(request_builder, endpoint);
 
-        let call = request_builder.send().await;
+        let call = request_builder
+            .timeout(Duration::from_secs(*self.endpoint.get_timeout()))
+            .send()
+            .await;
 
         if let Ok(call) = call {
             let code = call.status().as_u16();
@@ -140,7 +147,10 @@ impl EsClient {
         let endpoint = self.endpoint.clone();
         request_builder = inject_auth(request_builder, endpoint);
 
-        let call = request_builder.send().await;
+        let call = request_builder
+            .timeout(Duration::from_secs(*self.endpoint.get_timeout()))
+            .send()
+            .await;
         if let Ok(call) = call {
             let text = call.text().await;
             if let Ok(text) = text {
@@ -174,7 +184,10 @@ impl EsClient {
         let endpoint = self.endpoint.clone();
         request_builder = inject_auth(request_builder, endpoint);
 
-        let call = request_builder.send().await;
+        let call = request_builder
+            .timeout(Duration::from_secs(*self.endpoint.get_timeout()))
+            .send()
+            .await;
         if let Ok(call) = call {
             let text = call.text().await;
             if let Ok(text) = text {

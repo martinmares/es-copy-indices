@@ -16,8 +16,8 @@ pub struct Endpoint {
     basic_auth: Option<BasicAuth>,
     #[serde(default)]
     root_certificates: Option<String>,
-    #[serde(default)]
-    timeout: Option<Timeout>,
+    #[serde(default = "default_timeout")]
+    timeout: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -25,13 +25,6 @@ pub struct BasicAuth {
     username: String,
     #[serde(default)]
     password: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(default)]
-pub struct Timeout {
-    connect: Option<u64>,
-    read: Option<u64>,
 }
 
 fn default_shards() -> u64 {
@@ -42,6 +35,9 @@ fn default_replicas() -> u64 {
 }
 fn default_keep_alive() -> String {
     "5m".to_string()
+}
+fn default_timeout() -> u64 {
+    90
 }
 
 // * Custom deserializer:
@@ -141,15 +137,6 @@ impl Default for Custom {
     }
 }
 
-impl Default for Timeout {
-    fn default() -> Self {
-        Self {
-            connect: Some(10),
-            read: Some(30),
-        }
-    }
-}
-
 impl Config {
     pub fn get_indices(&self) -> &Vec<Index> {
         &self.indices
@@ -202,19 +189,8 @@ impl Endpoint {
         }
         None
     }
-    pub fn get_timeout_connect(&self) -> u64 {
-        (&self.timeout)
-            .clone()
-            .unwrap_or_default()
-            .connect
-            .unwrap_or_default()
-    }
-    pub fn get_timeout_read(self) -> u64 {
-        (&self.timeout)
-            .clone()
-            .unwrap_or_default()
-            .read
-            .unwrap_or_default()
+    pub fn get_timeout(&self) -> &u64 {
+        &self.timeout
     }
 }
 
