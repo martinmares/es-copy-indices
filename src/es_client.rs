@@ -112,6 +112,8 @@ impl EsClient {
             if let Ok(text) = text {
                 debug!("Post response code: {}, text: {}", code, text);
                 return Some((code, text));
+            } else {
+                error!("Text: {:#?}", text);
             }
         } else {
             error!("Call: {:#?}", call);
