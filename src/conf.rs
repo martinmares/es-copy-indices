@@ -40,12 +40,51 @@ fn default_shards() -> u64 {
 fn default_replicas() -> u64 {
     1
 }
+fn default_keep_alive() -> String {
+    "5m".to_string()
+}
+
+// * Custom deserializer:
+// * https://stackoverflow.com/a/66961340/362880
+// * https://stackoverflow.com/questions/37870428/convert-two-types-into-a-single-type-with-serde
+// * https://stackoverflow.com/questions/46753955/how-to-transform-fields-during-deserialization-using-serde
+fn parse_buffer_size<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserializer.deserialize_any(BufferSizeVisitor)
+}
+
+struct BufferSizeVisitor;
+
+impl<'de> serde::de::Visitor<'de> for BufferSizeVisitor {
+    type Value = u64;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an integer or a string representing an integer")
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(value)
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        value
+            .parse::<u64>()
+            .map_err(|e| serde::de::Error::custom(format!("failed to parse string as u64: {}", e)))
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Index {
     from: String,
     to: String,
+    #[serde(deserialize_with = "parse_buffer_size")]
     buffer_size: u64,
+    #[serde(default = "default_keep_alive")]
     keep_alive: String,
     #[serde(default)]
     routing_field: Option<String>,
