@@ -51,7 +51,10 @@ impl ScrollResponse {
             debug!("hit: {:#?}", hit);
             let id = hit["_id"].as_str().unwrap().to_string();
             let index_name = hit["_index"].as_str().unwrap().to_string();
-            let doc_type = hit["_type"].as_str().unwrap().to_string();
+            let doc_type = match hit["_type"].as_str() {
+                Some(value) => value.to_string(),
+                None => "_doc".to_string(),
+            };
             let source_value = hit["_source"].as_object().unwrap();
             let source = serde_json::to_string(&source_value)
                 .expect("failed convert Objec to String (serde_json)");
