@@ -6,14 +6,15 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4.5.32", features = ["cargo", "derive"] }
 env_logger = "0.11.7"
 human_bytes = { version = "0.4.3", features = ["fast"] }
 log = "0.4.26"
 logging_timer = "1.1.1"
 memory-stats = "1.2.0"
-reqwest = { version = "0.12.14", default-features = false, features = ["rustls-tls"] }
-rustls = "0.23.23"
+reqwest = { version = "0.12.15", default-features = false, features = ["rustls-tls"] }
+rustls = "0.23.25"
 semver = "1.0.26"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"

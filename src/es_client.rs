@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 // use std::time::Duration;
+use chrono::{DateTime, Utc};
 use std::vec;
 
 use logging_timer::time;
@@ -446,10 +447,15 @@ impl EsClient {
                             // More details about JSON RFC6901 (pointers): https://tools.ietf.org/html/rfc6901
                             let value = json_value.pointer(&routing_field);
                             if let Some(pointer_id) = value {
-                                // debug!("Pointer id found ... {}", pointer_id);
                                 if let Some(id) = pointer_id.as_str() {
+                                    debug!(
+                                        "Pointer '&routing_field' found: {}, value: {:?}, id: {:?}, doc.get_id(): {:?}",
+                                        pointer_id, value, id, doc.get_id()
+                                    );
                                     let id = id.to_string();
                                     add_routing_to_bulk = Some(id.clone());
+                                    // ! child:  doc.get_id()
+                                    // ! parent: id
                                     pre_create_doc_ids.insert(id);
                                 }
                             }
@@ -502,7 +508,8 @@ impl EsClient {
                         pre_create_doc_ids.iter().take(5).collect::<Vec<_>>()
                     );
                 }
-                for id in pre_create_doc_ids {
+                // ! Pre create "parents"
+                for id_parent in pre_create_doc_ids {
                     // index name + id + type
                     if server_major_version <= 7 {
                         bulk_body_pre_create.push_str(
@@ -510,19 +517,27 @@ impl EsClient {
                                     BULK_OPER_CREATE, // ! must be "create" instead of "index" !
                                     index_name_of_copy,
                                     DEFAULT_DOC_TYPE,
-                                    id));
+                                    id_parent));
                     // index name + id
                     } else {
                         bulk_body_pre_create.push_str(&format!(
                             "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
                             BULK_OPER_CREATE, // ! must be "create" instead of "index" !
                             index_name_of_copy,
-                            id
+                            id_parent
                         ));
                     }
                     bulk_body_pre_create.push_str("\n");
-                    // document source
-                    bulk_body_pre_create.push_str("{}"); // ! must be empty - this is ONLY PRE-CREATE !
+                    // Document source
+                    // Add special field
+                    let now: DateTime<Utc> = Utc::now(); // Current time in UTC
+                    bulk_body_pre_create.push_str(
+                        format!(
+                            "{{ \"es_copy_indices\": {{ \"pre_created_parent\": true,  \"timestamp\": \"{}\" }} }}",
+                            now.to_rfc3339()
+                        )
+                        .as_str(),
+                    ); // ! add { esCopyIndciesPreCreatedParent: true } - this is ONLY PRE-CREATE !
                     bulk_body_pre_create.push_str("\n");
                 }
             }
