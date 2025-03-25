@@ -2,11 +2,13 @@ use std::collections::HashSet;
 use std::time::Duration;
 // use std::time::Duration;
 // use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::vec;
 
 use logging_timer::time;
 use serde_json::Value;
 
+use crate::audit_builder::AuditBuilder;
 use crate::conf::{Endpoint, Index};
 use crate::models::scroll_response::{Document, ScrollResponse};
 use crate::models::server_info::ServerInfo;
@@ -407,12 +409,14 @@ impl EsClient {
         es_client: &mut EsClient,
         index: &Index,
         index_name_of_copy: &String,
+        audit_builder: &mut Option<AuditBuilder>,
     ) -> &Self {
         // let index_name = index.get_name();
         // let index_name_of_copy = match index.get_name_of_copy() {
         //     Some(name) => name,
         //     None => index_name,
         // };
+
         let mut bulk_body_pre_create = String::new();
         let mut bulk_body = String::new();
 
@@ -548,6 +552,8 @@ impl EsClient {
             }
         }
 
+        let now = Utc::now().to_rfc3339();
+
         if is_routing_field && !bulk_body_pre_create.is_empty() {
             debug!("Pre creating some documents ... {}", bulk_body_pre_create);
             let resp = es_client
@@ -560,13 +566,35 @@ impl EsClient {
                 )
                 .await;
 
+            if let Some(audit) = audit_builder {
+                let _ = audit
+                    .append_to_file(format!("{} | Pre create Request\n\n", now).as_str())
+                    .await;
+                let _ = audit
+                    .append_to_file(&format!("{}\n", &bulk_body_pre_create))
+                    .await;
+            }
+
             if let Some((_, text)) = resp {
                 info!(
                     "Pre create result ... {} ... {}",
                     text[0..100].to_string(),
                     text[text.len() - 100..].to_string(),
                 );
+                if let Some(audit) = audit_builder {
+                    let _ = audit
+                        .append_to_file(format!("{} | Pre create Response\n\n", now).as_str())
+                        .await;
+                    let _ = audit.append_to_file(&format!("{}\n\n", &text)).await;
+                }
             }
+        }
+
+        if let Some(audit) = audit_builder {
+            let _ = audit
+                .append_to_file(format!("{} | Bulk Request\n\n", now).as_str())
+                .await;
+            let _ = audit.append_to_file(&format!("{}\n", &bulk_body)).await;
         }
 
         let resp = es_client
@@ -579,6 +607,13 @@ impl EsClient {
             .await;
 
         if let Some((_, text)) = resp {
+            if let Some(audit) = audit_builder {
+                let _ = audit
+                    .append_to_file(format!("{} | Bulk Response\n\n", now).as_str())
+                    .await;
+                let _ = audit.append_to_file(&format!("{}\n\n", &text)).await;
+            }
+
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&text);
             if let Ok(json_value) = json_value_result {

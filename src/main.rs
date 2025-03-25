@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod audit_builder;
 mod conf;
 mod es_client;
 mod models;
@@ -8,6 +9,7 @@ mod utils;
 // use std::thread;
 // use std::time::Duration;
 
+use audit_builder::AuditBuilder;
 use clap::{command, value_parser, Arg};
 use env_logger::Env;
 use log::{error, info, warn};
@@ -132,6 +134,12 @@ async fn main() {
                     index_name, from, to
                 );
 
+                let mut audit_builder: Option<AuditBuilder> = None;
+                if let Some(conf_audit) = config.get_audit() {
+                    let audit_file = conf_audit.get_file_name();
+                    audit_builder = Some(AuditBuilder::new(audit_file).await);
+                }
+
                 source_es_client.scroll_start(index, index_name).await;
 
                 memory_stats!();
@@ -150,7 +158,12 @@ async fn main() {
 
                     // pre create parent->child docs and post bulk insert docs
                     source_es_client
-                        .copy_content_to(&mut destination_es_client, &index, index_name_of_copy)
+                        .copy_content_to(
+                            &mut destination_es_client,
+                            &index,
+                            index_name_of_copy,
+                            &mut audit_builder,
+                        )
                         .await;
 
                     // next docs?

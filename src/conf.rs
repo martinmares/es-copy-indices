@@ -7,6 +7,7 @@ use twelf::reexports::serde::{Deserialize, Serialize};
 pub struct Config {
     endpoints: Vec<Endpoint>,
     indices: Vec<Index>,
+    audit: Option<Audit>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -19,6 +20,13 @@ pub struct Endpoint {
     root_certificates: Option<String>,
     #[serde(default = "default_timeout")]
     timeout: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Audit {
+    file_name: String,
+    #[serde(default)]
+    enabled: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -125,6 +133,9 @@ impl Config {
     pub fn get_endpoints(&self) -> &Vec<Endpoint> {
         &self.endpoints
     }
+    pub fn get_audit(&self) -> &Option<Audit> {
+        &self.audit
+    }
 }
 
 impl BasicAuth {
@@ -172,6 +183,15 @@ impl Endpoint {
     }
     pub fn get_timeout(&self) -> &u64 {
         &self.timeout
+    }
+}
+
+impl Audit {
+    pub fn get_file_name(&self) -> &String {
+        &self.file_name
+    }
+    pub fn is_enabled(&self) -> bool {
+        *&self.enabled
     }
 }
 
