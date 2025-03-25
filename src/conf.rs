@@ -40,6 +40,13 @@ fn default_keep_alive() -> String {
 fn default_timeout() -> u64 {
     90
 }
+fn default_pre_create_doc_ids() -> bool {
+    true
+}
+
+fn default_pre_create_doc_source() -> String {
+    "{}".to_string()
+}
 
 #[serde_with::serde_as]
 #[derive(Debug, Deserialize, Serialize)]
@@ -52,6 +59,10 @@ pub struct Index {
     keep_alive: String,
     #[serde(default)]
     routing_field: Option<String>,
+    #[serde(default = "default_pre_create_doc_ids")]
+    pre_create_doc_ids: bool,
+    #[serde(default = "default_pre_create_doc_source")]
+    pre_create_doc_source: String,
     #[serde(default)]
     custom: Option<Custom>,
     name: String,
@@ -242,6 +253,12 @@ impl Index {
             Some(_) => true,
             _ => false,
         }
+    }
+    pub fn is_pre_create_doc_ids(&self) -> bool {
+        *&self.pre_create_doc_ids
+    }
+    pub fn get_pre_create_doc_source(&self) -> &String {
+        &self.pre_create_doc_source
     }
     pub fn get_custom_doc_type(&self) -> &Option<String> {
         match &self.custom {

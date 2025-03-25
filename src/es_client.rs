@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 // use std::time::Duration;
-use chrono::{DateTime, Utc};
+// use chrono::{DateTime, Utc};
 use std::vec;
 
 use logging_timer::time;
@@ -419,6 +419,14 @@ impl EsClient {
         let is_routing_field = index.is_routing_field();
         let mut routing_field = String::new();
 
+        let is_pre_create_doc_ids = index.is_pre_create_doc_ids();
+        if !is_pre_create_doc_ids {
+            warn!(
+                "Skip pre create doc ids (is_pre_create_doc_ids={})",
+                is_pre_create_doc_ids
+            );
+        }
+
         if is_routing_field {
             if let Some(value) = index.get_routing_field() {
                 routing_field = value.clone();
@@ -453,10 +461,14 @@ impl EsClient {
                                         pointer_id, value, id, doc.get_id()
                                     );
                                     let id = id.to_string();
-                                    add_routing_to_bulk = Some(id.clone());
+                                    if is_pre_create_doc_ids {
+                                        add_routing_to_bulk = Some(id.clone());
+                                    }
                                     // ! child:  doc.get_id()
                                     // ! parent: id
-                                    pre_create_doc_ids.insert(id);
+                                    if is_pre_create_doc_ids {
+                                        pre_create_doc_ids.insert(id);
+                                    }
                                 }
                             }
                         }
@@ -502,43 +514,36 @@ impl EsClient {
                     bulk_body.push_str("\n");
                 }
 
-                if pre_create_doc_ids.len() > 0 {
+                if pre_create_doc_ids.len() > 0 && is_pre_create_doc_ids {
                     info!(
                         "Pre create doc ids ... {:?} ...",
                         pre_create_doc_ids.iter().take(5).collect::<Vec<_>>()
                     );
-                }
-                // ! Pre create "parents"
-                for id_parent in pre_create_doc_ids {
-                    // index name + id + type
-                    if server_major_version <= 7 {
-                        bulk_body_pre_create.push_str(
+                    // ! Pre create "parents"
+                    for id_parent in pre_create_doc_ids {
+                        // index name + id + type
+                        if server_major_version <= 7 {
+                            bulk_body_pre_create.push_str(
                             &format!("{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
                                     BULK_OPER_CREATE, // ! must be "create" instead of "index" !
                                     index_name_of_copy,
                                     DEFAULT_DOC_TYPE,
                                     id_parent));
-                    // index name + id
-                    } else {
-                        bulk_body_pre_create.push_str(&format!(
-                            "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
-                            BULK_OPER_CREATE, // ! must be "create" instead of "index" !
-                            index_name_of_copy,
-                            id_parent
-                        ));
+                        // index name + id
+                        } else {
+                            bulk_body_pre_create.push_str(&format!(
+                                "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                BULK_OPER_CREATE, // ! must be "create" instead of "index" !
+                                index_name_of_copy,
+                                id_parent
+                            ));
+                        }
+                        bulk_body_pre_create.push_str("\n");
+                        // Pre create document source
+                        let pre_create_doc_source = index.get_pre_create_doc_source();
+                        bulk_body_pre_create.push_str(pre_create_doc_source); // ! add { esCopyIndciesPreCreatedParent: true } - this is ONLY PRE-CREATE !
+                        bulk_body_pre_create.push_str("\n");
                     }
-                    bulk_body_pre_create.push_str("\n");
-                    // Document source
-                    // Add special field
-                    let now: DateTime<Utc> = Utc::now(); // Current time in UTC
-                    bulk_body_pre_create.push_str(
-                        format!(
-                            "{{ \"es_copy_indices\": {{ \"pre_created_parent\": true,  \"timestamp\": \"{}\" }} }}",
-                            now.to_rfc3339()
-                        )
-                        .as_str(),
-                    ); // ! add { esCopyIndciesPreCreatedParent: true } - this is ONLY PRE-CREATE !
-                    bulk_body_pre_create.push_str("\n");
                 }
             }
         }
@@ -580,11 +585,7 @@ impl EsClient {
                 if let Some(obj) = json_value.as_object() {
                     if let Some(errors) = obj.get("errors") {
                         if errors.as_bool().unwrap() {
-                            error!(
-                                "Copy content failed ... {} ... {}",
-                                text[0..100].to_string(),
-                                text[text.len() - 100..].to_string(),
-                            );
+                            error!("Copy content failed ... {}", text);
                         } else {
                             info!(
                                 "Content copy success ... {} ... {}",
