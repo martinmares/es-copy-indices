@@ -3,8 +3,8 @@ use crate::es_client::EsClient;
 use serde_json::Value;
 
 use core::panic;
-use log::info;
 use std::time::Duration;
+use tracing::info;
 
 use reqwest::Certificate;
 use tokio::fs::File;
@@ -92,7 +92,7 @@ pub async fn string_to_json(file_name: &String) -> Option<Value> {
 macro_rules! memory_stats {
     () => {
         if let Some(usage) = memory_stats::memory_stats() {
-            log::debug!(
+            tracing::debug!(
                 "memory usage {}",
                 human_bytes::human_bytes(usage.physical_mem as f64)
             );

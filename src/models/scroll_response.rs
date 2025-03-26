@@ -1,5 +1,5 @@
-use log::{debug, warn};
 use serde_json::Value;
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
 pub struct ScrollResponse {

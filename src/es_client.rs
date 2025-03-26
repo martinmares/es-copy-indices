@@ -13,7 +13,7 @@ use crate::conf::{Endpoint, Index};
 use crate::models::scroll_response::{Document, ScrollResponse};
 use crate::models::server_info::ServerInfo;
 use crate::utils;
-use log::{debug, error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use reqwest::{Client, RequestBuilder};
 

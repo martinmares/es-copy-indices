@@ -11,15 +11,23 @@ mod utils;
 
 use audit_builder::AuditBuilder;
 use clap::{command, value_parser, Arg};
-use env_logger::Env;
-use log::{error, info, warn};
-use std::path::PathBuf;
+use tracing::{error, info, warn};
+use tracing_subscriber;
 // use env_logger::Env;
+// use log::{error, info, warn};
+use std::path::PathBuf;
 use twelf::Layer;
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    // env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
+        .with_max_level(tracing::Level::INFO)
+        .with_file(true)
+        .with_line_number(true)
+        .init();
+
     let matches = command!()
         .arg(
             Arg::new("config")
