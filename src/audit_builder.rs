@@ -3,6 +3,24 @@ use tokio::{
     io::AsyncWriteExt,
 };
 
+pub enum What {
+    PreCreateRequest,
+    PreCreateResponse,
+    BulkRequest,
+    BulkResponse,
+}
+
+impl What {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            What::PreCreateRequest => "PreCreateRequest",
+            What::PreCreateResponse => "PreCreateResponse",
+            What::BulkRequest => "BulkRequest",
+            What::BulkResponse => "BulkResponse",
+        }
+    }
+}
+
 pub struct AuditBuilder {
     file_handler: Option<File>, // Použití Option místo Result
 }
