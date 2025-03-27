@@ -120,7 +120,7 @@ impl EsClient {
                 let code = call.status().as_u16();
                 match call.text().await {
                     Ok(value) => {
-                        info!("Post body Ok (code: {}, text: {})", code, value);
+                        debug!("Post body Ok (code: {}, text: {})", code, value);
                         return (code, Some(value), None);
                     }
                     Err(e) => {
