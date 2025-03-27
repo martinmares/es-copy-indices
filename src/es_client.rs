@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::error::Error;
 use std::time::Duration;
 // use std::time::Duration;
 // use chrono::{DateTime, Utc};
@@ -119,31 +118,24 @@ impl EsClient {
         match call {
             Ok(call) => {
                 let code = call.status().as_u16();
-                // let text = call.text().await;
                 match call.text().await {
                     Ok(value) => {
-                        debug!("Post response code: {}, text: {}", code, value);
+                        info!("Post body Ok (code: {}, text: {})", code, value);
                         return (code, Some(value), None);
                     }
                     Err(e) => {
-                        error!("Call POST error: {:#?}", e);
-                        return (code, None, Some(e.to_string()));
+                        error!("Post body Err (code: {}, text: {:#?})", code, e);
+                        return (code, None, Some(format!("{:#?}", e)));
                     }
                 }
-
-                // if let Ok(text) = text {
-                //     debug!("Post response code: {}, text: {}", code, text);
-                //     return Some((code, text));
-                // } else {
-                //     error!("Text: {:#?}", text);
-                // }
             }
             Err(e) => {
-                error!("Text: {:#?}", e.source());
+                error!("Post call Err (code: {}, text: {:#?})", 999, e);
+                return (999, None, Some(format!("{:#?}", e)));
             }
         }
 
-        todo!("Implement empty response!")
+        // todo!("Implement empty response!")
     }
 
     async fn call_put(
@@ -422,11 +414,17 @@ impl EsClient {
     }
 
     #[time("debug")]
-    async fn auditing(&self, audit_builder: &mut Option<AuditBuilder>, title: &str, text: &str) {
+    async fn auditing(
+        &self,
+        audit_builder: &mut Option<AuditBuilder>,
+        status: u16,
+        title: &str,
+        text: &str,
+    ) {
         if let Some(audit) = audit_builder {
             let now = Utc::now().to_rfc3339();
             let _ = audit
-                .append_to_file(format!("{} {}\n\n", &title, now).as_str())
+                .append_to_file(format!("[{}] {} ({})\n\n", now, &title, status).as_str())
                 .await;
             let _ = audit.append_to_file(&format!("{}\n\n", &text)).await;
         }
@@ -595,10 +593,12 @@ impl EsClient {
 
             self.auditing(
                 audit_builder,
+                0,
                 What::PreCreateRequest.as_str(),
                 &bulk_body_pre_create,
             )
             .await;
+
             let (_status, _value, _err) = resp;
 
             if let Some(text) = _value {
@@ -607,15 +607,25 @@ impl EsClient {
                     text[0..100].to_string(),
                     text[text.len() - 100..].to_string(),
                 );
-                self.auditing(audit_builder, What::PreCreateResponse.as_str(), &text)
-                    .await;
+                self.auditing(
+                    audit_builder,
+                    _status,
+                    What::PreCreateResponseOk.as_str(),
+                    &text,
+                )
+                .await;
             } else if let Some(err) = _err {
-                self.auditing(audit_builder, What::PreCreateResponse.as_str(), &err)
-                    .await;
+                self.auditing(
+                    audit_builder,
+                    _status,
+                    What::PreCreateResponseErr.as_str(),
+                    &err,
+                )
+                .await;
             }
         }
 
-        self.auditing(audit_builder, What::BulkRequest.as_str(), &bulk_body)
+        self.auditing(audit_builder, 0, What::BulkRequest.as_str(), &bulk_body)
             .await;
 
         let resp = es_client
@@ -630,7 +640,7 @@ impl EsClient {
         let (_status, _value, _err) = resp;
 
         if let Some(text) = _value {
-            self.auditing(audit_builder, What::BulkResponse.as_str(), &text)
+            self.auditing(audit_builder, _status, What::BulkResponseOk.as_str(), &text)
                 .await;
 
             let json_value_result: Result<serde_json::Value, serde_json::Error> =
@@ -651,7 +661,7 @@ impl EsClient {
                 }
             }
         } else if let Some(err) = _err {
-            self.auditing(audit_builder, What::BulkResponse.as_str(), &err)
+            self.auditing(audit_builder, _status, What::BulkResponseErr.as_str(), &err)
                 .await;
         }
 

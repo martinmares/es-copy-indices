@@ -5,18 +5,22 @@ use tokio::{
 
 pub enum What {
     PreCreateRequest,
-    PreCreateResponse,
+    PreCreateResponseOk,
+    PreCreateResponseErr,
     BulkRequest,
-    BulkResponse,
+    BulkResponseOk,
+    BulkResponseErr,
 }
 
 impl What {
     pub fn as_str(&self) -> &'static str {
         match self {
             What::PreCreateRequest => "PreCreateRequest",
-            What::PreCreateResponse => "PreCreateResponse",
+            What::PreCreateResponseOk => "PreCreateResponseOk",
+            What::PreCreateResponseErr => "PreCreateResponseErr",
             What::BulkRequest => "BulkRequest",
-            What::BulkResponse => "BulkResponse",
+            What::BulkResponseOk => "BulkResponseOk",
+            What::BulkResponseErr => "BulkResponseErr",
         }
     }
 }
