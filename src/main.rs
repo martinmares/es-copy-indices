@@ -13,6 +13,7 @@ use audit_builder::AuditBuilder;
 use clap::{command, value_parser, Arg};
 use tracing::{error, info, warn};
 use tracing_subscriber;
+use tracing_subscriber::EnvFilter;
 // use env_logger::Env;
 // use log::{error, info, warn};
 use std::path::PathBuf;
@@ -20,10 +21,10 @@ use twelf::Layer;
 
 #[tokio::main]
 async fn main() {
-    // env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     tracing_subscriber::fmt()
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
-        .with_max_level(tracing::Level::INFO)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_file(true)
         .with_line_number(true)
         .init();
