@@ -1,23 +1,23 @@
 [package]
 name = "es-copy-indices"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = { version = "0.4.40", features = ["serde"] }
-clap = { version = "4.5.32", features = ["cargo", "derive"] }
+chrono = { version = "0.4.41", features = ["serde"] }
+clap = { version = "4.5.45", features = ["cargo", "derive"] }
 human_bytes = { version = "0.4.3", features = ["fast"] }
 logging_timer = "1.1.1"
 memory-stats = "1.2.0"
-reqwest = { version = "0.12.15", default-features = false, features = ["rustls-tls"] }
-rustls = "0.23.25"
+reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls"] }
+rustls = "0.23.31"
 semver = "1.0.26"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-serde_with = "3.12.0"
-tokio = { version = "1.44.1", features = ["full"] }
+serde_json = "1.0.143"
+serde_with = "3.14.0"
+tokio = { version = "1.47.1", features = ["full"] }
 tokio-retry = "0.3.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json", "fmt"] }

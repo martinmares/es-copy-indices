@@ -1,4 +1,4 @@
-use serde_with::{serde_as, DisplayFromStr};
+use serde_with::{serde_as, PickFirst, DisplayFromStr};
 use twelf::config;
 use twelf::reexports::serde::{Deserialize, Serialize};
 
@@ -56,12 +56,12 @@ fn default_pre_create_doc_source() -> String {
     "{}".to_string()
 }
 
-#[serde_with::serde_as]
+#[serde_as]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Index {
     from: String,
     to: String,
-    #[serde_as(as = "DisplayFromStr")]
+    #[serde_as(as = "PickFirst<(_, DisplayFromStr)>")]
     buffer_size: u64,
     #[serde(default = "default_keep_alive")]
     keep_alive: String,
@@ -82,10 +82,10 @@ pub struct Index {
     #[serde(default)]
     alias: Option<Alias>,
     #[serde(default = "default_shards")]
-    #[serde_as(as = "DisplayFromStr")]
+    #[serde_as(as = "PickFirst<(_, DisplayFromStr)>")]
     number_of_shards: u64,
     #[serde(default = "default_replicas")]
-    #[serde_as(as = "DisplayFromStr")]
+    #[serde_as(as = "PickFirst<(_, DisplayFromStr)>")]
     number_of_replicas: u64,
     copy_mapping: bool,
     copy_content: bool,
