@@ -9,7 +9,7 @@ use logging_timer::time;
 use serde_json::Value;
 
 use crate::audit_builder::{AuditBuilder, What};
-use crate::conf::{Endpoint, Index};
+use crate::conf::{Endpoint, Index, ScrollMode};
 use crate::models::scroll_response::{Document, ScrollResponse};
 use crate::models::server_info::ServerInfo;
 use crate::utils;
@@ -22,6 +22,7 @@ const BULK_OPER_CREATE: &str = "create";
 const DEFAULT_DOC_TYPE: &str = "_doc"; // ! from elastic version_major=7 is "_doc" default type!
 const DEFAULT_QUERY: &str = "{ \"match_all\": {} }";
 const DEFAULT_SORT: &str = "{ \"_doc\": \"asc\" }"; // ! from elastic version_major=7 is "_doc" default type!
+const DEFAULT_SORT_PIT: &str = "{ \"_shard_doc\": \"asc\" }";
 
 #[derive(Debug, Clone)]
 pub struct EsClient {
@@ -30,6 +31,9 @@ pub struct EsClient {
     server_info: Option<ServerInfo>,
     scroll_response: Option<ScrollResponse>,
     scroll_id: Option<String>,
+    pit_id: Option<String>,
+    search_after: Option<Vec<Value>>,
+    active_scroll_mode: Option<ScrollMode>,
     current_size: u64,
     total_size: u64,
     docs_counter: u64,
@@ -53,6 +57,9 @@ impl EsClient {
             server_info: None,
             scroll_response: None,
             scroll_id: None,
+            pit_id: None,
+            search_after: None,
+            active_scroll_mode: None,
             current_size: 0,
             total_size: 0,
             docs_counter: 0,
@@ -278,6 +285,43 @@ impl EsClient {
 
     #[time("debug")]
     pub async fn scroll_start(&mut self, index: &Index, index_name: &String) -> &mut Self {
+        let requested_mode = index.get_scroll_mode().clone();
+        let resolved_mode = match requested_mode {
+            ScrollMode::Auto => {
+                let pit_ok = self.scroll_start_scrolling_search(index, index_name).await;
+                if pit_ok {
+                    ScrollMode::ScrollingSearch
+                } else {
+                    warn!("Scrolling search failed, falling back to scroll API");
+                    self.scroll_start_scroll_api(index, index_name).await;
+                    ScrollMode::ScrollApi
+                }
+            }
+            ScrollMode::ScrollApi => {
+                self.scroll_start_scroll_api(index, index_name).await;
+                ScrollMode::ScrollApi
+            }
+            ScrollMode::ScrollingSearch => {
+                self.scroll_start_scrolling_search(index, index_name).await;
+                ScrollMode::ScrollingSearch
+            }
+        };
+
+        info!(
+            "Scroll mode selected for {} (requested={:?}, resolved={:?})",
+            index_name, requested_mode, resolved_mode
+        );
+        self.active_scroll_mode = Some(resolved_mode);
+        self
+    }
+
+    #[time("debug")]
+    async fn scroll_start_scroll_api(&mut self, index: &Index, index_name: &String) -> bool {
+        self.pit_id = None;
+        self.search_after = None;
+        self.scroll_response = None;
+        self.scroll_id = None;
+
         // let index_name = index.get_name();
         let keep_alive = index.get_keep_alive();
         let buffer_size = index.get_buffer_size();
@@ -333,7 +377,29 @@ impl EsClient {
                 self.scroll_id = Some(new_scroll_response.get_scroll_id().clone());
                 self.scroll_response = Some(new_scroll_response);
 
-                return self;
+                return true;
+            }
+        }
+
+        false
+    }
+
+    #[time("debug")]
+    pub async fn scroll_next(&mut self, index: &Index) -> &mut Self {
+        let active_mode = self
+            .active_scroll_mode
+            .clone()
+            .unwrap_or(index.get_scroll_mode().clone());
+
+        match active_mode {
+            ScrollMode::ScrollApi => {
+                let _ = self.scroll_next_scroll_api(index).await;
+            }
+            ScrollMode::ScrollingSearch => {
+                let _ = self.scroll_next_scrolling_search(index).await;
+            }
+            ScrollMode::Auto => {
+                let _ = self.scroll_next_scroll_api(index).await;
             }
         }
 
@@ -341,7 +407,7 @@ impl EsClient {
     }
 
     #[time("debug")]
-    pub async fn scroll_next(&mut self, index: &Index) -> &mut Self {
+    async fn scroll_next_scroll_api(&mut self, index: &Index) -> bool {
         let keep_alive = index.get_keep_alive();
         let mut body = format!(
             "{{ \"scroll\": \"{}\", \"scroll_id\": \"{}\" }}",
@@ -383,34 +449,278 @@ impl EsClient {
                 self.scroll_id = Some(new_scroll_response.get_scroll_id().clone());
                 self.scroll_response = Some(new_scroll_response);
 
-                return self;
+                return true;
             }
         }
+
+        false
+    }
+
+    #[time("debug")]
+    pub async fn scroll_stop(&mut self) -> &mut Self {
+        let active_mode = self
+            .active_scroll_mode
+            .clone()
+            .unwrap_or(ScrollMode::ScrollApi);
+
+        match active_mode {
+            ScrollMode::ScrollApi => {
+                let _ = self.scroll_stop_scroll_api().await;
+            }
+            ScrollMode::ScrollingSearch => {
+                let _ = self.scroll_stop_scrolling_search().await;
+            }
+            ScrollMode::Auto => {
+                let _ = self.scroll_stop_scroll_api().await;
+            }
+        }
+
+        self.current_size = 0;
+        self.total_size = 0;
+        self.docs_counter = 0;
+        self.scroll_response = None;
+        self.scroll_id = None;
+        self.pit_id = None;
+        self.search_after = None;
+        self.active_scroll_mode = None;
 
         self
     }
 
     #[time("debug")]
-    pub async fn scroll_stop(&mut self) -> &mut Self {
-        self.current_size = 0;
-        self.total_size = 0;
-        self.docs_counter = 0;
+    async fn scroll_start_scrolling_search(&mut self, index: &Index, index_name: &String) -> bool {
+        self.scroll_response = None;
+        self.scroll_id = None;
+        self.search_after = None;
+        self.pit_id = None;
+
+        let keep_alive = index.get_keep_alive();
+        let buffer_size = index.get_buffer_size();
+
+        let q_query = match index.get_custom() {
+            Some(custom) => match custom.get_query() {
+                Some(query) => query,
+                _ => DEFAULT_QUERY,
+            },
+            _ => DEFAULT_QUERY,
+        };
+        let q_sort = match index.get_custom() {
+            Some(custom) => match custom.get_sort() {
+                Some(sort) => sort,
+                _ => DEFAULT_SORT_PIT,
+            },
+            _ => DEFAULT_SORT_PIT,
+        };
+
+        let (pit_status, pit_value, pit_err) = self
+            .call_post(
+                &format!("/{}/_pit", index_name),
+                &vec![("keep_alive".to_string(), keep_alive.clone())],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &"{}".to_string(),
+            )
+            .await;
+
+        if pit_status < 200 || pit_status >= 300 {
+            if let Some(err) = pit_err {
+                warn!("PIT start failed: {}", err);
+            }
+            if let Some(value) = pit_value {
+                warn!("PIT start failed (status {}): {}", pit_status, value);
+            }
+            return false;
+        }
+
+        let pit_id = if let Some(value) = pit_value {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                json_value["id"].as_str().map(|id| id.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let pit_id = match pit_id {
+            Some(id) => id,
+            None => {
+                warn!("PIT response missing id");
+                return false;
+            }
+        };
+
+        self.pit_id = Some(pit_id.clone());
+
         let body = format!(
-            "{{ \"scroll_id\": \"{}\" }}",
-            self.scroll_id.clone().unwrap()
+            "{{ {} }}",
+            vec![
+                format!("\"size\": {}", buffer_size),
+                format!("\"query\": {}", q_query),
+                format!("\"sort\": {}", q_sort),
+                format!(
+                    "\"pit\": {{ \"id\": \"{}\", \"keep_alive\": \"{}\" }}",
+                    pit_id, keep_alive
+                )
+            ]
+            .join(",")
         );
-        debug!("Querying: {}", body);
-        let _ = self
-            .call_delete(
-                &format!("/_search/scroll"),
+        debug!("Querying (PIT): {}", body);
+
+        let resp = self
+            .call_post(
+                "/_search",
                 &vec![],
                 &vec![("Content-Type".to_string(), "application/json".to_string())],
                 &body,
             )
             .await;
 
-        // TODO: implement check status code?
-        self
+        let (_status, _value, _err) = resp;
+
+        if let Some(value) = _value {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                let new_scroll_response = ScrollResponse::new(json_value, None);
+
+                self.current_size = new_scroll_response.get_current_size();
+                self.total_size = new_scroll_response.get_total_size();
+                self.docs_counter += self.current_size;
+                self.scroll_response = Some(new_scroll_response.clone());
+                self.search_after = new_scroll_response.get_last_sort().clone();
+
+                return true;
+            }
+        }
+
+        let _ = self.scroll_stop_scrolling_search().await;
+        self.pit_id = None;
+        false
+    }
+
+    #[time("debug")]
+    async fn scroll_next_scrolling_search(&mut self, index: &Index) -> bool {
+        let keep_alive = index.get_keep_alive();
+        let buffer_size = index.get_buffer_size();
+
+        let pit_id = match &self.pit_id {
+            Some(id) => id.clone(),
+            None => {
+                warn!("Missing PIT id for scrolling search");
+                return false;
+            }
+        };
+
+        let q_query = match index.get_custom() {
+            Some(custom) => match custom.get_query() {
+                Some(query) => query,
+                _ => DEFAULT_QUERY,
+            },
+            _ => DEFAULT_QUERY,
+        };
+        let q_sort = match index.get_custom() {
+            Some(custom) => match custom.get_sort() {
+                Some(sort) => sort,
+                _ => DEFAULT_SORT_PIT,
+            },
+            _ => DEFAULT_SORT_PIT,
+        };
+
+        let mut body_items = vec![
+            format!("\"size\": {}", buffer_size),
+            format!("\"query\": {}", q_query),
+            format!("\"sort\": {}", q_sort),
+            format!(
+                "\"pit\": {{ \"id\": \"{}\", \"keep_alive\": \"{}\" }}",
+                pit_id, keep_alive
+            ),
+        ];
+
+        if let Some(search_after) = &self.search_after {
+            let search_after_json =
+                serde_json::to_string(search_after).unwrap_or_else(|_| "[]".to_string());
+            body_items.push(format!("\"search_after\": {}", search_after_json));
+        }
+
+        let body = format!("{{ {} }}", body_items.join(","));
+        debug!("Querying (PIT): {}", body);
+
+        let resp = self
+            .call_post(
+                "/_search",
+                &vec![],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &body,
+            )
+            .await;
+
+        let (_status, _value, _err) = resp;
+
+        if let Some(value) = _value {
+            let json_value_result: Result<serde_json::Value, serde_json::Error> =
+                serde_json::from_str(&value);
+            if let Ok(json_value) = json_value_result {
+                let new_scroll_response = ScrollResponse::new(json_value, None);
+
+                self.current_size = new_scroll_response.get_current_size();
+                self.total_size = new_scroll_response.get_total_size();
+                self.docs_counter += self.current_size;
+                self.scroll_response = Some(new_scroll_response.clone());
+                self.search_after = new_scroll_response.get_last_sort().clone();
+
+                return true;
+            }
+        }
+
+        false
+    }
+
+    #[time("debug")]
+    async fn scroll_stop_scroll_api(&mut self) -> bool {
+        let body = match &self.scroll_id {
+            Some(scroll_id) => format!("{{ \"scroll_id\": \"{}\" }}", scroll_id),
+            None => {
+                warn!("Missing scroll id for scroll API stop");
+                return false;
+            }
+        };
+        debug!("Querying: {}", body);
+        let _ = self
+            .call_delete(
+                "/_search/scroll",
+                &vec![],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &body,
+            )
+            .await;
+
+        true
+    }
+
+    #[time("debug")]
+    async fn scroll_stop_scrolling_search(&mut self) -> bool {
+        let pit_id = match &self.pit_id {
+            Some(id) => id.clone(),
+            None => {
+                warn!("Missing PIT id for scrolling search stop");
+                return false;
+            }
+        };
+
+        let body = format!("{{ \"id\": \"{}\" }}", pit_id);
+        debug!("Querying (PIT close): {}", body);
+        let _ = self
+            .call_delete(
+                "/_pit",
+                &vec![],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &body,
+            )
+            .await;
+
+        true
     }
 
     #[time("debug")]

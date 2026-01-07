@@ -6,6 +6,7 @@ pub struct ScrollResponse {
     scroll_id: String,
     total_docs: u64,
     docs: Vec<Document>,
+    last_sort: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,7 @@ impl ScrollResponse {
             }
         }
         let mut docs: Vec<Document> = vec![];
+        let mut last_sort: Option<Vec<Value>> = None;
 
         for hit in hits {
             debug!("hit: {:#?}", hit);
@@ -69,10 +71,17 @@ impl ScrollResponse {
             })
         }
 
+        if let Some(last_hit) = hits.last() {
+            if let Some(sort_values) = last_hit["sort"].as_array() {
+                last_sort = Some(sort_values.clone());
+            }
+        }
+
         Self {
             scroll_id,
             total_docs,
             docs,
+            last_sort,
         }
     }
 
@@ -90,6 +99,9 @@ impl ScrollResponse {
     }
     pub fn get_total_size(&self) -> u64 {
         *&self.total_docs
+    }
+    pub fn get_last_sort(&self) -> &Option<Vec<Value>> {
+        &self.last_sort
     }
 }
 

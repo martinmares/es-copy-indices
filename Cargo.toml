@@ -1,24 +1,24 @@
 [package]
 name = "es-copy-indices"
-version = "1.0.0"
-edition = "2021"
+version = "1.1.0"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = { version = "0.4.41", features = ["serde"] }
-clap = { version = "4.5.45", features = ["cargo", "derive"] }
+chrono = { version = "0.4.42", features = ["serde"] }
+clap = { version = "4.5.54", features = ["cargo", "derive"] }
 human_bytes = { version = "0.4.3", features = ["fast"] }
 logging_timer = "1.1.1"
 memory-stats = "1.2.0"
-reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls"] }
-rustls = "0.23.31"
-semver = "1.0.26"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.143"
-serde_with = "3.14.0"
-tokio = { version = "1.47.1", features = ["full"] }
+reqwest = { version = "0.13.1", features = ["query"] }
+rustls = "0.23.36"
+semver = "1.0.27"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+serde_with = "3.16.1"
+tokio = { version = "1.49.0", features = ["full"] }
 tokio-retry = "0.3.0"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json", "fmt"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json", "fmt"] }
 twelf = { version = "0.15.0", features = ["toml", "json"] }

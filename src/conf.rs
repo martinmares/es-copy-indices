@@ -1,4 +1,4 @@
-use serde_with::{serde_as, PickFirst, DisplayFromStr};
+use serde_with::{serde_as, DisplayFromStr, PickFirst};
 use twelf::config;
 use twelf::reexports::serde::{Deserialize, Serialize};
 
@@ -52,8 +52,20 @@ fn default_pre_create_doc_ids() -> bool {
     true
 }
 
+fn default_scroll_mode() -> ScrollMode {
+    ScrollMode::ScrollApi
+}
+
 fn default_pre_create_doc_source() -> String {
     "{}".to_string()
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollMode {
+    ScrollApi,
+    ScrollingSearch,
+    Auto,
 }
 
 #[serde_as]
@@ -73,6 +85,8 @@ pub struct Index {
     pre_create_doc_source: String,
     #[serde(default)]
     custom: Option<Custom>,
+    #[serde(default = "default_scroll_mode")]
+    scroll_mode: ScrollMode,
     name: String,
     #[serde(default)]
     multiple: bool, // tohle zn. že chci víc indexů, typicky "tsm-log-*"
@@ -246,6 +260,9 @@ impl Index {
             Some(_) => true,
             _ => false,
         }
+    }
+    pub fn get_scroll_mode(&self) -> &ScrollMode {
+        &self.scroll_mode
     }
     pub fn is_custom_doc_type(&self) -> bool {
         match &self.custom {
