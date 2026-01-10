@@ -33,7 +33,6 @@
                             <th>Name</th>
                             <th>URL</th>
                             <th>Prefix</th>
-                            <th>Replicas</th>
                             <th>Keep Alive</th>
                           </tr>
                         </thead>
@@ -43,7 +42,6 @@
                             <td>{{ endpoint.name }}</td>
                             <td>{{ endpoint.url }}</td>
                             <td>{{ endpoint.prefix }}</td>
-                            <td>{{ endpoint.number_of_replicas }}</td>
                             <td>{{ endpoint.keep_alive }}</td>
                           </tr>
                           {% endfor %}
@@ -66,6 +64,7 @@
                             <th>Name</th>
                             <th>File</th>
                             <th>Indices</th>
+                            <th>Default Replicas</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -74,6 +73,13 @@
                             <td>{{ template.name }}</td>
                             <td>{{ template.file_name }}</td>
                             <td>{{ template.indices_count }}</td>
+                            <td>
+                              {% if template.number_of_replicas.is_some() %}
+                                {{ template.number_of_replicas.unwrap() }}
+                              {% else %}
+                                inherit
+                              {% endif %}
+                            </td>
                           </tr>
                           {% endfor %}
                         </tbody>

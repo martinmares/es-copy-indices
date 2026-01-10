@@ -48,7 +48,6 @@ cargo build --bin es-copy-indices-server
   name = "REF prostředí"
   url = "http://celzisr401.server.cetin:9200"
   prefix = "tsm-ref"
-  number_of_replicas = 0
   keep_alive = "10m"
   auth = { username = "empty", password = "empty" }
 
@@ -56,7 +55,6 @@ cargo build --bin es-copy-indices-server
   name = "TEST prostředí"
   url = "http://celzist401.server.cetin:9200"
   prefix = "tsm-test"
-  number_of_replicas = 0
   keep_alive = "10m"
   auth = { username = "empty", password = "empty" }
 ```
@@ -64,7 +62,8 @@ cargo build --bin es-copy-indices-server
 Notes:
 - `auth` is optional. If omitted, no basic auth is used.
 - `prefix` is concatenated directly (`prefix + index_name`) to match legacy index naming.
-- `number_of_replicas` and `keep_alive` are per-endpoint defaults used when generating the final TOML for jobs.
+- `keep_alive` is a per-endpoint default used when generating the final TOML for jobs.
+- `number_of_replicas` is defined in templates (see below). If a template does not set it, the server falls back to the endpoint default (0 unless specified).
 
 HTTPS example with self-signed certs:
 ```toml
@@ -72,7 +71,6 @@ HTTPS example with self-signed certs:
   name = "PROD TLS"
   url = "https://es-prod.local:9200"
   prefix = "tsm"
-  number_of_replicas = 1
   keep_alive = "10m"
   auth = { username = "elastic", password = "secret" }
 ```
@@ -100,6 +98,7 @@ Example `./conf/templates/normal.toml`:
 ```toml
 [global]
   name = "Zero replicas"
+  number_of_replicas = 0
 
 [[indices]]
   name = "ticket"
@@ -116,6 +115,10 @@ The template name shown in UI is:
 - `global.name` if present,
 - otherwise the file name.
 
+Template replica defaults:
+- `global.number_of_replicas` sets a default for every index in the template.
+- `indices.number_of_replicas` overrides the global default per index.
+
 ### UI flow
 - Home page lists runs and updates via SSE (no page refresh).
 - Create New Run opens a modal where you select:
@@ -124,7 +127,7 @@ The template name shown in UI is:
   - template
 - Optional Dry run skips `es-copy-indices` execution and marks jobs succeeded (for testing).
 - If source == destination, a warning is shown (allowed).
-- Run details show `SRC → DST + template` and per-endpoint settings.
+- Run details show `SRC → DST + template` and the template replica default.
 - Each run card has a Remove button (with confirmation). Running jobs cannot be removed.
 - Run page actions: Export run ZIP (configs/logs/metadata) and Retry Failed jobs.
 - Logs stream via SSE with ANSI color support, per-stream filtering, and copy-to-clipboard.

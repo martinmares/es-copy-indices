@@ -429,14 +429,16 @@
       const tpl = templateById(templateSelect.value);
       if (src) {
         srcDetails.textContent =
-          `${src.name} · ${src.url} · prefix=${src.prefix} · replicas=${src.number_of_replicas} · keep_alive=${src.keep_alive}`;
+          `${src.name} · ${src.url} · prefix=${src.prefix} · keep_alive=${src.keep_alive}`;
       }
       if (dst) {
         dstDetails.textContent =
-          `${dst.name} · ${dst.url} · prefix=${dst.prefix} · replicas=${dst.number_of_replicas} · keep_alive=${dst.keep_alive}`;
+          `${dst.name} · ${dst.url} · prefix=${dst.prefix} · keep_alive=${dst.keep_alive}`;
       }
       if (tpl) {
-        templateDetails.textContent = `${tpl.name} · file=${tpl.file_name} · indices=${tpl.indices_count}`;
+        const replicas = tpl.number_of_replicas == null ? "inherit" : tpl.number_of_replicas;
+        templateDetails.textContent =
+          `${tpl.name} · file=${tpl.file_name} · indices=${tpl.indices_count} · replicas=${replicas}`;
       }
       dryRunDetails.textContent = dryRunToggle.checked ? "yes" : "no";
       warning.classList.toggle("d-none", srcSelect.value !== dstSelect.value);

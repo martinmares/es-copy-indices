@@ -258,6 +258,7 @@ struct EndpointFile {
     name: String,
     url: String,
     prefix: String,
+    #[serde(default)]
     number_of_replicas: u64,
     keep_alive: String,
     #[serde(default)]
@@ -295,11 +296,14 @@ struct TemplateSnapshot {
     id: String,
     name: String,
     path: String,
+    #[serde(default)]
+    number_of_replicas: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 struct TemplateGlobal {
     name: Option<String>,
+    number_of_replicas: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -335,6 +339,7 @@ struct TemplateConfig {
     id: String,
     name: String,
     path: PathBuf,
+    number_of_replicas: Option<u64>,
     indices: Vec<InputIndex>,
 }
 
@@ -480,7 +485,6 @@ struct EndpointView {
     name: String,
     url: String,
     prefix: String,
-    number_of_replicas: u64,
     keep_alive: String,
 }
 
@@ -490,6 +494,7 @@ struct TemplateView {
     name: String,
     file_name: String,
     indices_count: usize,
+    number_of_replicas: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -2661,7 +2666,15 @@ fn load_templates(path: &PathBuf) -> Vec<TemplateConfig> {
             .as_ref()
             .and_then(|g| g.name.clone())
             .unwrap_or_else(|| file_name.clone());
-        let indices = config.indices;
+        let global_replicas = config.global.as_ref().and_then(|g| g.number_of_replicas);
+        let mut indices = config.indices;
+        if let Some(default_replicas) = global_replicas {
+            for index in &mut indices {
+                if index.number_of_replicas.is_none() {
+                    index.number_of_replicas = Some(default_replicas);
+                }
+            }
+        }
         let base = slugify(&file_name);
         let counter = used.entry(base.clone()).or_insert(0usize);
         let id = if *counter == 0 {
@@ -2678,6 +2691,7 @@ fn load_templates(path: &PathBuf) -> Vec<TemplateConfig> {
             },
             name: display_name,
             path,
+            number_of_replicas: global_replicas,
             indices,
         });
     }
@@ -2708,6 +2722,7 @@ fn template_snapshot(template: &TemplateConfig) -> TemplateSnapshot {
         id: template.id.clone(),
         name: template.name.clone(),
         path: template.path.to_string_lossy().to_string(),
+        number_of_replicas: template.number_of_replicas,
     }
 }
 
@@ -2720,7 +2735,6 @@ fn build_endpoint_views(state: &AppState) -> Vec<EndpointView> {
             name: endpoint.name.clone(),
             url: endpoint.url.clone(),
             prefix: endpoint.prefix.clone(),
-            number_of_replicas: endpoint.number_of_replicas,
             keep_alive: endpoint.keep_alive.clone(),
         })
         .collect()
@@ -2740,6 +2754,7 @@ fn build_template_views(state: &AppState) -> Vec<TemplateView> {
                 .unwrap_or("template")
                 .to_string(),
             indices_count: template.indices.len(),
+            number_of_replicas: template.number_of_replicas,
         })
         .collect()
 }

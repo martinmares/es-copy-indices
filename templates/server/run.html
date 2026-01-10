@@ -75,8 +75,8 @@
                 </div>
                 <div class="text-secondary small">
                   Src prefix={{ run.src_endpoint.prefix }}, keep_alive={{ run.src_endpoint.keep_alive }}
-                  · Dst prefix={{ run.dst_endpoint.prefix }}, replicas={{ run.dst_endpoint.number_of_replicas }},
-                  keep_alive={{ run.dst_endpoint.keep_alive }}
+                  · Dst prefix={{ run.dst_endpoint.prefix }}, keep_alive={{ run.dst_endpoint.keep_alive }}
+                  · template replicas={% if run.template.number_of_replicas.is_some() %}{{ run.template.number_of_replicas.unwrap() }}{% else %}inherit{% endif %}
                 </div>
               </div>
               <div class="col-auto">
