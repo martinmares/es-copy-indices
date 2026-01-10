@@ -18,7 +18,7 @@ use std::time::Duration;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, Notify, RwLock};
 use std::convert::Infallible;
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 use tokio_stream::StreamExt;
@@ -53,6 +53,8 @@ struct ServerArgs {
     refresh_seconds: u64,
     #[arg(long, default_value_t = 5)]
     metrics_seconds: u64,
+    #[arg(long, value_name = "COUNT", default_value_t = 0)]
+    max_concurrent_jobs: usize,
     #[arg(long)]
     timestamp: Option<String>,
     #[arg(long = "from-index-name-suffix")]
@@ -87,12 +89,21 @@ struct AppState {
     audit: bool,
     runs: Arc<RwLock<RunStore>>,
     quarantined_runs: Arc<RwLock<Vec<String>>>,
+    job_queue: Arc<Mutex<VecDeque<QueuedJob>>>,
+    max_concurrent_jobs: Option<usize>,
+    queue_notify: Arc<Notify>,
 }
 
 #[derive(Default)]
 struct RunStore {
     order: Vec<String>,
     runs: HashMap<String, RunState>,
+}
+
+#[derive(Clone, Debug)]
+struct QueuedJob {
+    run_id: String,
+    job_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -174,6 +185,7 @@ struct StageState {
 enum JobStatus {
     Pending,
     Running,
+    Queued,
     Succeeded,
     Failed,
     Stopped,
@@ -184,6 +196,7 @@ impl JobStatus {
         match self {
             JobStatus::Pending => "pending",
             JobStatus::Running => "running",
+            JobStatus::Queued => "queued",
             JobStatus::Succeeded => "succeeded",
             JobStatus::Failed => "failed",
             JobStatus::Stopped => "stopped",
@@ -425,6 +438,9 @@ struct IndexTemplate {
     templates: Vec<TemplateView>,
     endpoints_json: String,
     templates_json: String,
+    max_concurrent_jobs: Option<usize>,
+    running_total: usize,
+    queued_total: usize,
 }
 
 #[derive(Template)]
@@ -482,6 +498,7 @@ struct RunSummary {
     created_at: String,
     jobs_total: usize,
     jobs_running: usize,
+    jobs_queued: usize,
     jobs_failed: usize,
     jobs_succeeded: usize,
     src_name: String,
@@ -560,6 +577,8 @@ struct MetricsSample {
     total_cpu: f32,
     total_mem_kb: u64,
     running_jobs: usize,
+    queued_jobs: usize,
+    max_concurrent_jobs: Option<usize>,
     load1: f64,
     load5: f64,
     load15: f64,
@@ -577,6 +596,8 @@ struct MetricsSummary {
     children_mem_mb: u64,
     total_mem_mb: u64,
     running_jobs: usize,
+    queued_jobs: usize,
+    max_concurrent_jobs: Option<usize>,
     load1: f64,
     load5: f64,
     load15: f64,
@@ -620,7 +641,7 @@ pub async fn run() {
 
     let metrics = Arc::new(RwLock::new(MetricsState::default()));
     let (metrics_tx, _) = broadcast::channel(200);
-    let state = AppState {
+    let state = Arc::new(AppState {
         endpoints,
         templates,
         client,
@@ -639,13 +660,22 @@ pub async fn run() {
         audit: args.audit,
         runs: Arc::new(RwLock::new(RunStore::default())),
         quarantined_runs: Arc::new(RwLock::new(Vec::new())),
-    };
+        job_queue: Arc::new(Mutex::new(VecDeque::new())),
+        max_concurrent_jobs: if args.max_concurrent_jobs == 0 {
+            None
+        } else {
+            Some(args.max_concurrent_jobs)
+        },
+        queue_notify: Arc::new(Notify::new()),
+    });
 
     load_runs(&state).await;
+    start_queue_worker(Arc::clone(&state));
     start_metrics_sampler(
         Arc::clone(&state.metrics),
         state.metrics_tx.clone(),
         Arc::clone(&state.runs),
+        state.max_concurrent_jobs,
         args.metrics_seconds,
     );
 
@@ -684,7 +714,7 @@ pub async fn run() {
             .route(&base_with_slash, get(base_trailing_redirect))
             .nest(&state.base_path, routes)
     }
-    .with_state(Arc::new(state));
+    .with_state(Arc::clone(&state));
 
     let listener = tokio::net::TcpListener::bind(&args.bind)
         .await
@@ -695,6 +725,8 @@ pub async fn run() {
 
 async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_summaries(&state).await;
+    let running_total = runs.iter().map(|run| run.jobs_running).sum();
+    let queued_total = runs.iter().map(|run| run.jobs_queued).sum();
     let template = IndexTemplate {
         runs,
         refresh_seconds: 0,
@@ -703,6 +735,9 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         templates: build_template_views(&state),
         endpoints_json: endpoints_json(&state),
         templates_json: templates_json(&state),
+        max_concurrent_jobs: state.max_concurrent_jobs,
+        running_total,
+        queued_total,
     };
     Html(render_template(&template)).into_response()
 }
@@ -1040,7 +1075,13 @@ async fn retry_failed(
         let run_id_clone = run_id.clone();
         let job_id_clone = job_id.clone();
         tokio::spawn(async move {
-            if let Err(err) = start_job_runner(&state_clone, &run_id_clone, &job_id_clone).await {
+            if let Err(err) = start_job_runner(
+                Arc::clone(&state_clone),
+                run_id_clone.clone(),
+                job_id_clone.clone(),
+            )
+            .await
+            {
                 warn!("Failed to retry job {}: {}", job_id_clone, err);
             }
         });
@@ -1178,7 +1219,12 @@ async fn start_stage(
         let state_clone = Arc::clone(&state);
         let run_id_clone = run_id.clone();
         tokio::spawn(async move {
-            if let Err(err) = start_job_runner(&state_clone, &run_id_clone, &job_id).await {
+            if let Err(err) = start_job_runner(
+                Arc::clone(&state_clone),
+                run_id_clone.clone(),
+                job_id.clone(),
+            )
+            .await {
                 warn!("Failed to start job {}: {}", job_id, err);
             }
         });
@@ -1197,7 +1243,7 @@ async fn start_job(
     Path((run_id, job_id)): Path<(String, String)>,
     Query(query): Query<StartJobQuery>,
 ) -> impl IntoResponse {
-    if let Err(err) = start_job_runner(&state, &run_id, &job_id).await {
+    if let Err(err) = start_job_runner(Arc::clone(&state), run_id.clone(), job_id.clone()).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to start job: {}", err),
@@ -1291,40 +1337,56 @@ async fn stop_run(
 }
 
 async fn start_job_runner(
-    state: &Arc<AppState>,
-    run_id: &str,
-    job_id: &str,
+    state: Arc<AppState>,
+    run_id: String,
+    job_id: String,
 ) -> Result<(), String> {
+    let running_count = if state.max_concurrent_jobs.is_some() {
+        let runs = state.runs.read().await;
+        count_running_jobs(&runs)
+    } else {
+        0
+    };
+
+    let mut queued = false;
     let (config_path, stdout_path, stderr_path, snapshot, dry_run) = {
         let mut runs = state.runs.write().await;
         let run = runs
             .runs
-            .get_mut(run_id)
+            .get_mut(&run_id)
             .ok_or_else(|| "run not found".to_string())?;
-        let (config_path, stdout_path, stderr_path) = {
+        let (config_path, stdout_path, stderr_path, dry_run) = {
             let job = run
                 .jobs
-                .get_mut(job_id)
+                .get_mut(&job_id)
                 .ok_or_else(|| "job not found".to_string())?;
             if matches!(job.status, JobStatus::Running) {
                 return Ok(());
             }
-            job.status = JobStatus::Running;
-            job.exit_code = None;
-            job.started_at = Some(now_string());
-            job.finished_at = None;
-            job.pid = None;
-            job.progress_percent = None;
-            job.completed_line = false;
-            job.stdout_tail.clear();
-            job.stderr_tail.clear();
+            if let Some(max) = state.max_concurrent_jobs {
+                if running_count >= max {
+                    job.status = JobStatus::Queued;
+                    queued = true;
+                }
+            }
+            if !queued {
+                job.status = JobStatus::Running;
+                job.exit_code = None;
+                job.started_at = Some(now_string());
+                job.finished_at = None;
+                job.pid = None;
+                job.progress_percent = None;
+                job.completed_line = false;
+                job.stdout_tail.clear();
+                job.stderr_tail.clear();
+            }
             (
                 job.config_path.clone(),
                 job.stdout_path.clone(),
                 job.stderr_path.clone(),
+                run.dry_run,
             )
         };
-        let dry_run = run.dry_run;
         let snapshot = run_snapshot(run);
         (config_path, stdout_path, stderr_path, snapshot, dry_run)
     };
@@ -1334,8 +1396,14 @@ async fn start_job_runner(
             warn!("Failed to persist run: {}", err);
         }
     });
+    if queued {
+        enqueue_job(&state, run_id.clone(), job_id.clone()).await;
+        return Ok(());
+    }
 
-    let state_clone = Arc::clone(state);
+    remove_from_queue(&state, &run_id, &job_id).await;
+
+    let state_clone = Arc::clone(&state);
     let run_id = run_id.to_string();
     let job_id = job_id.to_string();
     if dry_run {
@@ -1373,6 +1441,62 @@ async fn start_job_runner(
     }
 
     Ok(())
+}
+
+fn count_running_jobs(runs: &RunStore) -> usize {
+    runs.runs
+        .values()
+        .flat_map(|run| run.jobs.values())
+        .filter(|job| matches!(job.status, JobStatus::Running))
+        .count()
+}
+
+async fn enqueue_job(state: &Arc<AppState>, run_id: String, job_id: String) {
+    let mut queue = state.job_queue.lock().await;
+    if queue.iter().any(|job| job.run_id == run_id && job.job_id == job_id) {
+        return;
+    }
+    queue.push_back(QueuedJob { run_id, job_id });
+    state.queue_notify.notify_one();
+}
+
+async fn remove_from_queue(state: &Arc<AppState>, run_id: &str, job_id: &str) {
+    let mut queue = state.job_queue.lock().await;
+    queue.retain(|job| !(job.run_id == run_id && job.job_id == job_id));
+}
+
+fn start_queue_worker(state: Arc<AppState>) {
+    if state.max_concurrent_jobs.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        queue_worker(state).await;
+    });
+}
+
+async fn queue_worker(state: Arc<AppState>) {
+    loop {
+        state.queue_notify.notified().await;
+        loop {
+            let max = match state.max_concurrent_jobs {
+                Some(max) => max,
+                None => return,
+            };
+            let running = {
+                let runs = state.runs.read().await;
+                count_running_jobs(&runs)
+            };
+            if running >= max {
+                break;
+            }
+            let next = {
+                let mut queue = state.job_queue.lock().await;
+                queue.pop_front()
+            };
+            let Some(next) = next else { break };
+            let _ = start_job_runner(Arc::clone(&state), next.run_id, next.job_id).await;
+        }
+    }
 }
 
 async fn run_job_process(
@@ -1499,7 +1623,7 @@ async fn stop_job_internal(
         let result = unsafe { kill(pid as i32, SIGTERM) };
         if result != 0 {
             let err = std::io::Error::last_os_error();
-            if err.kind() != ErrorKind::NotFound {
+            if !is_not_found(&err) {
                 return Err(format!("Failed to stop job (pid={pid}): {}", err));
             }
         }
@@ -1514,6 +1638,8 @@ async fn stop_job_internal(
         &stderr_path,
     )
     .await;
+
+    state.queue_notify.notify_one();
 
     Ok("Stop requested.".to_string())
 }
@@ -1748,6 +1874,8 @@ fn build_metrics_summary(sample: Option<&MetricsSample>) -> MetricsSummary {
             children_mem_mb: mem_to_mb(sample.children_mem_kb),
             total_mem_mb: mem_to_mb(sample.total_mem_kb),
             running_jobs: sample.running_jobs,
+            queued_jobs: sample.queued_jobs,
+            max_concurrent_jobs: sample.max_concurrent_jobs,
             load1: sample.load1,
             load5: sample.load5,
             load15: sample.load15,
@@ -1773,6 +1901,7 @@ fn start_metrics_sampler(
     metrics: Arc<RwLock<MetricsState>>,
     sender: broadcast::Sender<MetricsSample>,
     runs: Arc<RwLock<RunStore>>,
+    max_concurrent_jobs: Option<usize>,
     seconds: u64,
 ) {
     let interval_seconds = if seconds == 0 { 5 } else { seconds };
@@ -1821,14 +1950,22 @@ fn start_metrics_sampler(
             }
             let total_cpu = proc_cpu + children_cpu;
             let total_mem = proc_mem + children_mem;
-            let running_jobs = {
+            let (running_jobs, queued_jobs) = {
                 let guard = runs.read().await;
-                guard
+                let running = guard
                     .runs
                     .values()
                     .flat_map(|run| run.jobs.values())
                     .filter(|job| matches!(job.status, JobStatus::Running))
                     .count()
+                    ;
+                let queued = guard
+                    .runs
+                    .values()
+                    .flat_map(|run| run.jobs.values())
+                    .filter(|job| matches!(job.status, JobStatus::Queued))
+                    .count();
+                (running, queued)
             };
 
             let sample = MetricsSample {
@@ -1843,6 +1980,8 @@ fn start_metrics_sampler(
                 total_cpu,
                 total_mem_kb: total_mem,
                 running_jobs,
+                queued_jobs,
+                max_concurrent_jobs,
                 load1: load.one,
                 load5: load.five,
                 load15: load.fifteen,
@@ -1868,24 +2007,33 @@ async fn mark_job_finished(
     status: JobStatus,
     exit_code: Option<i32>,
 ) {
-    let mut runs = state.runs.write().await;
-        if let Some(run) = runs.runs.get_mut(run_id) {
-            if let Some(job) = run.jobs.get_mut(job_id) {
-                if matches!(job.status, JobStatus::Stopped) {
-                    return;
-                }
-                job.status = status;
-                job.exit_code = exit_code;
-                job.finished_at = Some(now_string());
-                let snapshot = run_snapshot(run);
-            let runs_dir = state.runs_dir.clone();
-            tokio::spawn(async move {
-                if let Err(err) = save_run_snapshot(&runs_dir, snapshot).await {
-                    warn!("Failed to persist run: {}", err);
-                }
-            });
+    let snapshot = {
+        let mut runs = state.runs.write().await;
+        let run = match runs.runs.get_mut(run_id) {
+            Some(run) => run,
+            None => return,
+        };
+        let job = match run.jobs.get_mut(job_id) {
+            Some(job) => job,
+            None => return,
+        };
+        if matches!(job.status, JobStatus::Stopped) {
+            return;
         }
-    }
+        job.status = status;
+        job.exit_code = exit_code;
+        job.finished_at = Some(now_string());
+        run_snapshot(run)
+    };
+
+    let runs_dir = state.runs_dir.clone();
+    tokio::spawn(async move {
+        if let Err(err) = save_run_snapshot(&runs_dir, snapshot).await {
+            warn!("Failed to persist run: {}", err);
+        }
+    });
+
+    state.queue_notify.notify_one();
 }
 
 async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
@@ -1894,12 +2042,14 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
     for run_id in runs.order.iter().rev() {
         if let Some(run) = runs.runs.get(run_id) {
             let mut jobs_running = 0;
+            let mut jobs_queued = 0;
             let mut jobs_failed = 0;
             let mut jobs_succeeded = 0;
             let jobs_total = run.jobs.len();
             for job in run.jobs.values() {
                 match job.status {
                     JobStatus::Running => jobs_running += 1,
+                    JobStatus::Queued => jobs_queued += 1,
                     JobStatus::Failed => jobs_failed += 1,
                     JobStatus::Succeeded => jobs_succeeded += 1,
                     JobStatus::Stopped => jobs_failed += 1,
@@ -1911,6 +2061,7 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
                 created_at: run.created_at.clone(),
                 jobs_total,
                 jobs_running,
+                jobs_queued,
                 jobs_failed,
                 jobs_succeeded,
                 src_name: run
@@ -1940,17 +2091,30 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
         let mut split_details = Vec::new();
         for job_id in &stage.job_ids {
             if let Some(job) = run.jobs.get(job_id) {
-                let progress_label = job.progress_percent.map(|value| {
-                    let base = format!("{:.2} %", value);
-                    if let Some(eta) = estimate_eta_label(&job.started_at, job.progress_percent) {
-                        format!("{base} · {eta}")
-                    } else {
-                        base
+                let (progress_label, progress_width) = match job.status {
+                    JobStatus::Running => {
+                        let label = job.progress_percent.map(|value| {
+                            let base = format!("{:.2} %", value);
+                            if let Some(eta) = estimate_eta_label(&job.started_at, job.progress_percent) {
+                                format!("{base} · {eta}")
+                            } else {
+                                base
+                            }
+                        });
+                        let width = job
+                            .progress_percent
+                            .map(|value| value.max(0.0).min(100.0).round() as u8);
+                        (label, width)
                     }
-                });
-                let progress_width = job
-                    .progress_percent
-                    .map(|value| value.max(0.0).min(100.0).round() as u8);
+                    JobStatus::Succeeded => {
+                        let label = job.progress_percent.map(|value| format!("{:.2} %", value));
+                        let width = job
+                            .progress_percent
+                            .map(|value| value.max(0.0).min(100.0).round() as u8);
+                        (label, width)
+                    }
+                    _ => (None, None),
+                };
                 jobs.push(JobSummary {
                     id: job.id.clone(),
                     name: job.name.clone(),
@@ -2121,6 +2285,7 @@ async fn create_run_state(
 
 async fn load_runs(state: &AppState) {
     let mut runs = RunStore::default();
+    let mut queued = Vec::new();
     let mut entries = match tokio::fs::read_dir(&state.runs_dir).await {
         Ok(entries) => entries,
         Err(err) => {
@@ -2151,91 +2316,34 @@ async fn load_runs(state: &AppState) {
     for (run_id, path) in run_entries {
         let run_file = path.join("run.json");
         match tokio::fs::read_to_string(&run_file).await {
-            Ok(content) => match serde_json::from_str::<RunPersist>(&content) {
-                Ok(persist) => {
-                    let mut job_map = HashMap::new();
-                    let mut run_changed = false;
-                    for mut job in persist.jobs {
-                        let (stdout_tx, _) = broadcast::channel(200);
-                        let (stderr_tx, _) = broadcast::channel(200);
-                        let stdout_tail =
-                            read_tail_lines(job.stdout_path.as_str(), MAX_TAIL_LINES).await;
-                        let stderr_tail =
-                            read_tail_lines(job.stderr_path.as_str(), MAX_TAIL_LINES).await;
-                        if matches!(job.status, JobStatus::Running) {
-                            job.status = JobStatus::Failed;
-                            job.exit_code = Some(-1);
-                            job.finished_at = Some(now_string());
-                            job.completed_line = false;
-                            run_changed = true;
-                        }
-                        job_map.insert(
-                            job.id.clone(),
-                            JobState {
-                                id: job.id,
-                                name: job.name,
-                                stage_id: job.stage_id,
-                                stage_name: job.stage_name,
-                                index_name: job.index_name,
-                                status: job.status,
-                                exit_code: job.exit_code,
-                                started_at: job.started_at,
-                                finished_at: job.finished_at,
-                                pid: None,
-                                config_path: PathBuf::from(job.config_path),
-                                stdout_path: PathBuf::from(job.stdout_path),
-                                stderr_path: PathBuf::from(job.stderr_path),
-                                stdout_tail: VecDeque::from(stdout_tail),
-                                stderr_tail: VecDeque::from(stderr_tail),
-                                stdout_tx,
-                                stderr_tx,
-                                progress_percent: job.progress_percent,
-                                completed_line: job.completed_line,
-                                split_field: job.split_field,
-                                split_from: job.split_from,
-                                split_to: job.split_to,
-                                split_leftover: job.split_leftover,
-                                split_query: job.split_query,
-                                split_doc_count: job.split_doc_count,
-                            },
-                        );
-                    }
-                    let stages = persist
-                        .stages
-                        .into_iter()
-                        .map(|stage| StageState {
-                            id: stage.id,
-                            name: stage.name,
-                            job_ids: stage.job_ids,
-                        })
-                        .collect::<Vec<_>>();
-                    runs.order.push(run_id.clone());
-                    let run_state = RunState {
-                        id: persist.id,
-                        created_at: persist.created_at,
-                        template: persist.template,
-                        src_endpoint: persist.src_endpoint,
-                        dst_endpoint: persist.dst_endpoint,
-                        dry_run: persist.dry_run,
-                        stages,
-                        jobs: job_map,
-                    };
-                    if run_changed {
-                        let snapshot = run_snapshot(&run_state);
-                        let runs_dir = state.runs_dir.clone();
-                        tokio::spawn(async move {
-                            if let Err(err) = save_run_snapshot(&runs_dir, snapshot).await {
-                                warn!("Failed to persist run: {}", err);
+            Ok(content) => {
+                let mut sanitized = false;
+                let persist = match serde_json::from_str::<RunPersist>(&content) {
+                    Ok(persist) => Some(persist),
+                    Err(err) => {
+                        let stripped = strip_ansi_codes(&content);
+                        if stripped != content {
+                            match serde_json::from_str::<RunPersist>(&stripped) {
+                                Ok(persist) => {
+                                    warn!(
+                                        "Parsed run.json {:?} after stripping ANSI control codes.",
+                                        run_file
+                                    );
+                                    sanitized = true;
+                                    Some(persist)
+                                }
+                                Err(err) => {
+                                    warn!("Failed to parse run.json {:?}: {}", run_file, err);
+                                    None
+                                }
                             }
-                        });
+                        } else {
+                            warn!("Failed to parse run.json {:?}: {}", run_file, err);
+                            None
+                        }
                     }
-                    runs.runs.insert(
-                        run_id,
-                        run_state,
-                    );
-                }
-                Err(err) => {
-                    warn!("Failed to parse run.json {:?}: {}", run_file, err);
+                };
+                let Some(persist) = persist else {
                     let bad_path = path.join(format!("run.json.bad-{}", file_timestamp()));
                     if let Err(rename_err) = tokio::fs::rename(&run_file, &bad_path).await {
                         warn!(
@@ -2251,8 +2359,93 @@ async fn load_runs(state: &AppState) {
                         let mut guard = state.quarantined_runs.write().await;
                         guard.push(message);
                     }
+                    continue;
+                };
+
+                let mut job_map = HashMap::new();
+                let mut run_changed = sanitized;
+                for mut job in persist.jobs {
+                    let (stdout_tx, _) = broadcast::channel(200);
+                    let (stderr_tx, _) = broadcast::channel(200);
+                    let stdout_tail =
+                        read_tail_lines(job.stdout_path.as_str(), MAX_TAIL_LINES).await;
+                    let stderr_tail =
+                        read_tail_lines(job.stderr_path.as_str(), MAX_TAIL_LINES).await;
+                    if matches!(job.status, JobStatus::Running) {
+                        job.status = JobStatus::Failed;
+                        job.exit_code = Some(-1);
+                        job.finished_at = Some(now_string());
+                        job.completed_line = false;
+                        run_changed = true;
+                    }
+                    if matches!(job.status, JobStatus::Queued) {
+                        queued.push(QueuedJob {
+                            run_id: run_id.clone(),
+                            job_id: job.id.clone(),
+                        });
+                    }
+                    job_map.insert(
+                        job.id.clone(),
+                        JobState {
+                            id: job.id,
+                            name: job.name,
+                            stage_id: job.stage_id,
+                            stage_name: job.stage_name,
+                            index_name: job.index_name,
+                            status: job.status,
+                            exit_code: job.exit_code,
+                            started_at: job.started_at,
+                            finished_at: job.finished_at,
+                            pid: None,
+                            config_path: PathBuf::from(job.config_path),
+                            stdout_path: PathBuf::from(job.stdout_path),
+                            stderr_path: PathBuf::from(job.stderr_path),
+                            stdout_tail: VecDeque::from(stdout_tail),
+                            stderr_tail: VecDeque::from(stderr_tail),
+                            stdout_tx,
+                            stderr_tx,
+                            progress_percent: job.progress_percent,
+                            completed_line: job.completed_line,
+                            split_field: job.split_field,
+                            split_from: job.split_from,
+                            split_to: job.split_to,
+                            split_leftover: job.split_leftover,
+                            split_query: job.split_query,
+                            split_doc_count: job.split_doc_count,
+                        },
+                    );
                 }
-            },
+                let stages = persist
+                    .stages
+                    .into_iter()
+                    .map(|stage| StageState {
+                        id: stage.id,
+                        name: stage.name,
+                        job_ids: stage.job_ids,
+                    })
+                    .collect::<Vec<_>>();
+                runs.order.push(run_id.clone());
+                let run_state = RunState {
+                    id: persist.id,
+                    created_at: persist.created_at,
+                    template: persist.template,
+                    src_endpoint: persist.src_endpoint,
+                    dst_endpoint: persist.dst_endpoint,
+                    dry_run: persist.dry_run,
+                    stages,
+                    jobs: job_map,
+                };
+                if run_changed {
+                    let snapshot = run_snapshot(&run_state);
+                    let runs_dir = state.runs_dir.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = save_run_snapshot(&runs_dir, snapshot).await {
+                            warn!("Failed to persist run: {}", err);
+                        }
+                    });
+                }
+                runs.runs.insert(run_id, run_state);
+            }
             Err(err) => warn!("Failed to read run.json: {}", err),
         }
     }
@@ -2260,6 +2453,24 @@ async fn load_runs(state: &AppState) {
     let mut store = state.runs.write().await;
     store.order = runs.order;
     store.runs = runs.runs;
+
+    if !queued.is_empty() {
+        let mut queue = state.job_queue.lock().await;
+        for item in queued {
+            if !queue
+                .iter()
+                .any(|job| job.run_id == item.run_id && job.job_id == item.job_id)
+            {
+                queue.push_back(item);
+            }
+        }
+    }
+    if state.max_concurrent_jobs.is_some() {
+        let queue = state.job_queue.lock().await;
+        if !queue.is_empty() {
+            state.queue_notify.notify_one();
+        }
+    }
 }
 
 async fn read_tail_lines(path: &str, limit: usize) -> Vec<String> {
@@ -2330,25 +2541,29 @@ async fn save_run_snapshot(runs_dir: &PathBuf, run: RunPersist) -> Result<(), St
     let path = dir.join("run.json");
     let tmp_path = dir.join(format!("run.json.tmp-{}", file_timestamp()));
     if let Err(err) = tokio::fs::create_dir_all(&dir).await {
-        if err.kind() == ErrorKind::NotFound {
+        if is_not_found(&err) {
             return Ok(());
         }
         return Err(err.to_string());
     }
     let content = serde_json::to_string_pretty(&run).map_err(|e| e.to_string())?;
     if let Err(err) = tokio::fs::write(&tmp_path, content).await {
-        if err.kind() == ErrorKind::NotFound {
+        if is_not_found(&err) {
             return Ok(());
         }
         return Err(err.to_string());
     }
     if let Err(err) = tokio::fs::rename(&tmp_path, &path).await {
-        if err.kind() == ErrorKind::NotFound {
+        if is_not_found(&err) {
             return Ok(());
         }
         return Err(err.to_string());
     }
     Ok(())
+}
+
+fn is_not_found(err: &std::io::Error) -> bool {
+    err.kind() == ErrorKind::NotFound || err.raw_os_error() == Some(2)
 }
 
 fn load_main_config(path: &PathBuf) -> Vec<EndpointConfig> {

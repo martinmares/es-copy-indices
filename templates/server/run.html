@@ -4,20 +4,36 @@
     <meta charset="utf-8">
     <title>Run {{ run.id }}</title>
     <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartkick@5.0.1/dist/chartkick.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
+    <script src="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/js/tabler.min.js"></script>
     <style>
       .status-text {
         font-weight: 600;
       }
       .split-query {
-        background: #0b0f14;
+        background: #000;
         color: #cfe3f4;
         padding: 8px;
         border-radius: 6px;
         font-size: 12px;
         white-space: pre-wrap;
         word-break: break-word;
+      }
+      .split-query-wrap {
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      .split-query-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 8px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .split-query {
+        margin: 0;
+        border-radius: 0;
       }
       details.split-details > summary {
         cursor: pointer;
@@ -33,6 +49,11 @@
       }
       details.split-details[open] > summary::before {
         content: "⌄";
+      }
+      .split-chart {
+        background: var(--tblr-body-bg, #0b0f14);
+        border-radius: 6px;
+        padding: 6px;
       }
     </style>
   </head>
@@ -92,6 +113,8 @@
                               <span class="badge bg-secondary text-white status-text">pending</span>
                             {% else if job.status.as_str() == "running" %}
                               <span class="badge bg-yellow text-dark status-text">running</span>
+                            {% else if job.status.as_str() == "queued" %}
+                              <span class="badge bg-blue text-white status-text">queued</span>
                             {% else if job.status.as_str() == "succeeded" %}
                               <span class="badge bg-green text-dark status-text">succeeded</span>
                             {% else if job.status.as_str() == "stopped" %}
@@ -130,7 +153,7 @@
                           <summary>Split details</summary>
                           <div class="mb-3">
                             <div class="text-secondary small">Quantile distribution</div>
-                            <div class="mt-2" data-split-chart="true" data-split-chart-values='[
+                    <div class="mt-2 split-chart" data-split-chart="true" data-split-chart-values='[
                               {% for detail in stage.split_details %}
                                 {% if detail.leftover == false %}["Q{{ loop.index }}", {{ detail.doc_count.unwrap_or(0) }}],{% endif %}
                               {% endfor %}
@@ -157,7 +180,18 @@
                                   {% endif %}
                                 </div>
                                 {% if detail.query.is_some() %}
-                                  <pre class="split-query mt-2 mb-0">{{ detail.query.as_deref().unwrap_or("") }}</pre>
+                                  <div class="split-query-wrap mt-2">
+                                    <div class="split-query-header">
+                                      <span class="text-secondary small">ES query</span>
+                                      <button class="btn btn-sm btn-ghost split-copy" type="button" title="Copy to clipboard">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                          <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                        </svg>
+                                      </button>
+                                    </div>
+                                    <pre class="split-query">{{ detail.query.as_deref().unwrap_or("") }}</pre>
+                                  </div>
                                 {% endif %}
                               </div>
                             {% endfor %}
@@ -215,11 +249,46 @@
         });
       });
     }
+
+    function copyToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+        return;
+      }
+      const temp = document.createElement("textarea");
+      temp.value = text;
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand("copy");
+      document.body.removeChild(temp);
+    }
+
+    function bindSplitCopyButtons() {
+      document.querySelectorAll(".split-copy").forEach((btn) => {
+        if (btn.dataset.bound === "true") {
+          return;
+        }
+        btn.dataset.bound = "true";
+        btn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const wrap = btn.closest(".split-query-wrap");
+          const pre = wrap ? wrap.querySelector(".split-query") : null;
+          const text = pre ? pre.textContent || "" : "";
+          const scrollTop = window.scrollY || 0;
+          pendingScroll = scrollTop;
+          sessionStorage.setItem(scrollKey, String(scrollTop));
+          copyToClipboard(text);
+          btn.blur();
+        });
+      });
+    }
     bindAsyncStart(".js-start-job", true);
     bindAsyncStart(".js-stop-job", true);
     bindAsyncStart(".js-start-stage", false);
     bindAsyncStart(".js-stop-stage", false);
     bindViewLogsLinks();
+    bindSplitCopyButtons();
 
     if (retryFailedBtn) {
       retryFailedBtn.addEventListener("click", () => {
@@ -244,15 +313,19 @@
     function statusBadge(status) {
       if (status === "pending") return '<span class="badge bg-secondary text-white status-text">pending</span>';
       if (status === "running") return '<span class="badge bg-yellow text-dark status-text">running</span>';
+      if (status === "queued") return '<span class="badge bg-blue text-white status-text">queued</span>';
       if (status === "succeeded") return '<span class="badge bg-green text-dark status-text">succeeded</span>';
       if (status === "stopped") return '<span class="badge bg-secondary text-white status-text">stopped</span>';
       return '<span class="badge bg-red text-white status-text">failed</span>';
     }
 
     function renderSplitCharts() {
-      if (!window.Chartkick || !window.Chartkick.ColumnChart) {
+      if (!window.ApexCharts) {
         return;
       }
+      const tablerColors = {
+        blue: tabler.getColor("blue"),
+      };
       document.querySelectorAll("[data-split-chart]").forEach((chartEl) => {
         const raw = chartEl.dataset.splitChartValues || "[]";
         let data = [];
@@ -261,13 +334,39 @@
         } catch (err) {
           data = [];
         }
+        if (!data.length) {
+          chartEl.innerHTML = "";
+          return;
+        }
+        const categories = data.map((item) => item[0]);
+        const values = data.map((item) => item[1]);
+        if (chartEl._apexChart) {
+          chartEl._apexChart.updateOptions({ xaxis: { categories } }, false, true);
+          chartEl._apexChart.updateSeries([{ name: "Docs", data: values }], true);
+          return;
+        }
         chartEl.innerHTML = "";
-        new Chartkick.ColumnChart(chartEl, data, {
-          legend: false,
-          height: "160px",
-          ytitle: "Docs",
-          xtitle: "Quantile",
+        const chart = new ApexCharts(chartEl, {
+          chart: {
+            type: "bar",
+            height: 160,
+            toolbar: { show: false },
+            animations: { enabled: false },
+            background: "transparent",
+          },
+          theme: { mode: "dark" },
+          plotOptions: {
+            bar: { columnWidth: "55%", borderRadius: 4 },
+          },
+          grid: { borderColor: "rgba(255, 255, 255, 0.1)" },
+          dataLabels: { enabled: false },
+          colors: [tablerColors.blue],
+          xaxis: { categories, title: { text: "Quantile" } },
+          yaxis: { title: { text: "Docs" } },
+          series: [{ name: "Docs", data: values }],
         });
+        chart.render();
+        chartEl._apexChart = chart;
       });
     }
 
@@ -281,7 +380,6 @@
           .map((detail) => detail.getAttribute("data-stage-id"))
           .filter(Boolean),
       );
-      const scrollTarget = pendingScroll !== null ? pendingScroll : (window.scrollY || 0);
       container.innerHTML = run.stages
         .map((stage) => {
           const splitDetails = Array.isArray(stage.split_details) ? stage.split_details : [];
@@ -328,7 +426,7 @@
                   <summary>Split details</summary>
                   <div class="mb-3">
                     <div class="text-secondary small">Quantile distribution</div>
-                    <div class="mt-2" data-split-chart="true" data-split-chart-values=""></div>
+                    <div class="mt-2 split-chart" data-split-chart="true" data-split-chart-values=""></div>
                   </div>
                   <div class="list-group list-group-flush">
                     ${splitDetails
@@ -339,7 +437,19 @@
                         const extra = detail.leftover ? "missing field" : "";
                         const meta = [range, extra].filter(Boolean).join(" · ");
                         const query = detail.query
-                          ? `<pre class="split-query mt-2 mb-0">${escapeHtml(detail.query)}</pre>`
+                          ? `
+                              <div class="split-query-wrap mt-2">
+                                <div class="split-query-header">
+                                  <span class="text-secondary small">ES query</span>
+                                  <button class="btn btn-sm btn-ghost split-copy" type="button" title="Copy to clipboard">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                      <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                    </svg>
+                                  </button>
+                                </div>
+                                <pre class="split-query">${escapeHtml(detail.query)}</pre>
+                              </div>`
                           : "";
                         const count = detail.doc_count !== null && detail.doc_count !== undefined
                           ? ` · docs=${detail.doc_count}`
@@ -402,18 +512,20 @@
           detail.open = true;
         }
       });
-      requestAnimationFrame(() => {
-        window.scrollTo(0, scrollTarget);
-        if (pendingScroll !== null) {
+      if (pendingScroll !== null) {
+        const scrollTarget = pendingScroll;
+        requestAnimationFrame(() => {
+          window.scrollTo(0, scrollTarget);
           sessionStorage.removeItem(scrollKey);
           pendingScroll = null;
-        }
-      });
+        });
+      }
       bindAsyncStart(".js-start-job", true);
       bindAsyncStart(".js-stop-job", true);
       bindAsyncStart(".js-start-stage", false);
       bindAsyncStart(".js-stop-stage", false);
       bindViewLogsLinks();
+      bindSplitCopyButtons();
     }
 
     if (window.EventSource) {

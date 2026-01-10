@@ -27,7 +27,7 @@
       }
       .js-run-card.run-active {
         border-color: rgba(47, 158, 68, 0.6);
-        background: linear-gradient(135deg, rgba(20, 66, 40, 0.35), rgba(11, 15, 20, 0.1));
+        background-color: rgba(20, 66, 40, 0.28);
       }
       .js-run-card:hover {
         background-color: #0f1622;
@@ -35,6 +35,10 @@
       }
       .js-run-card .js-remove-run {
         cursor: pointer;
+      }
+      .run-total-badge {
+        font-size: 0.95rem;
+        padding: 6px 10px;
       }
     </style>
   </head>
@@ -47,6 +51,17 @@
               <div class="col">
                 <h2 class="page-title">ES Copy Runner</h2>
                 <div class="text-secondary">Run history with manual stage/job control.</div>
+                <div class="text-secondary small">
+                  {% if max_concurrent_jobs.is_some() %}
+                    Limit {{ max_concurrent_jobs.unwrap() }} concurrent jobs
+                  {% else %}
+                    Unlimited concurrent jobs
+                  {% endif %}
+                </div>
+                <div class="mt-1" id="runTotals">
+                  <span class="badge bg-green text-dark run-total-badge">Running {{ running_total }}</span>
+                  <span class="badge bg-blue text-white run-total-badge">Queued {{ queued_total }}</span>
+                </div>
               </div>
               <div class="col-auto">
                 <div class="btn-list">
@@ -94,6 +109,7 @@
                       <div class="mt-3 d-flex flex-wrap gap-2">
                         <span class="badge bg-secondary text-white">Total {{ run.jobs_total }}</span>
                         <span class="badge bg-yellow text-dark">Running {{ run.jobs_running }}</span>
+                        <span class="badge bg-blue text-white">Queued {{ run.jobs_queued }}</span>
                         <span class="badge bg-green text-dark">Succeeded {{ run.jobs_succeeded }}</span>
                         <span class="badge bg-red text-white">Failed {{ run.jobs_failed }}</span>
                       </div>
@@ -220,6 +236,7 @@
     }
 
     function renderRuns(runs) {
+      updateRunTotals(runs);
       if (noRunsCard) {
         noRunsCard.classList.toggle("d-none", runs.length > 0);
       }
@@ -258,6 +275,7 @@
                   <div class="mt-3 d-flex flex-wrap gap-2">
                     <span class="badge bg-secondary text-white">Total ${run.jobs_total}</span>
                     <span class="badge bg-yellow text-dark">Running ${run.jobs_running}</span>
+                    <span class="badge bg-blue text-white">Queued ${run.jobs_queued || 0}</span>
                     <span class="badge bg-green text-dark">Succeeded ${run.jobs_succeeded}</span>
                     <span class="badge bg-red text-white">Failed ${run.jobs_failed}</span>
                   </div>
@@ -269,6 +287,19 @@
       bindRunCardClicks();
       bindRemoveRunButtons();
       bindStopRunButtons();
+    }
+
+    function updateRunTotals(runs) {
+      const totalsEl = document.getElementById("runTotals");
+      if (!totalsEl) {
+        return;
+      }
+      const running = runs.reduce((sum, run) => sum + (run.jobs_running || 0), 0);
+      const queued = runs.reduce((sum, run) => sum + (run.jobs_queued || 0), 0);
+      totalsEl.innerHTML = `
+        <span class="badge bg-green text-dark run-total-badge">Running ${running}</span>
+        <span class="badge bg-blue text-white run-total-badge">Queued ${queued}</span>
+      `;
     }
 
     if (window.EventSource) {

@@ -91,6 +91,8 @@
                   <span class="badge bg-secondary text-white" id="jobStatusBadge">pending</span>
                 {% else if job.status.as_str() == "running" %}
                   <span class="badge bg-yellow text-dark" id="jobStatusBadge">running</span>
+                {% else if job.status.as_str() == "queued" %}
+                  <span class="badge bg-blue text-white" id="jobStatusBadge">queued</span>
                 {% else if job.status.as_str() == "succeeded" %}
                   <span class="badge bg-green text-dark" id="jobStatusBadge">succeeded</span>
                 {% else if job.status.as_str() == "stopped" %}
@@ -367,6 +369,8 @@
           badge.classList.add("bg-secondary", "text-white");
         } else if (status === "running") {
           badge.classList.add("bg-yellow", "text-dark");
+        } else if (status === "queued") {
+          badge.classList.add("bg-blue", "text-white");
         } else if (status === "succeeded") {
           badge.classList.add("bg-green", "text-dark");
         } else if (status === "stopped") {

@@ -131,6 +131,27 @@ The template name shown in UI is:
 - Exported ZIP strips ANSI escape codes from `runs/<id>/logs/*.log` for readability.
 - Status page shows CPU/memory and load graphs for host + process.
 
+### Status page metrics (overview)
+The `/status` page shows live host + application resource usage. Values update via SSE.
+
+Top cards:
+- **Host CPU**: total CPU utilization of the entire machine (percent).
+- **Server CPU**: CPU used by the `es-copy-indices-server` process only (percent).
+- **Child processes CPU**: combined CPU of all spawned `es-copy-indices` jobs (percent).
+- **Total CPU**: Server CPU + Child processes CPU (percent).
+- **Host Memory**: host memory used / total (MB).
+- **Server Memory**: memory used by the server process (MB).
+- **Child processes Memory**: combined memory of all job processes (MB).
+- **Total Memory**: server + child processes (MB).
+- **Running Jobs / Queued Jobs**: current job counts.
+- **Load 1/5/15**: system load averages (compare to CPU core count).
+
+Charts:
+- **CPU Usage (last 10 min)**: Server CPU, Child processes CPU, Total CPU (percent).
+- **Total vs Host CPU (last 10 min)**: Host CPU vs Total CPU (percent).
+- **Memory Usage (last 10 min)**: Server/Child/Total memory (MB).
+- **Load Average (last 10 min)**: 1/5/15 minute load averages (not percent).
+
 ### Support helpers
 - Export run ZIP to share configs/logs/metadata with L2 support.
 - Retry Failed to re-run only the failed jobs without rebuilding the run.
@@ -153,6 +174,9 @@ Flags are strict CLI-only (no env fallbacks).
 - `--insecure`: disable TLS verify for percentile queries (useful with self-signed).
 - `--runs-dir DIR`: store run history/logs (default `./runs`).
 - `--base-path PATH`: reverse-proxy base path (e.g. `/es-copy-indices`).
+- `--max-concurrent-jobs COUNT`: limit concurrent jobs; additional jobs stay queued.
+- `--refresh-seconds N`: UI SSE refresh interval for run/job pages (default 5).
+- `--metrics-seconds N`: status metrics sampling interval (default 5).
 
 ### Troubleshooting
 - `percentile request failed: 404` usually means the source index name is wrong:

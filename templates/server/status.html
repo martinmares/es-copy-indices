@@ -7,14 +7,13 @@
     <meta http-equiv="refresh" content="{{ refresh_seconds }}">
     {% endif %}
     <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartkick@5.0.1/dist/chartkick.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
+    <script src="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/js/tabler.min.js"></script>
     <style>
       .chart {
         width: 100%;
         height: 240px;
-        background: #0b0f14;
+        background: var(--tblr-body-bg, #0b0f14);
         border-radius: 6px;
       }
       .chart-legend {
@@ -46,6 +45,14 @@
                 <h2 class="page-title">System Status</h2>
                 <div class="text-secondary">Host + process utilization and load averages.</div>
               </div>
+              <div class="col-auto">
+                <div class="d-flex align-items-center gap-2">
+                  <span class="badge bg-yellow text-dark d-none" id="livePausedBadge">Live paused</span>
+                  <button class="btn btn-outline-warning btn-sm d-none" id="resumeLiveBtn" type="button">
+                    Resume live
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
           <div class="page-body">
@@ -69,7 +76,7 @@
               <div class="col-12 col-md-3">
                 <div class="card">
                   <div class="card-body">
-                    <div class="text-secondary">Children CPU</div>
+                    <div class="text-secondary">Child processes CPU</div>
                     <div class="h2 m-0" id="childrenCpu">{{ summary.children_cpu }}%</div>
                   </div>
                 </div>
@@ -101,7 +108,7 @@
               <div class="col-12 col-md-4">
                 <div class="card">
                   <div class="card-body">
-                    <div class="text-secondary">Children Memory</div>
+                    <div class="text-secondary">Child processes Memory</div>
                     <div class="h3 m-0" id="childrenMem">{{ summary.children_mem_mb }} MB</div>
                   </div>
                 </div>
@@ -125,6 +132,28 @@
               <div class="col-12 col-md-4">
                 <div class="card">
                   <div class="card-body">
+                    <div class="text-secondary">Queued Jobs</div>
+                    <div class="h2 m-0" id="queuedJobs">{{ summary.queued_jobs }}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Concurrency Limit</div>
+                    <div class="h2 m-0" id="jobLimit">
+                      {% if summary.max_concurrent_jobs.is_some() %}
+                        {{ summary.max_concurrent_jobs.unwrap() }}
+                      {% else %}
+                        Unlimited
+                      {% endif %}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
                     <div class="text-secondary">Load 1 / 5 / 15</div>
                     <div class="h2 m-0" id="loadAvg">{{ summary.load1 }} / {{ summary.load5 }} / {{ summary.load15 }}</div>
                   </div>
@@ -140,7 +169,7 @@
                       <span class="legend-dot" style="background:#4dabf7"></span>
                       <span class="legend-label">Server CPU</span>
                       <span class="legend-dot" style="background:#ffd43b"></span>
-                      <span class="legend-label">Children CPU</span>
+                      <span class="legend-label">Child processes CPU</span>
                       <span class="legend-dot" style="background:#69db7c"></span>
                       <span class="legend-label">Total CPU</span>
                     </div>
@@ -174,7 +203,7 @@
                       <span class="legend-dot" style="background:#4dabf7"></span>
                       <span class="legend-label">Server MB</span>
                       <span class="legend-dot" style="background:#ffd43b"></span>
-                      <span class="legend-label">Children MB</span>
+                      <span class="legend-label">Child processes MB</span>
                       <span class="legend-dot" style="background:#69db7c"></span>
                       <span class="legend-label">Total MB</span>
                       <span class="legend-dot" style="background:#ffa8a8"></span>
@@ -236,100 +265,161 @@
         document.getElementById("totalMem").textContent =
           `${Math.round(toMb(sample.total_mem_kb))} MB`;
         document.getElementById("runningJobs").textContent = `${sample.running_jobs}`;
+        document.getElementById("queuedJobs").textContent = `${sample.queued_jobs}`;
+        const limitLabel = sample.max_concurrent_jobs === null || sample.max_concurrent_jobs === undefined
+          ? "Unlimited"
+          : sample.max_concurrent_jobs;
+        document.getElementById("jobLimit").textContent = `${limitLabel}`;
       }
 
-      const cpuChart = new Chartkick.LineChart("cpuChart", [], {
-        min: 0,
-        max: 100,
-        points: true,
-        curve: false,
-        legend: "bottom",
-        colors: ["#4dabf7", "#ffd43b", "#69db7c"],
-        height: "240px",
+      let livePaused = false;
+      const livePausedBadge = document.getElementById("livePausedBadge");
+      const resumeLiveBtn = document.getElementById("resumeLiveBtn");
+
+      function setLivePaused(value) {
+        livePaused = value;
+        if (!livePausedBadge || !resumeLiveBtn) {
+          return;
+        }
+        if (value) {
+          livePausedBadge.classList.remove("d-none");
+          resumeLiveBtn.classList.remove("d-none");
+        } else {
+          livePausedBadge.classList.add("d-none");
+          resumeLiveBtn.classList.add("d-none");
+        }
+      }
+
+      if (resumeLiveBtn) {
+        resumeLiveBtn.addEventListener("click", () => {
+          setLivePaused(false);
+          redraw();
+        });
+      }
+
+      const tablerColors = {
+        blue: tabler.getColor("blue"),
+        yellow: tabler.getColor("yellow"),
+        green: tabler.getColor("green"),
+        red: tabler.getColor("red"),
+        orange: tabler.getColor("orange"),
+        cyan: tabler.getColor("cyan"),
+        lime: tabler.getColor("lime"),
+      };
+
+      const baseChartOptions = {
+        chart: {
+          type: "line",
+          height: 240,
+          zoom: { enabled: true },
+          toolbar: { show: true },
+          animations: { enabled: false },
+          background: "transparent",
+          events: {
+            zoomed: () => {
+              setLivePaused(true);
+            },
+            beforeResetZoom: () => {
+              setLivePaused(false);
+            },
+          },
+        },
+        theme: { mode: "dark" },
+        stroke: { curve: "straight", width: 2 },
+        markers: { size: 2 },
+        grid: { borderColor: "rgba(255, 255, 255, 0.1)" },
+        xaxis: { type: "datetime" },
+        yaxis: { min: 0 },
+        legend: { position: "bottom" },
+        tooltip: { x: { format: "HH:mm:ss" }, theme: "dark" },
+      };
+
+      const cpuChart = new ApexCharts(document.getElementById("cpuChart"), {
+        ...baseChartOptions,
+        colors: [tablerColors.blue, tablerColors.yellow, tablerColors.green],
+        yaxis: { min: 0, max: 100 },
+        series: [],
       });
-      const cpuTotalChart = new Chartkick.LineChart("cpuTotalChart", [], {
-        min: 0,
-        max: 100,
-        points: true,
-        curve: false,
-        legend: "bottom",
-        colors: ["#4dabf7", "#69db7c"],
-        height: "240px",
+      cpuChart.render();
+
+      const cpuTotalChart = new ApexCharts(document.getElementById("cpuTotalChart"), {
+        ...baseChartOptions,
+        colors: [tablerColors.cyan, tablerColors.green],
+        yaxis: { min: 0, max: 100 },
+        series: [],
       });
-      const memChart = new Chartkick.LineChart("memChart", [], {
-        min: 0,
-        points: true,
-        curve: false,
-        legend: "bottom",
-        colors: ["#4dabf7", "#ffd43b", "#69db7c", "#ffa8a8"],
-        height: "240px",
+      cpuTotalChart.render();
+
+      const memChart = new ApexCharts(document.getElementById("memChart"), {
+        ...baseChartOptions,
+        colors: [tablerColors.blue, tablerColors.yellow, tablerColors.green, tablerColors.red],
+        series: [],
       });
-      const loadChart = new Chartkick.LineChart("loadChart", [], {
-        min: 0,
-        points: true,
-        curve: false,
-        legend: "bottom",
-        colors: ["#74c0fc", "#c0eb75", "#ffa94d"],
-        height: "240px",
+      memChart.render();
+
+      const loadChart = new ApexCharts(document.getElementById("loadChart"), {
+        ...baseChartOptions,
+        colors: [tablerColors.cyan, tablerColors.lime, tablerColors.orange],
+        series: [],
       });
+      loadChart.render();
 
       function buildSeries() {
-        const toPoint = (value) => [new Date(value.ts * 1000), value.val];
         const cpuSeries = [
           {
             name: "Server CPU",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.proc_cpu]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: s.proc_cpu })),
           },
           {
-            name: "Children CPU",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.children_cpu]),
+            name: "Child processes CPU",
+            data: samples.map((s) => ({ x: s.ts * 1000, y: s.children_cpu })),
           },
           {
             name: "Total CPU",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.total_cpu]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: s.total_cpu })),
           },
         ];
         const cpuTotalSeries = [
           {
             name: "Host CPU",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.host_cpu]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: s.host_cpu })),
           },
           {
             name: "Total CPU",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.total_cpu]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: s.total_cpu })),
           },
         ];
         const toMb = (value) => value / 1024 / 1024;
         const memSeries = [
           {
             name: "Server MB",
-            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.proc_mem_kb)]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: toMb(s.proc_mem_kb) })),
           },
           {
-            name: "Children MB",
-            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.children_mem_kb)]),
+            name: "Child processes MB",
+            data: samples.map((s) => ({ x: s.ts * 1000, y: toMb(s.children_mem_kb) })),
           },
           {
             name: "Total MB",
-            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.total_mem_kb)]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: toMb(s.total_mem_kb) })),
           },
           {
             name: "Host Used MB",
-            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.host_mem_used_kb)]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: toMb(s.host_mem_used_kb) })),
           },
         ];
         const loadSeries = [
           {
             name: "Load 1",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.load1]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: s.load1 })),
           },
           {
             name: "Load 5",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.load5]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: s.load5 })),
           },
           {
             name: "Load 15",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.load15]),
+            data: samples.map((s) => ({ x: s.ts * 1000, y: s.load15 })),
           },
         ];
         return { cpuSeries, cpuTotalSeries, memSeries, loadSeries };
@@ -341,10 +431,12 @@
           updateSummary(samples[samples.length - 1]);
         }
         const series = buildSeries();
-        cpuChart.updateData(series.cpuSeries);
-        cpuTotalChart.updateData(series.cpuTotalSeries);
-        memChart.updateData(series.memSeries);
-        loadChart.updateData(series.loadSeries);
+        if (!livePaused) {
+          cpuChart.updateSeries(series.cpuSeries, true);
+          cpuTotalChart.updateSeries(series.cpuTotalSeries, true);
+          memChart.updateSeries(series.memSeries, true);
+          loadChart.updateSeries(series.loadSeries, true);
+        }
       }
 
       fetch(`${basePath}/status/snapshot`)
