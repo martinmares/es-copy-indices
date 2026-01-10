@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <title>Run {{ run.id }}</title>
+    {% if refresh_seconds > 0 %}
+    <meta http-equiv="refresh" content="{{ refresh_seconds }}">
+    {% endif %}
+    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
+    <style>
+      .status-text {
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="page-wrapper">
+        <div class="container-xl">
+          <div class="page-header d-print-none">
+            <div class="row align-items-center">
+              <div class="col">
+                <a class="text-secondary" href="{{ base_path }}/">&#8592; Back to runs</a>
+                <h2 class="page-title">Run {{ run.id }}</h2>
+                <div class="text-secondary">Created at {{ run.created_at }}</div>
+              </div>
+              <div class="col-auto"></div>
+            </div>
+          </div>
+          <div class="page-body">
+            {% for stage in run.stages %}
+              <div class="card mb-3">
+                <div class="card-header">
+                  <div class="card-title">{{ stage.name }}</div>
+                  <div class="card-actions">
+                    <form class="js-start-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/start" method="post">
+                      <button class="btn btn-primary" type="submit">Start Stage</button>
+                    </form>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="list-group list-group-flush">
+                    {% for job in stage.jobs %}
+                      <div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <div>
+                          <div class="fw-bold">{{ job.name }}</div>
+                          {% if job.status.as_str() == "pending" %}
+                            <span class="badge bg-secondary text-white status-text">pending</span>
+                          {% else if job.status.as_str() == "running" %}
+                            <span class="badge bg-yellow text-dark status-text">running</span>
+                          {% else if job.status.as_str() == "succeeded" %}
+                            <span class="badge bg-green text-dark status-text">succeeded</span>
+                          {% else %}
+                            <span class="badge bg-red text-white status-text">failed</span>
+                          {% endif %}
+                        </div>
+                        <div class="flex-grow-1" style="min-width: 220px; max-width: 320px;">
+                          {% if job.progress_width.is_some() %}
+                            <div class="progress">
+                              <div class="progress-bar bg-blue" style="width: {{ job.progress_width.unwrap() }}%"></div>
+                            </div>
+                            <div class="text-secondary small mt-1">
+                              {{ job.progress_label.as_deref().unwrap_or("n/a") }}
+                              {% if job.completed_line %}- completed{% endif %}
+                            </div>
+                          {% endif %}
+                        </div>
+                        <div class="btn-list">
+                          <form class="js-start-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/start?redirect=run" method="post">
+                            <button class="btn btn-outline-primary" type="submit">Start Job</button>
+                          </form>
+                          <a class="btn btn-outline-secondary" href="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}">View Logs</a>
+                        </div>
+                      </div>
+                    {% endfor %}
+                  </div>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+  <script>
+    const scrollKey = "es-copy-scroll";
+    const saved = sessionStorage.getItem(scrollKey);
+    if (saved) {
+      window.scrollTo(0, parseInt(saved, 10) || 0);
+      sessionStorage.removeItem(scrollKey);
+    }
+    function bindAsyncStart(selector, storeScroll) {
+      document.querySelectorAll(selector).forEach((form) => {
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          if (storeScroll) {
+            sessionStorage.setItem(scrollKey, String(window.scrollY || 0));
+          }
+          fetch(form.action, { method: "POST" })
+            .then(() => {})
+            .catch(() => {});
+        });
+      });
+    }
+    bindAsyncStart(".js-start-job", true);
+    bindAsyncStart(".js-start-stage", false);
+  </script>
+</html>

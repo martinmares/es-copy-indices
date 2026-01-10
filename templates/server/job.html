@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <title>Job {{ job.name }}</title>
+    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
+    <style>
+      .log-panel pre {
+        margin: 0;
+        max-height: 360px;
+        overflow: auto;
+        font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+        font-size: 12px;
+        line-height: 1.4;
+        background: #0b0f14;
+        color: #cfe3f4;
+        padding: 12px;
+        border-radius: 6px;
+      }
+      .terminal-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 12px;
+        background: #12171d;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        border-top-left-radius: 8px;
+        border-top-right-radius: 8px;
+      }
+      .terminal-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        display: inline-block;
+      }
+      .terminal-dot.red { background: #ff5f57; }
+      .terminal-dot.yellow { background: #febc2e; }
+      .terminal-dot.green { background: #28c840; }
+      .ansi-bold { font-weight: 700; }
+      .ansi-fg-black { color: #0b0f14; }
+      .ansi-fg-red { color: #ff6b6b; }
+      .ansi-fg-green { color: #51cf66; }
+      .ansi-fg-yellow { color: #fcc419; }
+      .ansi-fg-blue { color: #339af0; }
+      .ansi-fg-magenta { color: #cc5de8; }
+      .ansi-fg-cyan { color: #22b8cf; }
+      .ansi-fg-white { color: #f1f3f5; }
+      .ansi-fg-bright-black { color: #868e96; }
+      .ansi-fg-bright-red { color: #ff8787; }
+      .ansi-fg-bright-green { color: #69db7c; }
+      .ansi-fg-bright-yellow { color: #ffe066; }
+      .ansi-fg-bright-blue { color: #74c0fc; }
+      .ansi-fg-bright-magenta { color: #da77f2; }
+      .ansi-fg-bright-cyan { color: #66d9e8; }
+      .ansi-fg-bright-white { color: #ffffff; }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="page-wrapper">
+        <div class="container-xl">
+          <div class="page-header d-print-none">
+            <div class="row align-items-center">
+              <div class="col">
+                <a class="text-secondary" href="{{ base_path }}/runs/{{ run_id }}">&#8592; Back to run</a>
+                <h2 class="page-title">{{ job.name }}</h2>
+                <div class="text-secondary">Stage {{ job.stage_name }}</div>
+              </div>
+              <div class="col-auto">
+                {% if job.status.as_str() == "pending" %}
+                  <span class="badge bg-secondary text-white">pending</span>
+                {% else if job.status.as_str() == "running" %}
+                  <span class="badge bg-yellow text-dark">running</span>
+                {% else if job.status.as_str() == "succeeded" %}
+                  <span class="badge bg-green text-dark">succeeded</span>
+                {% else %}
+                  <span class="badge bg-red text-white">failed</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          <div class="page-body">
+            <div class="row row-cards">
+              <div class="col-12">
+                <div class="card log-panel">
+                  <div class="terminal-header">
+                    <span class="terminal-dot red"></span>
+                    <span class="terminal-dot yellow"></span>
+                    <span class="terminal-dot green"></span>
+                    <span class="ms-2 text-secondary">STDOUT</span>
+                  </div>
+                  <div class="card-body">
+                    <pre id="stdout">
+{% for line in job.stdout_tail %}{{ line }}
+{% endfor %}</pre>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12">
+                <div class="card log-panel">
+                  <div class="terminal-header">
+                    <span class="terminal-dot red"></span>
+                    <span class="terminal-dot yellow"></span>
+                    <span class="terminal-dot green"></span>
+                    <span class="ms-2 text-secondary">STDERR</span>
+                  </div>
+                  <div class="card-body">
+                    <pre id="stderr">
+{% for line in job.stderr_tail %}{{ line }}
+{% endfor %}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      function escapeHtml(value) {
+        return value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+      function renderAnsi(line) {
+        const escaped = escapeHtml(line);
+        let output = "";
+        let classes = [];
+        let index = 0;
+        while (index < escaped.length) {
+          const escIndex = escaped.indexOf("\u001b[", index);
+          if (escIndex === -1) {
+            output += wrapAnsi(escaped.slice(index), classes);
+            break;
+          }
+          output += wrapAnsi(escaped.slice(index, escIndex), classes);
+          const controlEnd = findControlSequenceEnd(escaped, escIndex + 2);
+          if (controlEnd.end === -1) {
+            output += wrapAnsi(escaped.slice(escIndex), classes);
+            break;
+          }
+          if (controlEnd.code !== "m") {
+            index = controlEnd.end + 1;
+            continue;
+          }
+          const codes = escaped
+            .slice(escIndex + 2, controlEnd.end)
+            .split(";")
+            .map((c) => parseInt(c, 10));
+          classes = applyAnsiCodes(classes, codes);
+          index = controlEnd.end + 1;
+        }
+        return output;
+      }
+      function findControlSequenceEnd(text, start) {
+        for (let i = start; i < text.length; i += 1) {
+          const code = text.charCodeAt(i);
+          if (code >= 64 && code <= 126) {
+            return { end: i, code: text[i] };
+          }
+        }
+        return { end: -1, code: "" };
+      }
+      function wrapAnsi(text, classes) {
+        if (!text) {
+          return "";
+        }
+        if (classes.length === 0) {
+          return text;
+        }
+        return `<span class="${classes.join(" ")}">${text}</span>`;
+      }
+      function applyAnsiCodes(current, codes) {
+        let next = current.filter((c) => !c.startsWith("ansi-fg-") && c !== "ansi-bold");
+        for (const code of codes) {
+          if (code === 0) {
+            next = [];
+          } else if (code === 1) {
+            if (!next.includes("ansi-bold")) {
+              next.push("ansi-bold");
+            }
+          } else if (code === 22) {
+            next = next.filter((c) => c !== "ansi-bold");
+          } else if (code >= 30 && code <= 37) {
+            next = next.filter((c) => !c.startsWith("ansi-fg-"));
+            next.push(`ansi-fg-${ansiColorName(code - 30)}`);
+          } else if (code >= 90 && code <= 97) {
+            next = next.filter((c) => !c.startsWith("ansi-fg-"));
+            next.push(`ansi-fg-bright-${ansiColorName(code - 90)}`);
+          } else if (code === 39) {
+            next = next.filter((c) => !c.startsWith("ansi-fg-"));
+          }
+        }
+        return next;
+      }
+      function ansiColorName(offset) {
+        switch (offset) {
+          case 0: return "black";
+          case 1: return "red";
+          case 2: return "green";
+          case 3: return "yellow";
+          case 4: return "blue";
+          case 5: return "magenta";
+          case 6: return "cyan";
+          case 7: return "white";
+          default: return "white";
+        }
+      }
+      function renderInitial(pre) {
+        const lines = pre.textContent.split("\n");
+        pre.innerHTML = lines.map(renderAnsi).join("\n");
+      }
+      function appendLine(pre, line) {
+        const rendered = renderAnsi(line);
+        pre.innerHTML += rendered + "\n";
+        pre.scrollTop = pre.scrollHeight;
+      }
+      function connectStream(targetId, stream) {
+        const target = document.getElementById(targetId);
+        renderInitial(target);
+        const source = new EventSource(`{{ base_path }}/runs/{{ run_id }}/jobs/{{ job.id }}/stream?stream=${stream}`);
+        source.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(event.data);
+            appendLine(target, payload.line);
+          } catch (err) {
+            console.log("Invalid event", err);
+          }
+        };
+      }
+      connectStream("stdout", "stdout");
+      connectStream("stderr", "stderr");
+    </script>
+  </body>
+</html>

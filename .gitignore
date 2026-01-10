@@ -21,6 +21,7 @@ cert/
 certs/
 es-copy-indices
 audit/
+runs/
 
 # Icon must end with two \r
 Icon

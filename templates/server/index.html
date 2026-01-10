@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <title>ES Copy Runner</title>
+    {% if refresh_seconds > 0 %}
+    <meta http-equiv="refresh" content="{{ refresh_seconds }}">
+    {% endif %}
+    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
+  </head>
+  <body>
+    <div class="page">
+      <div class="page-wrapper">
+        <div class="container-xl">
+          <div class="page-header d-print-none">
+            <div class="row align-items-center">
+              <div class="col">
+                <h2 class="page-title">ES Copy Runner</h2>
+                <div class="text-secondary">Run history with manual stage/job control.</div>
+              </div>
+              <div class="col-auto">
+                <div class="btn-list">
+                  <a class="btn btn-outline-secondary" href="{{ base_path }}/status">Status</a>
+                  <form action="{{ base_path }}/runs" method="post">
+                    <button class="btn btn-primary" type="submit">Create New Run</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="page-body">
+            {% if runs.len() == 0 %}
+              <div class="card">
+                <div class="card-body text-secondary">No runs yet. Create the first run to generate jobs.</div>
+              </div>
+            {% endif %}
+            <div class="row row-cards">
+              {% for run in runs %}
+                <div class="col-12">
+                  <a class="card card-link" href="{{ base_path }}/runs/{{ run.id }}">
+                    <div class="card-body">
+                      <div class="d-flex align-items-center justify-content-between">
+                        <div class="h3 m-0">{{ run.id }}</div>
+                        <div class="text-secondary">{{ run.created_at }}</div>
+                      </div>
+                      <div class="mt-3 d-flex flex-wrap gap-2">
+                        <span class="badge bg-secondary text-white">Total {{ run.jobs_total }}</span>
+                        <span class="badge bg-yellow text-dark">Running {{ run.jobs_running }}</span>
+                        <span class="badge bg-green text-dark">Succeeded {{ run.jobs_succeeded }}</span>
+                        <span class="badge bg-red text-white">Failed {{ run.jobs_failed }}</span>
+                      </div>
+                    </div>
+                  </a>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

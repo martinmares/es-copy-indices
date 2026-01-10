@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <title>System Status</title>
+    {% if refresh_seconds > 0 %}
+    <meta http-equiv="refresh" content="{{ refresh_seconds }}">
+    {% endif %}
+    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartkick@5.0.1/dist/chartkick.min.js"></script>
+    <style>
+      .chart {
+        width: 100%;
+        height: 240px;
+        background: #0b0f14;
+        border-radius: 6px;
+      }
+      .chart-legend {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .legend-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        display: inline-block;
+      }
+      .legend-label {
+        font-size: 12px;
+        color: #9aa3ab;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="page-wrapper">
+        <div class="container-xl">
+          <div class="page-header d-print-none">
+            <div class="row align-items-center">
+              <div class="col">
+                <a class="text-secondary" href="{{ base_path }}/">&#8592; Back to runs</a>
+                <h2 class="page-title">System Status</h2>
+                <div class="text-secondary">Host + process utilization and load averages.</div>
+              </div>
+            </div>
+          </div>
+          <div class="page-body">
+            <div class="row row-cards">
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Host CPU</div>
+                    <div class="h2 m-0" id="hostCpu">{{ summary.host_cpu }}%</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Process CPU</div>
+                    <div class="h2 m-0" id="procCpu">{{ summary.proc_cpu }}%</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Load 1 / 5 / 15</div>
+                    <div class="h2 m-0" id="loadAvg">{{ summary.load1 }} / {{ summary.load5 }} / {{ summary.load15 }}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-6">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Host Memory</div>
+                    <div class="h3 m-0" id="hostMem">{{ summary.host_mem_used_mb }} / {{ summary.host_mem_total_mb }} MB</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-6">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Process Memory</div>
+                    <div class="h3 m-0" id="procMem">{{ summary.proc_mem_mb }} MB</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12">
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title">CPU Usage (last 10 min)</div>
+                  </div>
+                  <div class="card-body">
+                    <div class="chart-legend mb-2">
+                      <span class="legend-dot" style="background:#4dabf7"></span>
+                      <span class="legend-label">Host CPU</span>
+                      <span class="legend-dot" style="background:#ffd43b"></span>
+                      <span class="legend-label">Process CPU</span>
+                    </div>
+                    <div id="cpuChart" class="chart"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12">
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title">Memory (last 10 min)</div>
+                  </div>
+                  <div class="card-body">
+                    <div class="chart-legend mb-2">
+                      <span class="legend-dot" style="background:#69db7c"></span>
+                      <span class="legend-label">Host Used MB</span>
+                      <span class="legend-dot" style="background:#ffa8a8"></span>
+                      <span class="legend-label">Process MB</span>
+                    </div>
+                    <div id="memChart" class="chart"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12">
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title">Load Average (last 10 min)</div>
+                  </div>
+                  <div class="card-body">
+                    <div class="chart-legend mb-2">
+                      <span class="legend-dot" style="background:#74c0fc"></span>
+                      <span class="legend-label">Load 1</span>
+                      <span class="legend-dot" style="background:#c0eb75"></span>
+                      <span class="legend-label">Load 5</span>
+                      <span class="legend-dot" style="background:#ffa94d"></span>
+                      <span class="legend-label">Load 15</span>
+                    </div>
+                    <div id="loadChart" class="chart"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const basePath = "{{ base_path }}";
+      const samples = [];
+      const windowSeconds = 600;
+
+      function trimSamples() {
+        const cutoff = Math.floor(Date.now() / 1000) - windowSeconds;
+        while (samples.length && samples[0].ts < cutoff) {
+          samples.shift();
+        }
+      }
+
+      function updateSummary(sample) {
+        const toMb = (value) => value / 1024 / 1024;
+        document.getElementById("hostCpu").textContent = `${sample.host_cpu.toFixed(1)}%`;
+        document.getElementById("procCpu").textContent = `${sample.proc_cpu.toFixed(1)}%`;
+        document.getElementById("loadAvg").textContent =
+          `${sample.load1.toFixed(2)} / ${sample.load5.toFixed(2)} / ${sample.load15.toFixed(2)}`;
+        document.getElementById("hostMem").textContent =
+          `${Math.round(toMb(sample.host_mem_used_kb))} / ${Math.round(toMb(sample.host_mem_total_kb))} MB`;
+        document.getElementById("procMem").textContent =
+          `${Math.round(toMb(sample.proc_mem_kb))} MB`;
+      }
+
+      const cpuChart = new Chartkick.LineChart("cpuChart", [], {
+        min: 0,
+        max: 100,
+        points: true,
+        curve: false,
+        legend: "bottom",
+        colors: ["#4dabf7", "#ffd43b"],
+        height: "240px",
+      });
+      const memChart = new Chartkick.LineChart("memChart", [], {
+        min: 0,
+        points: true,
+        curve: false,
+        legend: "bottom",
+        colors: ["#69db7c", "#ffa8a8"],
+        height: "240px",
+      });
+      const loadChart = new Chartkick.LineChart("loadChart", [], {
+        min: 0,
+        points: true,
+        curve: false,
+        legend: "bottom",
+        colors: ["#74c0fc", "#c0eb75", "#ffa94d"],
+        height: "240px",
+      });
+
+      function buildSeries() {
+        const toPoint = (value) => [new Date(value.ts * 1000), value.val];
+        const cpuSeries = [
+          {
+            name: "Host CPU",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.host_cpu]),
+          },
+          {
+            name: "Process CPU",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.proc_cpu]),
+          },
+        ];
+        const toMb = (value) => value / 1024 / 1024;
+        const memSeries = [
+          {
+            name: "Host Used MB",
+            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.host_mem_used_kb)]),
+          },
+          {
+            name: "Process MB",
+            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.proc_mem_kb)]),
+          },
+        ];
+        const loadSeries = [
+          {
+            name: "Load 1",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.load1]),
+          },
+          {
+            name: "Load 5",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.load5]),
+          },
+          {
+            name: "Load 15",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.load15]),
+          },
+        ];
+        return { cpuSeries, memSeries, loadSeries };
+      }
+
+      function redraw() {
+        trimSamples();
+        if (samples.length) {
+          updateSummary(samples[samples.length - 1]);
+        }
+        const series = buildSeries();
+        cpuChart.updateData(series.cpuSeries);
+        memChart.updateData(series.memSeries);
+        loadChart.updateData(series.loadSeries);
+      }
+
+      fetch(`${basePath}/status/snapshot`)
+        .then((response) => response.json())
+        .then((data) => {
+          if (Array.isArray(data)) {
+            samples.push(...data);
+            redraw();
+          }
+        })
+        .catch(() => {});
+
+      const source = new EventSource(`${basePath}/status/stream`);
+      source.onmessage = (event) => {
+        try {
+          const sample = JSON.parse(event.data);
+          samples.push(sample);
+          redraw();
+        } catch (err) {
+          console.log("Invalid metrics event", err);
+        }
+      };
+    </script>
+  </body>
+</html>
