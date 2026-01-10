@@ -134,12 +134,13 @@
                             {% endif %}
                           </div>
                           <div class="btn-list">
-                            <form class="js-start-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/start?redirect=run" method="post">
-                              <button class="btn btn-outline-primary" type="submit">Start Job</button>
-                            </form>
-                            {% if job.status.as_str() == "running" %}
+                            {% if job.status.as_str() == "running" || job.status.as_str() == "queued" %}
                               <form class="js-stop-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/stop" method="post">
                                 <button class="btn btn-outline-danger" type="submit">Stop Job</button>
+                              </form>
+                            {% else %}
+                              <form class="js-start-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/start?redirect=run" method="post">
+                                <button class="btn btn-outline-primary" type="submit">Start Job</button>
                               </form>
                             {% endif %}
                             <a class="btn btn-outline-secondary js-view-logs" href="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}">View Logs</a>
@@ -394,10 +395,16 @@
                     ${job.progress_label || "n/a"}
                   </div>`
                 : "";
-              const stopButton = job.status === "running"
+              const stopButton = (job.status === "running" || job.status === "queued")
                 ? `
                     <form class="js-stop-job" action="${basePath}/runs/${run.id}/jobs/${job.id}/stop" method="post">
                       <button class="btn btn-outline-danger" type="submit">Stop Job</button>
+                    </form>`
+                : "";
+              const startButton = (job.status !== "running" && job.status !== "queued")
+                ? `
+                    <form class="js-start-job" action="${basePath}/runs/${run.id}/jobs/${job.id}/start?redirect=run" method="post">
+                      <button class="btn btn-outline-primary" type="submit">Start Job</button>
                     </form>`
                 : "";
               return `
@@ -410,9 +417,7 @@
                     ${progress}
                   </div>
                   <div class="btn-list">
-                    <form class="js-start-job" action="${basePath}/runs/${run.id}/jobs/${job.id}/start?redirect=run" method="post">
-                      <button class="btn btn-outline-primary" type="submit">Start Job</button>
-                    </form>
+                    ${startButton}
                     ${stopButton}
                     <a class="btn btn-outline-secondary js-view-logs" href="${basePath}/runs/${run.id}/jobs/${job.id}">View Logs</a>
                   </div>

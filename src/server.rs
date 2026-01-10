@@ -90,7 +90,7 @@ struct AppState {
     runs: Arc<RwLock<RunStore>>,
     quarantined_runs: Arc<RwLock<Vec<String>>>,
     job_queue: Arc<Mutex<VecDeque<QueuedJob>>>,
-    max_concurrent_jobs: Option<usize>,
+    max_concurrent_jobs: Arc<RwLock<Option<usize>>>,
     queue_notify: Arc<Notify>,
 }
 
@@ -661,11 +661,11 @@ pub async fn run() {
         runs: Arc::new(RwLock::new(RunStore::default())),
         quarantined_runs: Arc::new(RwLock::new(Vec::new())),
         job_queue: Arc::new(Mutex::new(VecDeque::new())),
-        max_concurrent_jobs: if args.max_concurrent_jobs == 0 {
+        max_concurrent_jobs: Arc::new(RwLock::new(if args.max_concurrent_jobs == 0 {
             None
         } else {
             Some(args.max_concurrent_jobs)
-        },
+        })),
         queue_notify: Arc::new(Notify::new()),
     });
 
@@ -675,7 +675,7 @@ pub async fn run() {
         Arc::clone(&state.metrics),
         state.metrics_tx.clone(),
         Arc::clone(&state.runs),
-        state.max_concurrent_jobs,
+        Arc::clone(&state.max_concurrent_jobs),
         args.metrics_seconds,
     );
 
@@ -688,6 +688,10 @@ pub async fn run() {
         .route("/runs", post(create_run))
         .route("/runs/snapshot", get(runs_snapshot))
         .route("/runs/stream", get(runs_stream))
+        .route(
+            "/settings/max-concurrent-jobs",
+            post(update_max_concurrent_jobs),
+        )
         .route("/runs/{run_id}", get(run_view))
         .route("/runs/{run_id}/stream", get(run_stream))
         .route("/runs/{run_id}/delete", post(delete_run))
@@ -727,6 +731,7 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_summaries(&state).await;
     let running_total = runs.iter().map(|run| run.jobs_running).sum();
     let queued_total = runs.iter().map(|run| run.jobs_queued).sum();
+    let max_concurrent_jobs = state.max_concurrent_jobs.read().await.clone();
     let template = IndexTemplate {
         runs,
         refresh_seconds: 0,
@@ -735,7 +740,7 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         templates: build_template_views(&state),
         endpoints_json: endpoints_json(&state),
         templates_json: templates_json(&state),
-        max_concurrent_jobs: state.max_concurrent_jobs,
+        max_concurrent_jobs,
         running_total,
         queued_total,
     };
@@ -772,6 +777,12 @@ struct CreateRunForm {
     dry_run: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct MaxConcurrentForm {
+    delta: Option<i32>,
+    value: Option<usize>,
+}
+
 async fn create_run(
     State(state): State<Arc<AppState>>,
     Form(form): Form<CreateRunForm>,
@@ -799,6 +810,33 @@ async fn create_run(
         )
             .into_response(),
     }
+}
+
+async fn update_max_concurrent_jobs(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<MaxConcurrentForm>,
+) -> impl IntoResponse {
+    let mut guard = state.max_concurrent_jobs.write().await;
+    let current = guard.unwrap_or(0);
+    let mut next = if let Some(value) = form.value {
+        value as i32
+    } else {
+        let delta = form.delta.unwrap_or(0);
+        current as i32 + delta
+    };
+    if next < 0 {
+        next = 0;
+    }
+    if next == 0 {
+        *guard = None;
+    } else {
+        *guard = Some(next as usize);
+    }
+    drop(guard);
+    state.queue_notify.notify_one();
+    Json(json!({
+        "max_concurrent_jobs": state.max_concurrent_jobs.read().await.clone()
+    }))
 }
 
 async fn run_view(
@@ -1071,20 +1109,10 @@ async fn retry_failed(
     }
 
     for job_id in job_ids.iter() {
-        let state_clone = Arc::clone(&state);
-        let run_id_clone = run_id.clone();
-        let job_id_clone = job_id.clone();
-        tokio::spawn(async move {
-            if let Err(err) = start_job_runner(
-                Arc::clone(&state_clone),
-                run_id_clone.clone(),
-                job_id_clone.clone(),
-            )
-            .await
-            {
-                warn!("Failed to retry job {}: {}", job_id_clone, err);
-            }
-        });
+        if let Err(err) = start_job_runner(Arc::clone(&state), run_id.clone(), job_id.clone()).await
+        {
+            warn!("Failed to retry job {}: {}", job_id, err);
+        }
     }
 
     (
@@ -1341,7 +1369,8 @@ async fn start_job_runner(
     run_id: String,
     job_id: String,
 ) -> Result<(), String> {
-    let running_count = if state.max_concurrent_jobs.is_some() {
+    let max_concurrent_jobs = state.max_concurrent_jobs.read().await.clone();
+    let running_count = if max_concurrent_jobs.is_some() {
         let runs = state.runs.read().await;
         count_running_jobs(&runs)
     } else {
@@ -1363,7 +1392,7 @@ async fn start_job_runner(
             if matches!(job.status, JobStatus::Running) {
                 return Ok(());
             }
-            if let Some(max) = state.max_concurrent_jobs {
+            if let Some(max) = max_concurrent_jobs {
                 if running_count >= max {
                     job.status = JobStatus::Queued;
                     queued = true;
@@ -1466,9 +1495,6 @@ async fn remove_from_queue(state: &Arc<AppState>, run_id: &str, job_id: &str) {
 }
 
 fn start_queue_worker(state: Arc<AppState>) {
-    if state.max_concurrent_jobs.is_none() {
-        return;
-    }
     tokio::spawn(async move {
         queue_worker(state).await;
     });
@@ -1478,10 +1504,11 @@ async fn queue_worker(state: Arc<AppState>) {
     loop {
         state.queue_notify.notified().await;
         loop {
-            let max = match state.max_concurrent_jobs {
-                Some(max) => max,
-                None => return,
-            };
+            let max = state
+                .max_concurrent_jobs
+                .read()
+                .await
+                .unwrap_or(usize::MAX);
             let running = {
                 let runs = state.runs.read().await;
                 count_running_jobs(&runs)
@@ -1901,7 +1928,7 @@ fn start_metrics_sampler(
     metrics: Arc<RwLock<MetricsState>>,
     sender: broadcast::Sender<MetricsSample>,
     runs: Arc<RwLock<RunStore>>,
-    max_concurrent_jobs: Option<usize>,
+    max_concurrent_jobs: Arc<RwLock<Option<usize>>>,
     seconds: u64,
 ) {
     let interval_seconds = if seconds == 0 { 5 } else { seconds };
@@ -1968,6 +1995,7 @@ fn start_metrics_sampler(
                 (running, queued)
             };
 
+            let max_concurrent_jobs = max_concurrent_jobs.read().await.clone();
             let sample = MetricsSample {
                 ts: chrono::Utc::now().timestamp(),
                 host_cpu,
@@ -2465,11 +2493,9 @@ async fn load_runs(state: &AppState) {
             }
         }
     }
-    if state.max_concurrent_jobs.is_some() {
-        let queue = state.job_queue.lock().await;
-        if !queue.is_empty() {
-            state.queue_notify.notify_one();
-        }
+    let queue = state.job_queue.lock().await;
+    if !queue.is_empty() {
+        state.queue_notify.notify_one();
     }
 }
 

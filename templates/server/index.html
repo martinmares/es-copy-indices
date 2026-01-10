@@ -40,6 +40,26 @@
         font-size: 0.95rem;
         padding: 6px 10px;
       }
+      .page-subtitle {
+        font-size: 1.05rem;
+      }
+      .concurrency-row {
+        font-size: 0.85rem;
+        padding: 6px 0;
+      }
+      .concurrency-value {
+        font-weight: 700;
+        color: #ffffff !important;
+        border-color: rgba(255, 255, 255, 0.25);
+        background-color: rgba(59, 130, 246, 0.25);
+        font-size: 0.95rem;
+        min-width: 44px;
+        justify-content: center;
+        opacity: 1;
+      }
+      .concurrency-row .btn {
+        min-width: 32px;
+      }
     </style>
   </head>
   <body>
@@ -50,13 +70,28 @@
             <div class="row align-items-center">
               <div class="col">
                 <h2 class="page-title">ES Copy Runner</h2>
-                <div class="text-secondary">Run history with manual stage/job control.</div>
-                <div class="text-secondary small">
-                  {% if max_concurrent_jobs.is_some() %}
-                    Limit {{ max_concurrent_jobs.unwrap() }} concurrent jobs
-                  {% else %}
-                    Unlimited concurrent jobs
-                  {% endif %}
+                <div class="text-secondary page-subtitle">Run history with manual stage/job control.</div>
+                <div class="d-flex align-items-center gap-2 concurrency-row">
+                  <div class="text-secondary">Max concurrent jobs</div>
+                  <div class="btn-group btn-group-sm" role="group" aria-label="Adjust concurrency">
+                    <button class="btn btn-outline-secondary" id="decreaseConcurrency" type="button">&nbsp;&nbsp;
+                      <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M6 9l6 6l6-6"></path>
+                      </svg>
+                      &nbsp;&nbsp;</button>
+                    <span class="btn btn-outline-secondary disabled concurrency-value" id="maxConcurrencyValue" data-max-concurrency="{{ max_concurrent_jobs.unwrap_or(0) }}">
+                      {% if max_concurrent_jobs.is_some() %}
+                        {{ max_concurrent_jobs.unwrap() }}
+                      {% else %}
+                        ∞
+                      {% endif %}
+                    </span>
+                    <button class="btn btn-outline-secondary" id="increaseConcurrency" type="button">&nbsp;&nbsp;
+                      <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M6 15l6-6l6 6"></path>
+                      </svg>
+                      &nbsp;&nbsp;</button>
+                  </div>
                 </div>
                 <div class="mt-1" id="runTotals">
                   <span class="badge bg-green text-dark run-total-badge">Running {{ running_total }}</span>
@@ -225,6 +260,12 @@
     const runsList = document.getElementById("runsList");
     const noRunsCard = document.getElementById("noRunsCard");
     const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+    const maxConcurrencyValue = document.getElementById("maxConcurrencyValue");
+    const decreaseConcurrencyBtn = document.getElementById("decreaseConcurrency");
+    const increaseConcurrencyBtn = document.getElementById("increaseConcurrency");
+    let maxConcurrency = maxConcurrencyValue
+      ? parseInt(maxConcurrencyValue.dataset.maxConcurrency || "0", 10)
+      : 0;
 
     function escapeHtml(value) {
       return value
@@ -233,6 +274,38 @@
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;");
+    }
+
+    function renderMaxConcurrency(value) {
+      if (!maxConcurrencyValue) {
+        return;
+      }
+      maxConcurrency = Number.isFinite(value) ? value : 0;
+      maxConcurrencyValue.dataset.maxConcurrency = String(maxConcurrency);
+      maxConcurrencyValue.textContent = maxConcurrency > 0 ? String(maxConcurrency) : "∞";
+    }
+
+    function updateMaxConcurrency(delta) {
+      const params = new URLSearchParams();
+      params.set("delta", String(delta));
+      fetch(`${basePath}/settings/max-concurrent-jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          const next = data && data.max_concurrent_jobs ? data.max_concurrent_jobs : 0;
+          renderMaxConcurrency(next);
+        })
+        .catch(() => {});
+    }
+
+    if (decreaseConcurrencyBtn) {
+      decreaseConcurrencyBtn.addEventListener("click", () => updateMaxConcurrency(-1));
+    }
+    if (increaseConcurrencyBtn) {
+      increaseConcurrencyBtn.addEventListener("click", () => updateMaxConcurrency(1));
     }
 
     function renderRuns(runs) {
