@@ -1,6 +1,6 @@
 use askama::Template;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Form, Path, Query, State};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Sse};
 use axum::Json;
 use axum::routing::{get, post};
@@ -9,7 +9,9 @@ use clap::Parser;
 use reqwest::Certificate;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use libc::{kill, SIGTERM};
 use std::collections::{HashMap, VecDeque};
+use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,9 +20,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{broadcast, RwLock};
 use std::convert::Infallible;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 use tokio_stream::StreamExt;
 use tracing::{info, warn};
+use walkdir::WalkDir;
+use zip::write::FileOptions;
 
 const DEFAULT_STAGE_NAME: &str = "copy";
 const SPLIT_SUFFIX: &str = "split";
@@ -30,21 +34,9 @@ const MAX_TAIL_LINES: usize = 200;
 #[command(name = "es-copy-indices-server")]
 struct ServerArgs {
     #[arg(long, value_name = "PATH")]
-    src_config: PathBuf,
-    #[arg(long, value_name = "PATH")]
-    dst_config: Option<PathBuf>,
-    #[arg(long, env = "ES_ENDPOINT_SRC")]
-    src_url: String,
-    #[arg(long, env = "ES_ENDPOINT_DST")]
-    dst_url: String,
-    #[arg(long, env = "ES_USER_SRC")]
-    src_user: Option<String>,
-    #[arg(long, env = "ES_PASSWD_SRC")]
-    src_pass: Option<String>,
-    #[arg(long, env = "ES_USER_DST")]
-    dst_user: Option<String>,
-    #[arg(long, env = "ES_PASSWD_DST")]
-    dst_pass: Option<String>,
+    main_config: PathBuf,
+    #[arg(long = "env-templates", alias = "templates", value_name = "DIR")]
+    templates_dir: PathBuf,
     #[arg(long, value_name = "PATH")]
     ca_path: Option<PathBuf>,
     #[arg(long)]
@@ -53,7 +45,7 @@ struct ServerArgs {
     runs_dir: PathBuf,
     #[arg(long, default_value = "0.0.0.0:8080")]
     bind: String,
-    #[arg(long, default_value = "es-copy-indices")]
+    #[arg(long = "es-copy-indices-path", default_value = "es-copy-indices")]
     es_copy_path: PathBuf,
     #[arg(long, default_value = "/")]
     base_path: String,
@@ -61,31 +53,30 @@ struct ServerArgs {
     refresh_seconds: u64,
     #[arg(long, default_value_t = 5)]
     metrics_seconds: u64,
-    #[arg(long, env = "TIMESTAMP")]
+    #[arg(long)]
     timestamp: Option<String>,
-    #[arg(long, env = "FROM_INDEX_NAME_SUFFIX")]
+    #[arg(long = "from-index-name-suffix")]
     from_suffix: Option<String>,
-    #[arg(long, env = "INDEX_COPY_SUFFIX")]
+    #[arg(long = "index-copy-suffix")]
     copy_suffix: Option<String>,
-    #[arg(long, env = "ALIAS_SUFFIX")]
+    #[arg(long = "alias-suffix")]
     alias_suffix: Option<String>,
-    #[arg(long, env = "ALIAS_REMOVE_IF_EXISTS")]
+    #[arg(long = "alias-remove-if-exists", default_value_t = false)]
     alias_remove_if_exists: bool,
-    #[arg(long, env = "AUDIT")]
+    #[arg(long, default_value_t = false)]
     audit: bool,
 }
 
 #[derive(Clone)]
 struct AppState {
-    src_env: InputEnvironment,
-    dst_env: InputEnvironment,
-    src_endpoint: EndpointSettings,
-    dst_endpoint: EndpointSettings,
+    endpoints: Vec<EndpointConfig>,
+    templates: Vec<TemplateConfig>,
     client: reqwest::Client,
     runs_dir: PathBuf,
     es_copy_path: PathBuf,
     refresh_seconds: u64,
     base_path: String,
+    ca_path: Option<PathBuf>,
     metrics: Arc<RwLock<MetricsState>>,
     metrics_tx: broadcast::Sender<MetricsSample>,
     timestamp: Option<String>,
@@ -95,6 +86,7 @@ struct AppState {
     alias_remove_if_exists: bool,
     audit: bool,
     runs: Arc<RwLock<RunStore>>,
+    quarantined_runs: Arc<RwLock<Vec<String>>>,
 }
 
 #[derive(Default)]
@@ -107,8 +99,14 @@ struct RunStore {
 struct RunPersist {
     id: String,
     created_at: String,
-    src_config_path: String,
-    dst_config_path: String,
+    #[serde(default)]
+    template: TemplateSnapshot,
+    #[serde(default)]
+    src_endpoint: EndpointSnapshot,
+    #[serde(default)]
+    dst_endpoint: EndpointSnapshot,
+    #[serde(default)]
+    dry_run: bool,
     stages: Vec<StagePersist>,
     jobs: Vec<JobPersist>,
 }
@@ -138,14 +136,28 @@ struct JobPersist {
     progress_percent: Option<f64>,
     #[serde(default)]
     completed_line: bool,
+    #[serde(default)]
+    split_field: Option<String>,
+    #[serde(default)]
+    split_from: Option<String>,
+    #[serde(default)]
+    split_to: Option<String>,
+    #[serde(default)]
+    split_leftover: bool,
+    #[serde(default)]
+    split_query: Option<String>,
+    #[serde(default)]
+    split_doc_count: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
 struct RunState {
     id: String,
     created_at: String,
-    src_config_path: PathBuf,
-    dst_config_path: PathBuf,
+    template: TemplateSnapshot,
+    src_endpoint: EndpointSnapshot,
+    dst_endpoint: EndpointSnapshot,
+    dry_run: bool,
     stages: Vec<StageState>,
     jobs: HashMap<String, JobState>,
 }
@@ -164,6 +176,7 @@ enum JobStatus {
     Running,
     Succeeded,
     Failed,
+    Stopped,
 }
 
 impl JobStatus {
@@ -173,6 +186,7 @@ impl JobStatus {
             JobStatus::Running => "running",
             JobStatus::Succeeded => "succeeded",
             JobStatus::Failed => "failed",
+            JobStatus::Stopped => "stopped",
         }
     }
 }
@@ -188,6 +202,7 @@ struct JobState {
     exit_code: Option<i32>,
     started_at: Option<String>,
     finished_at: Option<String>,
+    pid: Option<u32>,
     config_path: PathBuf,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
@@ -197,6 +212,12 @@ struct JobState {
     stderr_tx: broadcast::Sender<LogEvent>,
     progress_percent: Option<f64>,
     completed_line: bool,
+    split_field: Option<String>,
+    split_from: Option<String>,
+    split_to: Option<String>,
+    split_leftover: bool,
+    split_query: Option<String>,
+    split_doc_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -212,26 +233,66 @@ enum LogStream {
     Stderr,
 }
 
-#[derive(Clone)]
-struct EndpointSettings {
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct EndpointAuth {
+    username: String,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct EndpointFile {
     name: String,
     url: String,
-    user: Option<String>,
-    pass: Option<String>,
-    ca_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct InputConfig {
-    env: InputEnv,
-    indices: Vec<InputIndex>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct InputEnv {
     prefix: String,
     number_of_replicas: u64,
     keep_alive: String,
+    #[serde(default)]
+    auth: Option<EndpointAuth>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct MainConfigFile {
+    endpoints: Vec<EndpointFile>,
+}
+
+#[derive(Clone, Debug)]
+struct EndpointConfig {
+    id: String,
+    name: String,
+    url: String,
+    prefix: String,
+    number_of_replicas: u64,
+    keep_alive: String,
+    auth: Option<EndpointAuth>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct EndpointSnapshot {
+    id: String,
+    name: String,
+    url: String,
+    prefix: String,
+    number_of_replicas: u64,
+    keep_alive: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct TemplateSnapshot {
+    id: String,
+    name: String,
+    path: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct TemplateGlobal {
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct TemplateFile {
+    global: Option<TemplateGlobal>,
+    indices: Vec<InputIndex>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -257,11 +318,10 @@ struct InputCustom {
 }
 
 #[derive(Clone, Debug)]
-struct InputEnvironment {
+struct TemplateConfig {
+    id: String,
     name: String,
-    prefix: String,
-    number_of_replicas: u64,
-    keep_alive: String,
+    path: PathBuf,
     indices: Vec<InputIndex>,
 }
 
@@ -278,6 +338,14 @@ struct JobPlan {
     date_from: Option<String>,
     date_to: Option<String>,
     leftover: bool,
+    split_doc_count: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct SplitRange {
+    from: Option<String>,
+    to: Option<String>,
+    doc_count: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -353,13 +421,16 @@ struct IndexTemplate {
     runs: Vec<RunSummary>,
     refresh_seconds: u64,
     base_path: String,
+    endpoints: Vec<EndpointView>,
+    templates: Vec<TemplateView>,
+    endpoints_json: String,
+    templates_json: String,
 }
 
 #[derive(Template)]
 #[template(path = "server/run.html")]
 struct RunTemplate {
     run: RunView,
-    refresh_seconds: u64,
     base_path: String,
 }
 
@@ -379,7 +450,33 @@ struct StatusTemplate {
     summary: MetricsSummary,
 }
 
-#[derive(Clone)]
+#[derive(Template)]
+#[template(path = "server/config.html")]
+struct ConfigTemplate {
+    base_path: String,
+    endpoints: Vec<EndpointView>,
+    templates: Vec<TemplateView>,
+}
+
+#[derive(Clone, Serialize)]
+struct EndpointView {
+    id: String,
+    name: String,
+    url: String,
+    prefix: String,
+    number_of_replicas: u64,
+    keep_alive: String,
+}
+
+#[derive(Clone, Serialize)]
+struct TemplateView {
+    id: String,
+    name: String,
+    file_name: String,
+    indices_count: usize,
+}
+
+#[derive(Clone, Serialize)]
 struct RunSummary {
     id: String,
     created_at: String,
@@ -387,23 +484,43 @@ struct RunSummary {
     jobs_running: usize,
     jobs_failed: usize,
     jobs_succeeded: usize,
+    src_name: String,
+    dst_name: String,
+    template_name: String,
+    dry_run: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct RunView {
     id: String,
     created_at: String,
     stages: Vec<StageView>,
+    src_endpoint: EndpointSnapshot,
+    dst_endpoint: EndpointSnapshot,
+    template: TemplateSnapshot,
+    dry_run: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct StageView {
     id: String,
     name: String,
     jobs: Vec<JobSummary>,
+    split_details: Vec<SplitDetailView>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+struct SplitDetailView {
+    job_name: String,
+    field_name: String,
+    date_from: Option<String>,
+    date_to: Option<String>,
+    leftover: bool,
+    query: Option<String>,
+    doc_count: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
 struct JobSummary {
     id: String,
     name: String,
@@ -421,6 +538,8 @@ struct JobView {
     status: JobStatus,
     stdout_tail: Vec<String>,
     stderr_tail: Vec<String>,
+    progress_label: Option<String>,
+    eta_label: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -436,6 +555,11 @@ struct MetricsSample {
     host_mem_total_kb: u64,
     proc_cpu: f32,
     proc_mem_kb: u64,
+    children_cpu: f32,
+    children_mem_kb: u64,
+    total_cpu: f32,
+    total_mem_kb: u64,
+    running_jobs: usize,
     load1: f64,
     load5: f64,
     load15: f64,
@@ -445,9 +569,14 @@ struct MetricsSample {
 struct MetricsSummary {
     host_cpu: f32,
     proc_cpu: f32,
+    children_cpu: f32,
+    total_cpu: f32,
     host_mem_used_mb: u64,
     host_mem_total_mb: u64,
     proc_mem_mb: u64,
+    children_mem_mb: u64,
+    total_mem_mb: u64,
+    running_jobs: usize,
     load1: f64,
     load5: f64,
     load15: f64,
@@ -472,9 +601,14 @@ pub async fn run() {
     if args.insecure && args.ca_path.is_none() {
         warn!("--insecure affects percentile queries only; es-copy-indices still needs CA files for HTTPS.");
     }
-    let src_env = load_env_config(&args.src_config);
-    let dst_config_path = args.dst_config.clone().unwrap_or_else(|| args.src_config.clone());
-    let dst_env = load_env_config(&dst_config_path);
+    let endpoints = load_main_config(&args.main_config);
+    let templates = load_templates(&args.templates_dir);
+    if endpoints.is_empty() {
+        panic!("No endpoints found in {:?}", args.main_config);
+    }
+    if templates.is_empty() {
+        panic!("No templates found in {:?}", args.templates_dir);
+    }
 
     let client = build_reqwest_client(args.ca_path.as_ref(), args.insecure)
         .unwrap_or_else(|e| panic!("Failed to build HTTP client: {e}"));
@@ -487,27 +621,14 @@ pub async fn run() {
     let metrics = Arc::new(RwLock::new(MetricsState::default()));
     let (metrics_tx, _) = broadcast::channel(200);
     let state = AppState {
-        src_env,
-        dst_env,
-        src_endpoint: EndpointSettings {
-            name: "es-source".to_string(),
-            url: args.src_url,
-            user: args.src_user,
-            pass: args.src_pass,
-            ca_path: args.ca_path.clone(),
-        },
-        dst_endpoint: EndpointSettings {
-            name: "es-destination".to_string(),
-            url: args.dst_url,
-            user: args.dst_user,
-            pass: args.dst_pass,
-            ca_path: args.ca_path.clone(),
-        },
+        endpoints,
+        templates,
         client,
         runs_dir,
         es_copy_path: args.es_copy_path,
         refresh_seconds: args.refresh_seconds,
         base_path: normalize_base_path(&args.base_path),
+        ca_path: args.ca_path.clone(),
         metrics: Arc::clone(&metrics),
         metrics_tx,
         timestamp: args.timestamp,
@@ -517,26 +638,42 @@ pub async fn run() {
         alias_remove_if_exists: args.alias_remove_if_exists,
         audit: args.audit,
         runs: Arc::new(RwLock::new(RunStore::default())),
+        quarantined_runs: Arc::new(RwLock::new(Vec::new())),
     };
 
     load_runs(&state).await;
     start_metrics_sampler(
         Arc::clone(&state.metrics),
         state.metrics_tx.clone(),
+        Arc::clone(&state.runs),
         args.metrics_seconds,
     );
 
     let routes = Router::new()
         .route("/", get(index))
+        .route("/config", get(config_view))
         .route("/status", get(status_view))
         .route("/status/snapshot", get(status_snapshot))
         .route("/status/stream", get(status_stream))
         .route("/runs", post(create_run))
+        .route("/runs/snapshot", get(runs_snapshot))
+        .route("/runs/stream", get(runs_stream))
         .route("/runs/{run_id}", get(run_view))
+        .route("/runs/{run_id}/stream", get(run_stream))
+        .route("/runs/{run_id}/delete", post(delete_run))
+        .route("/runs/{run_id}/export", get(export_run))
+        .route("/runs/{run_id}/retry-failed", post(retry_failed))
+        .route("/runs/{run_id}/stop", post(stop_run))
         .route("/runs/{run_id}/stages/{stage_id}/start", post(start_stage))
+        .route("/runs/{run_id}/stages/{stage_id}/stop", post(stop_stage))
         .route("/runs/{run_id}/jobs/{job_id}/start", post(start_job))
+        .route("/runs/{run_id}/jobs/{job_id}/stop", post(stop_job))
         .route("/runs/{run_id}/jobs/{job_id}", get(job_view))
-        .route("/runs/{run_id}/jobs/{job_id}/stream", get(job_stream));
+        .route("/runs/{run_id}/jobs/{job_id}/stream", get(job_stream))
+        .route(
+            "/runs/{run_id}/jobs/{job_id}/status",
+            get(job_status_stream),
+        );
 
     let app = if state.base_path == "/" {
         routes
@@ -560,8 +697,21 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_summaries(&state).await;
     let template = IndexTemplate {
         runs,
-        refresh_seconds: state.refresh_seconds,
+        refresh_seconds: 0,
         base_path: state.base_path.clone(),
+        endpoints: build_endpoint_views(&state),
+        templates: build_template_views(&state),
+        endpoints_json: endpoints_json(&state),
+        templates_json: templates_json(&state),
+    };
+    Html(render_template(&template)).into_response()
+}
+
+async fn config_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let template = ConfigTemplate {
+        base_path: state.base_path.clone(),
+        endpoints: build_endpoint_views(&state),
+        templates: build_template_views(&state),
     };
     Html(render_template(&template)).into_response()
 }
@@ -579,8 +729,33 @@ async fn base_trailing_redirect(State(state): State<Arc<AppState>>) -> impl Into
     Redirect::to(&state.base_path)
 }
 
-async fn create_run(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match create_run_state(&state).await {
+#[derive(Deserialize)]
+struct CreateRunForm {
+    src_endpoint_id: String,
+    dst_endpoint_id: String,
+    template_id: String,
+    dry_run: Option<String>,
+}
+
+async fn create_run(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<CreateRunForm>,
+) -> impl IntoResponse {
+    let src_endpoint = match endpoint_by_id(&state, &form.src_endpoint_id) {
+        Some(endpoint) => endpoint.clone(),
+        None => return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response(),
+    };
+    let dst_endpoint = match endpoint_by_id(&state, &form.dst_endpoint_id) {
+        Some(endpoint) => endpoint.clone(),
+        None => return (StatusCode::BAD_REQUEST, "Unknown destination endpoint").into_response(),
+    };
+    let template = match template_by_id(&state, &form.template_id) {
+        Some(template) => template.clone(),
+        None => return (StatusCode::BAD_REQUEST, "Unknown template").into_response(),
+    };
+    let dry_run = form.dry_run.is_some();
+
+    match create_run_state(&state, &template, &src_endpoint, &dst_endpoint, dry_run).await {
         Ok(run_id) => Redirect::to(&with_base(&state, &format!("/runs/{}", run_id)))
             .into_response(),
         Err(err) => (
@@ -599,7 +774,6 @@ async fn run_view(
         Some(run) => {
             let template = RunTemplate {
                 run,
-                refresh_seconds: state.refresh_seconds,
                 base_path: state.base_path.clone(),
             };
             Html(render_template(&template))
@@ -669,6 +843,50 @@ async fn job_stream(
     Sse::new(stream).into_response()
 }
 
+async fn job_status_stream(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, job_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let seconds = if state.refresh_seconds == 0 {
+        5
+    } else {
+        state.refresh_seconds.max(1)
+    };
+    let interval = tokio::time::interval(Duration::from_secs(seconds));
+    let stream = IntervalStream::new(interval).then(move |_| {
+        let state = Arc::clone(&state);
+        let run_id = run_id.clone();
+        let job_id = job_id.clone();
+        async move {
+            let (status, progress_label, eta_label) = {
+                let runs = state.runs.read().await;
+                runs.runs
+                    .get(&run_id)
+                    .and_then(|run| run.jobs.get(&job_id))
+                    .map(|job| {
+                        let progress_label = job
+                            .progress_percent
+                            .map(|value| format!("{:.2} %", value));
+                        let eta_label =
+                            estimate_eta_label(&job.started_at, job.progress_percent);
+                        (job.status.as_str().to_string(), progress_label, eta_label)
+                    })
+                    .unwrap_or_else(|| ("missing".to_string(), None, None))
+            };
+            let payload = serde_json::to_string(&serde_json::json!({
+                "status": status,
+                "progress_label": progress_label,
+                "eta_label": eta_label
+            }))
+            .unwrap_or_else(|_| "{}".to_string());
+            Ok::<axum::response::sse::Event, Infallible>(
+                axum::response::sse::Event::default().data(payload),
+            )
+        }
+    });
+    Sse::new(stream).into_response()
+}
+
 async fn status_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let summary = {
         let metrics = state.metrics.read().await;
@@ -701,6 +919,242 @@ async fn status_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         Err(_) => None,
     });
     Sse::new(stream).into_response()
+}
+
+async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let seconds = if state.refresh_seconds == 0 {
+        5
+    } else {
+        state.refresh_seconds.max(1)
+    };
+    let interval = tokio::time::interval(Duration::from_secs(seconds));
+    let stream = IntervalStream::new(interval).then(move |_| {
+        let state = Arc::clone(&state);
+        async move {
+            let runs = build_run_summaries(&state).await;
+            let payload = serde_json::to_string(&runs).unwrap_or_else(|_| "[]".to_string());
+            Ok::<axum::response::sse::Event, Infallible>(
+                axum::response::sse::Event::default().data(payload),
+            )
+        }
+    });
+    Sse::new(stream).into_response()
+}
+
+async fn runs_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let runs = build_run_summaries(&state).await;
+    Json(runs).into_response()
+}
+
+async fn run_stream(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    let seconds = if state.refresh_seconds == 0 {
+        5
+    } else {
+        state.refresh_seconds.max(1)
+    };
+    let interval = tokio::time::interval(Duration::from_secs(seconds));
+    let stream = IntervalStream::new(interval).then(move |_| {
+        let state = Arc::clone(&state);
+        let run_id = run_id.clone();
+        async move {
+            let payload = match build_run_view(&state, &run_id).await {
+                Some(run) => serde_json::to_string(&run).unwrap_or_else(|_| "{}".to_string()),
+                None => "{}".to_string(),
+            };
+            Ok::<axum::response::sse::Event, Infallible>(
+                axum::response::sse::Event::default().data(payload),
+            )
+        }
+    });
+    Sse::new(stream).into_response()
+}
+
+async fn delete_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    let (run_dir, has_running) = {
+        let runs = state.runs.read().await;
+        let run = match runs.runs.get(&run_id) {
+            Some(run) => run,
+            None => return (StatusCode::NOT_FOUND, "Run not found").into_response(),
+        };
+        let has_running = run
+            .jobs
+            .values()
+            .any(|job| matches!(job.status, JobStatus::Running));
+        (state.runs_dir.join(&run_id), has_running)
+    };
+
+    if has_running {
+        return (
+            StatusCode::CONFLICT,
+            "Run has running jobs; stop them before removing.",
+        )
+            .into_response();
+    }
+
+    {
+        let mut runs = state.runs.write().await;
+        runs.runs.remove(&run_id);
+        runs.order.retain(|id| id != &run_id);
+    }
+
+    if let Err(err) = tokio::fs::remove_dir_all(&run_dir).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to remove run directory: {err}"),
+        )
+            .into_response();
+    }
+
+    (StatusCode::OK, "Removed").into_response()
+}
+
+async fn retry_failed(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    let job_ids = {
+        let runs = state.runs.read().await;
+        let run = match runs.runs.get(&run_id) {
+            Some(run) => run,
+            None => return (StatusCode::NOT_FOUND, "Run not found").into_response(),
+        };
+        run.jobs
+            .values()
+            .filter(|job| matches!(job.status, JobStatus::Failed))
+            .map(|job| job.id.clone())
+            .collect::<Vec<_>>()
+    };
+
+    if job_ids.is_empty() {
+        return (StatusCode::OK, "No failed jobs to retry.").into_response();
+    }
+
+    for job_id in job_ids.iter() {
+        let state_clone = Arc::clone(&state);
+        let run_id_clone = run_id.clone();
+        let job_id_clone = job_id.clone();
+        tokio::spawn(async move {
+            if let Err(err) = start_job_runner(&state_clone, &run_id_clone, &job_id_clone).await {
+                warn!("Failed to retry job {}: {}", job_id_clone, err);
+            }
+        });
+    }
+
+    (
+        StatusCode::OK,
+        format!("Retrying {} failed job(s).", job_ids.len()),
+    )
+        .into_response()
+}
+
+async fn export_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    let run_dir = state.runs_dir.join(&run_id);
+    if !run_dir.exists() {
+        return (StatusCode::NOT_FOUND, "Run not found").into_response();
+    }
+
+    let run_dir_clone = run_dir.clone();
+    let payload = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(cursor);
+        let options = FileOptions::<()>::default();
+
+        for entry in WalkDir::new(&run_dir_clone).into_iter().filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                continue;
+            }
+            let rel_path = path
+                .strip_prefix(&run_dir_clone)
+                .map_err(|e| e.to_string())?;
+            let rel_name = rel_path.to_string_lossy();
+            zip.start_file(rel_name, options)
+                .map_err(|e| e.to_string())?;
+            if should_strip_ansi(path, rel_path) {
+                let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                let stripped = strip_ansi_codes(&content);
+                zip.write_all(stripped.as_bytes())
+                    .map_err(|e: std::io::Error| e.to_string())?;
+            } else {
+                let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                std::io::copy(&mut file, &mut zip).map_err(|e| e.to_string())?;
+            }
+        }
+
+        zip.finish()
+            .map_err(|e| e.to_string())
+            .map(|cursor| cursor.into_inner())
+    })
+    .await
+    .map_err(|e| e.to_string());
+
+    let payload = match payload {
+        Ok(Ok(data)) => data,
+        Ok(Err(err)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to export run: {err}"),
+            )
+                .into_response()
+        }
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to export run: {err}"),
+            )
+                .into_response()
+        }
+    };
+
+    let file_name = format!("run-{}.zip", run_id);
+    let mut response = axum::response::Response::new(axum::body::Body::from(payload));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/zip"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", file_name)) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
+    }
+    response
+}
+
+fn should_strip_ansi(path: &std::path::Path, rel_path: &std::path::Path) -> bool {
+    if path.extension().and_then(|ext| ext.to_str()) != Some("log") {
+        return false;
+    }
+    matches!(rel_path.components().next(), Some(std::path::Component::Normal(name)) if name == "logs")
+}
+
+fn strip_ansi_codes(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if matches!(chars.peek(), Some('[')) {
+                chars.next();
+                while let Some(next) = chars.next() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        output.push(ch);
+    }
+    output
 }
 
 async fn start_stage(
@@ -756,12 +1210,92 @@ async fn start_job(
     Redirect::to(&with_base(&state, &format!("/runs/{}/jobs/{}", run_id, job_id))).into_response()
 }
 
+async fn stop_job(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, job_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match stop_job_internal(&state, &run_id, &job_id).await {
+        Ok(message) => (StatusCode::OK, message).into_response(),
+        Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+    }
+}
+
+async fn stop_stage(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, stage_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let job_ids = {
+        let runs = state.runs.read().await;
+        let run = match runs.runs.get(&run_id) {
+            Some(run) => run,
+            None => return (StatusCode::NOT_FOUND, "run not found").into_response(),
+        };
+        let stage = match run.stages.iter().find(|stage| stage.id == stage_id) {
+            Some(stage) => stage,
+            None => return (StatusCode::NOT_FOUND, "stage not found").into_response(),
+        };
+        stage.job_ids.clone()
+    };
+
+    let mut stopped = 0usize;
+    let mut errors = Vec::new();
+    for job_id in job_ids {
+        match stop_job_internal(&state, &run_id, &job_id).await {
+            Ok(_) => stopped += 1,
+            Err(err) => errors.push(err),
+        }
+    }
+
+    if errors.is_empty() {
+        (StatusCode::OK, format!("Stop requested for {stopped} job(s).")).into_response()
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Stop requested for {stopped} job(s). Errors: {}", errors.join("; ")),
+        )
+            .into_response()
+    }
+}
+
+async fn stop_run(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    let job_ids = {
+        let runs = state.runs.read().await;
+        let run = match runs.runs.get(&run_id) {
+            Some(run) => run,
+            None => return (StatusCode::NOT_FOUND, "run not found").into_response(),
+        };
+        run.jobs.keys().cloned().collect::<Vec<_>>()
+    };
+
+    let mut stopped = 0usize;
+    let mut errors = Vec::new();
+    for job_id in job_ids {
+        match stop_job_internal(&state, &run_id, &job_id).await {
+            Ok(_) => stopped += 1,
+            Err(err) => errors.push(err),
+        }
+    }
+
+    if errors.is_empty() {
+        (StatusCode::OK, format!("Stop requested for {stopped} job(s).")).into_response()
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Stop requested for {stopped} job(s). Errors: {}", errors.join("; ")),
+        )
+            .into_response()
+    }
+}
+
 async fn start_job_runner(
     state: &Arc<AppState>,
     run_id: &str,
     job_id: &str,
 ) -> Result<(), String> {
-    let (config_path, stdout_path, stderr_path, snapshot) = {
+    let (config_path, stdout_path, stderr_path, snapshot, dry_run) = {
         let mut runs = state.runs.write().await;
         let run = runs
             .runs
@@ -776,15 +1310,23 @@ async fn start_job_runner(
                 return Ok(());
             }
             job.status = JobStatus::Running;
+            job.exit_code = None;
             job.started_at = Some(now_string());
+            job.finished_at = None;
+            job.pid = None;
+            job.progress_percent = None;
+            job.completed_line = false;
+            job.stdout_tail.clear();
+            job.stderr_tail.clear();
             (
                 job.config_path.clone(),
                 job.stdout_path.clone(),
                 job.stderr_path.clone(),
             )
         };
+        let dry_run = run.dry_run;
         let snapshot = run_snapshot(run);
-        (config_path, stdout_path, stderr_path, snapshot)
+        (config_path, stdout_path, stderr_path, snapshot, dry_run)
     };
     let runs_dir = state.runs_dir.clone();
     tokio::spawn(async move {
@@ -796,23 +1338,39 @@ async fn start_job_runner(
     let state_clone = Arc::clone(state);
     let run_id = run_id.to_string();
     let job_id = job_id.to_string();
-    let es_copy_path = state.es_copy_path.clone();
-
-    tokio::spawn(async move {
-        if let Err(err) = run_job_process(
-            state_clone,
-            run_id,
-            job_id,
-            es_copy_path,
-            config_path,
-            stdout_path,
-            stderr_path,
-        )
-        .await
-        {
-            warn!("Job failed to start: {}", err);
-        }
-    });
+    if dry_run {
+        tokio::spawn(async move {
+            if let Err(err) = run_dry_job(
+                state_clone,
+                run_id,
+                job_id,
+                config_path,
+                stdout_path,
+                stderr_path,
+            )
+            .await
+            {
+                warn!("Dry run failed: {}", err);
+            }
+        });
+    } else {
+        let es_copy_path = state.es_copy_path.clone();
+        tokio::spawn(async move {
+            if let Err(err) = run_job_process(
+                state_clone,
+                run_id,
+                job_id,
+                es_copy_path,
+                config_path,
+                stdout_path,
+                stderr_path,
+            )
+            .await
+            {
+                warn!("Job failed to start: {}", err);
+            }
+        });
+    }
 
     Ok(())
 }
@@ -850,6 +1408,16 @@ async fn run_job_process(
             return Err(err.to_string());
         }
     };
+    let pid = child.id();
+    if let Some(pid) = pid {
+        let mut runs = state.runs.write().await;
+        if let Some(run) = runs.runs.get_mut(&run_id) {
+            if let Some(job) = run.jobs.get_mut(&job_id) {
+                job.pid = Some(pid);
+            }
+        }
+    }
+
     let stdout = child
         .stdout
         .take()
@@ -888,6 +1456,177 @@ async fn run_job_process(
 
     let _ = stdout_task.await;
     let _ = stderr_task.await;
+    Ok(())
+}
+
+async fn stop_job_internal(
+    state: &Arc<AppState>,
+    run_id: &str,
+    job_id: &str,
+) -> Result<String, String> {
+    let (pid, stderr_path, snapshot) = {
+        let mut runs = state.runs.write().await;
+        let run = runs
+            .runs
+            .get_mut(run_id)
+            .ok_or_else(|| "run not found".to_string())?;
+        let (pid, stderr_path) = {
+            let job = run
+                .jobs
+                .get_mut(job_id)
+                .ok_or_else(|| "job not found".to_string())?;
+            if !matches!(job.status, JobStatus::Running) {
+                return Ok("Job not running.".to_string());
+            }
+            job.status = JobStatus::Stopped;
+            job.exit_code = Some(-15);
+            job.finished_at = Some(now_string());
+            job.completed_line = false;
+            (job.pid, job.stderr_path.clone())
+        };
+        let snapshot = run_snapshot(run);
+        (pid, stderr_path, snapshot)
+    };
+
+    let runs_dir = state.runs_dir.clone();
+    tokio::spawn(async move {
+        if let Err(err) = save_run_snapshot(&runs_dir, snapshot).await {
+            warn!("Failed to persist run: {}", err);
+        }
+    });
+
+    if let Some(pid) = pid {
+        let result = unsafe { kill(pid as i32, SIGTERM) };
+        if result != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() != ErrorKind::NotFound {
+                return Err(format!("Failed to stop job (pid={pid}): {}", err));
+            }
+        }
+    }
+
+    let _ = append_log_line(
+        state,
+        run_id,
+        job_id,
+        LogStream::Stderr,
+        "Stop requested (SIGTERM).",
+        &stderr_path,
+    )
+    .await;
+
+    Ok("Stop requested.".to_string())
+}
+
+async fn run_dry_job(
+    state: Arc<AppState>,
+    run_id: String,
+    job_id: String,
+    config_path: PathBuf,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+) -> Result<(), String> {
+    let mut snapshot: Option<RunPersist> = None;
+    {
+        let mut runs = state.runs.write().await;
+        if let Some(run) = runs.runs.get_mut(&run_id) {
+            if let Some(job) = run.jobs.get_mut(&job_id) {
+                job.progress_percent = Some(100.0);
+                job.completed_line = true;
+                snapshot = Some(run_snapshot(run));
+            }
+        }
+    }
+    if let Some(snapshot) = snapshot {
+        let runs_dir = state.runs_dir.clone();
+        tokio::spawn(async move {
+            if let Err(err) = save_run_snapshot(&runs_dir, snapshot).await {
+                warn!("Failed to persist run: {}", err);
+            }
+        });
+    }
+
+    let _ = append_log_line(
+        &state,
+        &run_id,
+        &job_id,
+        LogStream::Stdout,
+        "Dry run: skipping es-copy-indices execution.",
+        &stdout_path,
+    )
+    .await;
+    let _ = append_log_line(
+        &state,
+        &run_id,
+        &job_id,
+        LogStream::Stdout,
+        &format!("config_path=\"{}\"", config_path.to_string_lossy()),
+        &stdout_path,
+    )
+    .await;
+    if let Ok(content) = tokio::fs::read_to_string(&config_path).await {
+        let _ = append_log_line(
+            &state,
+            &run_id,
+            &job_id,
+            LogStream::Stdout,
+            "--- config.toml ---",
+            &stdout_path,
+        )
+        .await;
+        for line in content.lines() {
+            let _ = append_log_line(
+                &state,
+                &run_id,
+                &job_id,
+                LogStream::Stdout,
+                line,
+                &stdout_path,
+            )
+            .await;
+        }
+        let _ = append_log_line(
+            &state,
+            &run_id,
+            &job_id,
+            LogStream::Stdout,
+            "--------------------",
+            &stdout_path,
+        )
+        .await;
+    }
+    let mut env_vars = std::env::vars().collect::<Vec<_>>();
+    env_vars.sort_by(|a, b| a.0.cmp(&b.0));
+    let _ = append_log_line(
+        &state,
+        &run_id,
+        &job_id,
+        LogStream::Stderr,
+        "Dry run environment (sorted):",
+        &stderr_path,
+    )
+    .await;
+    for (key, value) in env_vars {
+        let _ = append_log_line(
+            &state,
+            &run_id,
+            &job_id,
+            LogStream::Stderr,
+            &format!("{}={}", key, value),
+            &stderr_path,
+        )
+        .await;
+    }
+    let _ = append_log_line(
+        &state,
+        &run_id,
+        &job_id,
+        LogStream::Stdout,
+        "Application completed!",
+        &stdout_path,
+    )
+    .await;
+    mark_job_finished(&state, &run_id, &job_id, JobStatus::Succeeded, Some(0)).await;
     Ok(())
 }
 
@@ -1001,9 +1740,14 @@ fn build_metrics_summary(sample: Option<&MetricsSample>) -> MetricsSummary {
         MetricsSummary {
             host_cpu: sample.host_cpu,
             proc_cpu: sample.proc_cpu,
+            children_cpu: sample.children_cpu,
+            total_cpu: sample.total_cpu,
             host_mem_used_mb: mem_to_mb(sample.host_mem_used_kb),
             host_mem_total_mb: mem_to_mb(sample.host_mem_total_kb),
             proc_mem_mb: mem_to_mb(sample.proc_mem_kb),
+            children_mem_mb: mem_to_mb(sample.children_mem_kb),
+            total_mem_mb: mem_to_mb(sample.total_mem_kb),
+            running_jobs: sample.running_jobs,
             load1: sample.load1,
             load5: sample.load5,
             load15: sample.load15,
@@ -1028,6 +1772,7 @@ fn render_template<T: Template>(template: &T) -> String {
 fn start_metrics_sampler(
     metrics: Arc<RwLock<MetricsState>>,
     sender: broadcast::Sender<MetricsSample>,
+    runs: Arc<RwLock<RunStore>>,
     seconds: u64,
 ) {
     let interval_seconds = if seconds == 0 { 5 } else { seconds };
@@ -1036,18 +1781,18 @@ fn start_metrics_sampler(
         let mut system = System::new();
         system.refresh_cpu_all();
         system.refresh_memory();
-        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        system.refresh_processes(ProcessesToUpdate::All, true);
         tokio::time::sleep(Duration::from_millis(200)).await;
         system.refresh_cpu_all();
         system.refresh_memory();
-        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        system.refresh_processes(ProcessesToUpdate::All, true);
 
         let mut ticker = tokio::time::interval(Duration::from_secs(interval_seconds));
         loop {
             ticker.tick().await;
             system.refresh_cpu_all();
             system.refresh_memory();
-            system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            system.refresh_processes(ProcessesToUpdate::All, true);
 
             let host_cpu = system.global_cpu_usage();
             let host_mem_total = system.total_memory();
@@ -1058,6 +1803,33 @@ fn start_metrics_sampler(
             } else {
                 (0.0, 0)
             };
+            let mut children_cpu = 0.0f32;
+            let mut children_mem = 0u64;
+            for process in system.processes().values() {
+                if process.pid() == pid {
+                    continue;
+                }
+                let mut parent = process.parent();
+                while let Some(ppid) = parent {
+                    if ppid == pid {
+                        children_cpu += process.cpu_usage();
+                        children_mem += process.memory();
+                        break;
+                    }
+                    parent = system.process(ppid).and_then(|p| p.parent());
+                }
+            }
+            let total_cpu = proc_cpu + children_cpu;
+            let total_mem = proc_mem + children_mem;
+            let running_jobs = {
+                let guard = runs.read().await;
+                guard
+                    .runs
+                    .values()
+                    .flat_map(|run| run.jobs.values())
+                    .filter(|job| matches!(job.status, JobStatus::Running))
+                    .count()
+            };
 
             let sample = MetricsSample {
                 ts: chrono::Utc::now().timestamp(),
@@ -1066,6 +1838,11 @@ fn start_metrics_sampler(
                 host_mem_total_kb: host_mem_total,
                 proc_cpu,
                 proc_mem_kb: proc_mem,
+                children_cpu,
+                children_mem_kb: children_mem,
+                total_cpu,
+                total_mem_kb: total_mem,
+                running_jobs,
                 load1: load.one,
                 load5: load.five,
                 load15: load.fifteen,
@@ -1092,12 +1869,15 @@ async fn mark_job_finished(
     exit_code: Option<i32>,
 ) {
     let mut runs = state.runs.write().await;
-    if let Some(run) = runs.runs.get_mut(run_id) {
-        if let Some(job) = run.jobs.get_mut(job_id) {
-            job.status = status;
-            job.exit_code = exit_code;
-            job.finished_at = Some(now_string());
-            let snapshot = run_snapshot(run);
+        if let Some(run) = runs.runs.get_mut(run_id) {
+            if let Some(job) = run.jobs.get_mut(job_id) {
+                if matches!(job.status, JobStatus::Stopped) {
+                    return;
+                }
+                job.status = status;
+                job.exit_code = exit_code;
+                job.finished_at = Some(now_string());
+                let snapshot = run_snapshot(run);
             let runs_dir = state.runs_dir.clone();
             tokio::spawn(async move {
                 if let Err(err) = save_run_snapshot(&runs_dir, snapshot).await {
@@ -1122,6 +1902,7 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
                     JobStatus::Running => jobs_running += 1,
                     JobStatus::Failed => jobs_failed += 1,
                     JobStatus::Succeeded => jobs_succeeded += 1,
+                    JobStatus::Stopped => jobs_failed += 1,
                     JobStatus::Pending => {}
                 }
             }
@@ -1132,6 +1913,18 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
                 jobs_running,
                 jobs_failed,
                 jobs_succeeded,
+                src_name: run
+                    .src_endpoint
+                    .name
+                    .clone()
+                    .if_empty_then("unknown"),
+                dst_name: run
+                    .dst_endpoint
+                    .name
+                    .clone()
+                    .if_empty_then("unknown"),
+                template_name: run.template.name.clone().if_empty_then("unnamed"),
+                dry_run: run.dry_run,
             });
         }
     }
@@ -1144,11 +1937,17 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
     let mut stages = Vec::new();
     for stage in &run.stages {
         let mut jobs = Vec::new();
+        let mut split_details = Vec::new();
         for job_id in &stage.job_ids {
             if let Some(job) = run.jobs.get(job_id) {
-                let progress_label = job
-                    .progress_percent
-                    .map(|value| format!("{:.2} %", value));
+                let progress_label = job.progress_percent.map(|value| {
+                    let base = format!("{:.2} %", value);
+                    if let Some(eta) = estimate_eta_label(&job.started_at, job.progress_percent) {
+                        format!("{base} · {eta}")
+                    } else {
+                        base
+                    }
+                });
                 let progress_width = job
                     .progress_percent
                     .map(|value| value.max(0.0).min(100.0).round() as u8);
@@ -1160,18 +1959,34 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
                     progress_width,
                     completed_line: job.completed_line,
                 });
+                if let Some(field_name) = &job.split_field {
+                    split_details.push(SplitDetailView {
+                        job_name: job.name.clone(),
+                        field_name: field_name.clone(),
+                        date_from: job.split_from.clone(),
+                        date_to: job.split_to.clone(),
+                        leftover: job.split_leftover,
+                        query: job.split_query.clone(),
+                        doc_count: job.split_doc_count,
+                    });
+                }
             }
         }
         stages.push(StageView {
             id: stage.id.clone(),
             name: stage.name.clone(),
             jobs,
+            split_details,
         });
     }
     Some(RunView {
         id: run.id.clone(),
         created_at: run.created_at.clone(),
         stages,
+        src_endpoint: run.src_endpoint.clone(),
+        dst_endpoint: run.dst_endpoint.clone(),
+        template: run.template.clone(),
+        dry_run: run.dry_run,
     })
 }
 
@@ -1179,6 +1994,10 @@ async fn build_job_view(state: &Arc<AppState>, run_id: &str, job_id: &str) -> Op
     let runs = state.runs.read().await;
     let run = runs.runs.get(run_id)?;
     let job = run.jobs.get(job_id)?;
+    let eta_label = estimate_eta_label(&job.started_at, job.progress_percent);
+    let progress_label = job
+        .progress_percent
+        .map(|value| format!("{:.2} %", value));
     Some(JobView {
         id: job.id.clone(),
         name: job.name.clone(),
@@ -1186,10 +2005,18 @@ async fn build_job_view(state: &Arc<AppState>, run_id: &str, job_id: &str) -> Op
         status: job.status.clone(),
         stdout_tail: job.stdout_tail.iter().cloned().collect(),
         stderr_tail: job.stderr_tail.iter().cloned().collect(),
+        progress_label,
+        eta_label,
     })
 }
 
-async fn create_run_state(state: &Arc<AppState>) -> Result<String, String> {
+async fn create_run_state(
+    state: &Arc<AppState>,
+    template: &TemplateConfig,
+    src_endpoint: &EndpointConfig,
+    dst_endpoint: &EndpointConfig,
+    dry_run: bool,
+) -> Result<String, String> {
     let run_id = unique_run_id(&state.runs_dir);
     let run_dir = state.runs_dir.join(&run_id);
     let configs_dir = run_dir.join("configs");
@@ -1201,7 +2028,7 @@ async fn create_run_state(state: &Arc<AppState>) -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let stages = plan_stages(&state.src_env, state).await?;
+    let stages = plan_stages(template, state, src_endpoint).await?;
 
     let mut stage_states = Vec::new();
     let mut job_states = HashMap::new();
@@ -1216,7 +2043,13 @@ async fn create_run_state(state: &Arc<AppState>) -> Result<String, String> {
             let stderr_path = logs_dir.join(format!("{}.stderr.log", job_id));
             let config_path = configs_dir.join(format!("{}.toml", job_id));
 
-            let output_config = build_output_config(state, &job, &state.src_env, &state.dst_env)?;
+            let output_config = build_output_config(state, &job, src_endpoint, dst_endpoint)?;
+            let split_field = job.index.split.as_ref().map(|s| s.field_name.clone());
+            let split_query = output_config
+                .indices
+                .get(0)
+                .and_then(|index| index.custom.as_ref())
+                .and_then(|custom| custom.query.clone());
             let toml = toml::to_string_pretty(&output_config).map_err(|e| e.to_string())?;
             tokio::fs::write(&config_path, toml)
                 .await
@@ -1237,6 +2070,7 @@ async fn create_run_state(state: &Arc<AppState>) -> Result<String, String> {
                     exit_code: None,
                     started_at: None,
                     finished_at: None,
+                    pid: None,
                     config_path,
                     stdout_path,
                     stderr_path,
@@ -1246,6 +2080,12 @@ async fn create_run_state(state: &Arc<AppState>) -> Result<String, String> {
                     stderr_tx,
                     progress_percent: None,
                     completed_line: false,
+                    split_field,
+                    split_from: job.date_from.clone(),
+                    split_to: job.date_to.clone(),
+                    split_leftover: job.leftover,
+                    split_query,
+                    split_doc_count: job.split_doc_count,
                 },
             );
         }
@@ -1260,8 +2100,10 @@ async fn create_run_state(state: &Arc<AppState>) -> Result<String, String> {
     let run_state = RunState {
         id: run_id.clone(),
         created_at,
-        src_config_path: state.src_env.name.clone().into(),
-        dst_config_path: state.dst_env.name.clone().into(),
+        template: template_snapshot(template),
+        src_endpoint: endpoint_snapshot(src_endpoint),
+        dst_endpoint: endpoint_snapshot(dst_endpoint),
+        dry_run,
         stages: stage_states,
         jobs: job_states,
     };
@@ -1287,6 +2129,7 @@ async fn load_runs(state: &AppState) {
         }
     };
 
+    let mut run_entries = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
         if !path.is_dir() {
@@ -1300,6 +2143,13 @@ async fn load_runs(state: &AppState) {
         if !run_file.exists() {
             continue;
         }
+        run_entries.push((run_id, path));
+    }
+
+    run_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (run_id, path) in run_entries {
+        let run_file = path.join("run.json");
         match tokio::fs::read_to_string(&run_file).await {
             Ok(content) => match serde_json::from_str::<RunPersist>(&content) {
                 Ok(persist) => {
@@ -1331,6 +2181,7 @@ async fn load_runs(state: &AppState) {
                                 exit_code: job.exit_code,
                                 started_at: job.started_at,
                                 finished_at: job.finished_at,
+                                pid: None,
                                 config_path: PathBuf::from(job.config_path),
                                 stdout_path: PathBuf::from(job.stdout_path),
                                 stderr_path: PathBuf::from(job.stderr_path),
@@ -1340,6 +2191,12 @@ async fn load_runs(state: &AppState) {
                                 stderr_tx,
                                 progress_percent: job.progress_percent,
                                 completed_line: job.completed_line,
+                                split_field: job.split_field,
+                                split_from: job.split_from,
+                                split_to: job.split_to,
+                                split_leftover: job.split_leftover,
+                                split_query: job.split_query,
+                                split_doc_count: job.split_doc_count,
                             },
                         );
                     }
@@ -1356,8 +2213,10 @@ async fn load_runs(state: &AppState) {
                     let run_state = RunState {
                         id: persist.id,
                         created_at: persist.created_at,
-                        src_config_path: PathBuf::from(persist.src_config_path),
-                        dst_config_path: PathBuf::from(persist.dst_config_path),
+                        template: persist.template,
+                        src_endpoint: persist.src_endpoint,
+                        dst_endpoint: persist.dst_endpoint,
+                        dry_run: persist.dry_run,
                         stages,
                         jobs: job_map,
                     };
@@ -1375,7 +2234,24 @@ async fn load_runs(state: &AppState) {
                         run_state,
                     );
                 }
-                Err(err) => warn!("Failed to parse run.json: {}", err),
+                Err(err) => {
+                    warn!("Failed to parse run.json {:?}: {}", run_file, err);
+                    let bad_path = path.join(format!("run.json.bad-{}", file_timestamp()));
+                    if let Err(rename_err) = tokio::fs::rename(&run_file, &bad_path).await {
+                        warn!(
+                            "Failed to quarantine run.json {:?}: {}",
+                            bad_path, rename_err
+                        );
+                    } else {
+                        let message = format!(
+                            "Quarantined corrupted run.json for run {} as {}",
+                            run_id,
+                            bad_path.display()
+                        );
+                        let mut guard = state.quarantined_runs.write().await;
+                        guard.push(message);
+                    }
+                }
             },
             Err(err) => warn!("Failed to read run.json: {}", err),
         }
@@ -1426,51 +2302,215 @@ fn run_snapshot(run: &RunState) -> RunPersist {
             stderr_path: job.stderr_path.to_string_lossy().to_string(),
             progress_percent: job.progress_percent,
             completed_line: job.completed_line,
+            split_field: job.split_field.clone(),
+            split_from: job.split_from.clone(),
+            split_to: job.split_to.clone(),
+            split_leftover: job.split_leftover,
+            split_query: job.split_query.clone(),
+            split_doc_count: job.split_doc_count,
         })
         .collect::<Vec<_>>();
     RunPersist {
         id: run.id.clone(),
         created_at: run.created_at.clone(),
-        src_config_path: run.src_config_path.to_string_lossy().to_string(),
-        dst_config_path: run.dst_config_path.to_string_lossy().to_string(),
+        template: run.template.clone(),
+        src_endpoint: run.src_endpoint.clone(),
+        dst_endpoint: run.dst_endpoint.clone(),
+        dry_run: run.dry_run,
         stages,
         jobs,
     }
 }
 
 async fn save_run_snapshot(runs_dir: &PathBuf, run: RunPersist) -> Result<(), String> {
-    let path = runs_dir.join(&run.id).join("run.json");
+    let dir = runs_dir.join(&run.id);
+    if !dir.exists() {
+        return Ok(());
+    }
+    let path = dir.join("run.json");
+    let tmp_path = dir.join(format!("run.json.tmp-{}", file_timestamp()));
+    if let Err(err) = tokio::fs::create_dir_all(&dir).await {
+        if err.kind() == ErrorKind::NotFound {
+            return Ok(());
+        }
+        return Err(err.to_string());
+    }
     let content = serde_json::to_string_pretty(&run).map_err(|e| e.to_string())?;
-    tokio::fs::write(path, content)
-        .await
-        .map_err(|e| e.to_string())
+    if let Err(err) = tokio::fs::write(&tmp_path, content).await {
+        if err.kind() == ErrorKind::NotFound {
+            return Ok(());
+        }
+        return Err(err.to_string());
+    }
+    if let Err(err) = tokio::fs::rename(&tmp_path, &path).await {
+        if err.kind() == ErrorKind::NotFound {
+            return Ok(());
+        }
+        return Err(err.to_string());
+    }
+    Ok(())
 }
 
-fn load_env_config(path: &PathBuf) -> InputEnvironment {
+fn load_main_config(path: &PathBuf) -> Vec<EndpointConfig> {
     let content = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("Failed to read config {:?}: {e}", path));
-    let config: InputConfig =
-        toml::from_str(&content).unwrap_or_else(|e| panic!("Invalid config {:?}: {e}", path));
-    let force_one_shard = std::env::var("ONE_SHARD_ONLY")
-        .map(|value| value.to_lowercase() == "true")
-        .unwrap_or(false);
-    let indices = config
-        .indices
+        .unwrap_or_else(|e| panic!("Failed to read main config {:?}: {e}", path));
+    let config: MainConfigFile =
+        toml::from_str(&content).unwrap_or_else(|e| panic!("Invalid main config {:?}: {e}", path));
+    let mut used = HashMap::new();
+    config
+        .endpoints
         .into_iter()
-        .map(|mut index| {
-            if force_one_shard {
-                index.number_of_shards = Some(1);
+        .enumerate()
+        .map(|(idx, endpoint)| {
+            let base = slugify(&endpoint.name);
+            let counter = used.entry(base.clone()).or_insert(0usize);
+            let id = if *counter == 0 {
+                base
+            } else {
+                format!("{}-{}", base, counter)
+            };
+            *counter += 1;
+            EndpointConfig {
+                id: if id.is_empty() {
+                    format!("endpoint-{}", idx + 1)
+                } else {
+                    id
+                },
+                name: endpoint.name,
+                url: endpoint.url,
+                prefix: endpoint.prefix,
+                number_of_replicas: endpoint.number_of_replicas,
+                keep_alive: endpoint.keep_alive,
+                auth: endpoint.auth,
             }
-            index
         })
-        .collect::<Vec<_>>();
-    InputEnvironment {
-        name: path.to_string_lossy().to_string(),
-        prefix: config.env.prefix,
-        number_of_replicas: config.env.number_of_replicas,
-        keep_alive: config.env.keep_alive,
-        indices,
+        .collect()
+}
+
+fn load_templates(path: &PathBuf) -> Vec<TemplateConfig> {
+    let mut templates = Vec::new();
+    let mut entries = std::fs::read_dir(path)
+        .unwrap_or_else(|e| panic!("Failed to read templates dir {:?}: {e}", path));
+    let mut files = Vec::new();
+    while let Some(entry) = entries.next() {
+        let entry = entry.unwrap_or_else(|e| panic!("Failed to read templates dir: {e}"));
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if ext.eq_ignore_ascii_case("toml") {
+                    files.push(path);
+                }
+            }
+        }
     }
+    files.sort();
+    let mut used = HashMap::new();
+    for (idx, path) in files.into_iter().enumerate() {
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read template {:?}: {e}", path));
+        let config: TemplateFile =
+            toml::from_str(&content).unwrap_or_else(|e| panic!("Invalid template {:?}: {e}", path));
+        let file_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("template")
+            .to_string();
+        let display_name = config
+            .global
+            .as_ref()
+            .and_then(|g| g.name.clone())
+            .unwrap_or_else(|| file_name.clone());
+        let indices = config.indices;
+        let base = slugify(&file_name);
+        let counter = used.entry(base.clone()).or_insert(0usize);
+        let id = if *counter == 0 {
+            base
+        } else {
+            format!("{}-{}", base, counter)
+        };
+        *counter += 1;
+        templates.push(TemplateConfig {
+            id: if id.is_empty() {
+                format!("template-{}", idx + 1)
+            } else {
+                id
+            },
+            name: display_name,
+            path,
+            indices,
+        });
+    }
+    templates
+}
+
+fn endpoint_by_id<'a>(state: &'a AppState, id: &str) -> Option<&'a EndpointConfig> {
+    state.endpoints.iter().find(|endpoint| endpoint.id == id)
+}
+
+fn template_by_id<'a>(state: &'a AppState, id: &str) -> Option<&'a TemplateConfig> {
+    state.templates.iter().find(|template| template.id == id)
+}
+
+fn endpoint_snapshot(endpoint: &EndpointConfig) -> EndpointSnapshot {
+    EndpointSnapshot {
+        id: endpoint.id.clone(),
+        name: endpoint.name.clone(),
+        url: endpoint.url.clone(),
+        prefix: endpoint.prefix.clone(),
+        number_of_replicas: endpoint.number_of_replicas,
+        keep_alive: endpoint.keep_alive.clone(),
+    }
+}
+
+fn template_snapshot(template: &TemplateConfig) -> TemplateSnapshot {
+    TemplateSnapshot {
+        id: template.id.clone(),
+        name: template.name.clone(),
+        path: template.path.to_string_lossy().to_string(),
+    }
+}
+
+fn build_endpoint_views(state: &AppState) -> Vec<EndpointView> {
+    state
+        .endpoints
+        .iter()
+        .map(|endpoint| EndpointView {
+            id: endpoint.id.clone(),
+            name: endpoint.name.clone(),
+            url: endpoint.url.clone(),
+            prefix: endpoint.prefix.clone(),
+            number_of_replicas: endpoint.number_of_replicas,
+            keep_alive: endpoint.keep_alive.clone(),
+        })
+        .collect()
+}
+
+fn build_template_views(state: &AppState) -> Vec<TemplateView> {
+    state
+        .templates
+        .iter()
+        .map(|template| TemplateView {
+            id: template.id.clone(),
+            name: template.name.clone(),
+            file_name: template
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("template")
+                .to_string(),
+            indices_count: template.indices.len(),
+        })
+        .collect()
+}
+
+fn endpoints_json(state: &AppState) -> String {
+    let endpoints = build_endpoint_views(state);
+    serde_json::to_string(&endpoints).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn templates_json(state: &AppState) -> String {
+    let templates = build_template_views(state);
+    serde_json::to_string(&templates).unwrap_or_else(|_| "[]".to_string())
 }
 
 fn build_run_id() -> String {
@@ -1495,6 +2535,45 @@ fn now_string() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+fn file_timestamp() -> String {
+    chrono::Utc::now().format("%Y%m%d-%H%M%S-%f").to_string()
+}
+
+fn estimate_eta_label(started_at: &Option<String>, progress_percent: Option<f64>) -> Option<String> {
+    let started_at = started_at.as_ref()?;
+    let progress = progress_percent?;
+    if progress <= 0.0 || progress >= 100.0 {
+        return None;
+    }
+    let parsed = chrono::DateTime::parse_from_rfc3339(started_at).ok()?;
+    let started = parsed.with_timezone(&chrono::Utc);
+    let elapsed = chrono::Utc::now().signed_duration_since(started).num_seconds();
+    if elapsed <= 0 {
+        return None;
+    }
+    let total_estimate = (elapsed as f64) * (100.0 / progress);
+    let remaining = total_estimate - (elapsed as f64);
+    if remaining <= 0.0 {
+        return None;
+    }
+    Some(format!("ETA {}", format_duration(remaining.round() as i64)))
+}
+
+fn format_duration(seconds: i64) -> String {
+    let mut remaining = seconds.max(0);
+    let hours = remaining / 3600;
+    remaining %= 3600;
+    let minutes = remaining / 60;
+    let secs = remaining % 60;
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, secs)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, secs)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 fn slugify(value: &str) -> String {
     value
         .chars()
@@ -1504,9 +2583,24 @@ fn slugify(value: &str) -> String {
         .to_lowercase()
 }
 
+trait StringExt {
+    fn if_empty_then(self, fallback: &str) -> String;
+}
+
+impl StringExt for String {
+    fn if_empty_then(self, fallback: &str) -> String {
+        if self.is_empty() {
+            fallback.to_string()
+        } else {
+            self
+        }
+    }
+}
+
 async fn plan_stages(
-    src_env: &InputEnvironment,
+    template: &TemplateConfig,
     state: &AppState,
+    src_endpoint: &EndpointConfig,
 ) -> Result<Vec<StagePlan>, String> {
     let mut stages: Vec<StagePlan> = Vec::new();
     let mut stage_index: HashMap<String, usize> = HashMap::new();
@@ -1524,10 +2618,11 @@ async fn plan_stages(
             });
         }
     };
-    for index in &src_env.indices {
+    for index in &template.indices {
         if let Some(split) = &index.split {
             let stage_name = format!("{}-{}", DEFAULT_STAGE_NAME, index.name);
-            let date_ranges = generate_date_intervals(state, src_env, index, split).await?;
+            let date_ranges =
+                generate_date_intervals(state, src_endpoint, index, split).await?;
             let mut leftover = index.clone();
             leftover.split = Some(split.clone());
             push_job(
@@ -1538,17 +2633,19 @@ async fn plan_stages(
                 date_from: None,
                 date_to: None,
                 leftover: true,
+                split_doc_count: None,
             },
             );
-            for (i, (from, to)) in date_ranges.into_iter().enumerate() {
+            for (i, range) in date_ranges.into_iter().enumerate() {
                 push_job(
                     stage_name.clone(),
                     JobPlan {
                     name: format!("{}-{}-{}-{}", DEFAULT_STAGE_NAME, index.name, SPLIT_SUFFIX, i + 1),
                     index: index.clone(),
-                    date_from: from,
-                    date_to: to,
+                    date_from: range.from,
+                    date_to: range.to,
                     leftover: false,
+                    split_doc_count: range.doc_count,
                 },
                 );
             }
@@ -1562,6 +2659,7 @@ async fn plan_stages(
                 date_from: None,
                 date_to: None,
                 leftover: false,
+                split_doc_count: None,
             },
             );
         }
@@ -1571,10 +2669,10 @@ async fn plan_stages(
 
 async fn generate_date_intervals(
     state: &AppState,
-    src_env: &InputEnvironment,
+    src_endpoint: &EndpointConfig,
     index: &InputIndex,
     split: &SplitConfig,
-) -> Result<Vec<(Option<String>, Option<String>)>, String> {
+) -> Result<Vec<SplitRange>, String> {
     let percents = generate_ranges(split.number_of_parts);
     let payload = json!({
         "size": 0,
@@ -1586,14 +2684,14 @@ async fn generate_date_intervals(
     });
 
     let index_name = build_index_name(
-        &src_env.prefix,
+        &src_endpoint.prefix,
         &index.name,
         state.from_suffix.as_deref(),
     );
-    let url = format!("{}/{}/_search", state.src_endpoint.url, index_name);
-    let mut request = state.client.get(url).json(&payload);
-    if let Some(user) = &state.src_endpoint.user {
-        request = request.basic_auth(user, state.src_endpoint.pass.clone());
+    let url = format!("{}/{}/_search", src_endpoint.url, index_name);
+    let mut request = state.client.get(&url).json(&payload);
+    if let Some(auth) = &src_endpoint.auth {
+        request = request.basic_auth(auth.username.clone(), auth.password.clone());
     }
     let response = request
         .timeout(Duration::from_secs(120))
@@ -1602,7 +2700,10 @@ async fn generate_date_intervals(
         .map_err(|e| format!("percentile request failed: {e}"))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("percentile request failed: {}", status));
+        return Err(format!(
+            "percentile request failed: {} for index {} at {}",
+            status, index_name, url
+        ));
     }
     let value: serde_json::Value = response
         .json::<serde_json::Value>()
@@ -1635,14 +2736,85 @@ async fn generate_date_intervals(
 
     let mut ranges = Vec::new();
     for window in ordered_values.windows(2) {
-        ranges.push((window[0].clone(), window[1].clone()));
+        ranges.push(SplitRange {
+            from: window[0].clone(),
+            to: window[1].clone(),
+            doc_count: None,
+        });
     }
 
     if ranges.len() < split.number_of_parts as usize {
         return Err("percentile ranges shorter than expected".to_string());
     }
 
-    Ok(ranges.into_iter().take(split.number_of_parts as usize).collect())
+    let mut ranges: Vec<SplitRange> = ranges
+        .into_iter()
+        .take(split.number_of_parts as usize)
+        .collect();
+
+    let range_specs = ranges
+        .iter()
+        .map(|range| {
+            let mut obj = serde_json::Map::new();
+            if let Some(from) = &range.from {
+                obj.insert("from".to_string(), json!(from));
+            }
+            if let Some(to) = &range.to {
+                obj.insert("to".to_string(), json!(to));
+            }
+            json!(obj)
+        })
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "size": 0,
+        "aggs": {
+            "ranges": {
+                "range": { "field": split.field_name, "ranges": range_specs }
+            }
+        }
+    });
+    let mut request = state.client.get(&url).json(&payload);
+    if let Some(auth) = &src_endpoint.auth {
+        request = request.basic_auth(auth.username.clone(), auth.password.clone());
+    }
+    match request.timeout(Duration::from_secs(120)).send().await {
+        Ok(response) => {
+            if response.status().is_success() {
+                if let Ok(value) = response.json::<serde_json::Value>().await {
+                    if let Some(buckets) = value
+                        .get("aggregations")
+                        .and_then(|v| v.get("ranges"))
+                        .and_then(|v| v.get("buckets"))
+                        .and_then(|v| v.as_array())
+                    {
+                        for (idx, bucket) in buckets.iter().enumerate() {
+                            if let Some(count) = bucket.get("doc_count").and_then(|v| v.as_u64())
+                            {
+                                if let Some(range) = ranges.get_mut(idx) {
+                                    range.doc_count = Some(count);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                warn!(
+                    "split count request failed: {} for index {} at {}",
+                    response.status(),
+                    index_name,
+                    url
+                );
+            }
+        }
+        Err(err) => {
+            warn!(
+                "split count request failed: {} for index {} at {}",
+                err, index_name, url
+            );
+        }
+    }
+
+    Ok(ranges)
 }
 
 fn generate_ranges(parts: u64) -> Vec<u64> {
@@ -1684,14 +2856,9 @@ fn build_name_of_copy(prefix: &str, name: &str, timestamp: &str, suffix: Option<
 fn build_output_config(
     state: &AppState,
     job: &JobPlan,
-    src_env: &InputEnvironment,
-    dst_env: &InputEnvironment,
+    src_endpoint: &EndpointConfig,
+    dst_endpoint: &EndpointConfig,
 ) -> Result<OutputConfig, String> {
-    let dst_index = dst_env
-        .indices
-        .iter()
-        .find(|i| i.name == job.index.name);
-
     let timestamp = state
         .timestamp
         .clone()
@@ -1701,28 +2868,33 @@ fn build_output_config(
         .number_of_shards
         .unwrap_or(1)
         .max(1);
-    let number_of_replicas = dst_index
-        .and_then(|idx| idx.number_of_replicas)
-        .unwrap_or(dst_env.number_of_replicas);
+    let number_of_replicas = job
+        .index
+        .number_of_replicas
+        .unwrap_or(dst_endpoint.number_of_replicas);
 
     let index_name = build_index_name(
-        &src_env.prefix,
+        &src_endpoint.prefix,
         &job.index.name,
         state.from_suffix.as_deref(),
     );
     let name_of_copy = build_name_of_copy(
-        &dst_env.prefix,
+        &dst_endpoint.prefix,
         &job.index.name,
         &timestamp,
         state.copy_suffix.as_deref(),
     );
     let alias_name = build_alias_name(
-        &dst_env.prefix,
+        &dst_endpoint.prefix,
         &job.index.name,
         state.alias_suffix.as_deref(),
     );
 
-    let mut custom_mapping = dst_index.and_then(|idx| idx.custom.as_ref()).and_then(|c| c.mapping.clone());
+    let mut custom_mapping = job
+        .index
+        .custom
+        .as_ref()
+        .and_then(|c| c.mapping.clone());
     if custom_mapping.as_deref().unwrap_or("").is_empty() {
         custom_mapping = None;
     }
@@ -1766,30 +2938,22 @@ fn build_output_config(
 
     let endpoints = vec![
         OutputEndpoint {
-            name: state.src_endpoint.name.clone(),
-            url: state.src_endpoint.url.clone(),
+            name: "es-source".to_string(),
+            url: src_endpoint.url.clone(),
             root_certificates: state.ca_path().map(|p| p.to_string_lossy().to_string()),
-            basic_auth: state
-                .src_endpoint
-                .user
-                .clone()
-                .map(|user| OutputBasicAuth {
-                    username: user,
-                    password: state.src_endpoint.pass.clone(),
-                }),
+            basic_auth: src_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
+                username: auth.username.clone(),
+                password: auth.password.clone(),
+            }),
         },
         OutputEndpoint {
-            name: state.dst_endpoint.name.clone(),
-            url: state.dst_endpoint.url.clone(),
+            name: "es-destination".to_string(),
+            url: dst_endpoint.url.clone(),
             root_certificates: state.ca_path().map(|p| p.to_string_lossy().to_string()),
-            basic_auth: state
-                .dst_endpoint
-                .user
-                .clone()
-                .map(|user| OutputBasicAuth {
-                    username: user,
-                    password: state.dst_endpoint.pass.clone(),
-                }),
+            basic_auth: dst_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
+                username: auth.username.clone(),
+                password: auth.password.clone(),
+            }),
         },
     ];
 
@@ -1798,13 +2962,13 @@ fn build_output_config(
         copy_content: true,
         copy_mapping,
         delete_if_exists: false,
-        from: state.src_endpoint.name.clone(),
-        keep_alive: src_env.keep_alive.clone(),
+        from: "es-source".to_string(),
+        keep_alive: src_endpoint.keep_alive.clone(),
         name: index_name,
         name_of_copy,
         number_of_replicas,
         number_of_shards,
-        to: state.dst_endpoint.name.clone(),
+        to: "es-destination".to_string(),
         routing_field,
         pre_create_doc_source,
         alias: Some(OutputAlias {
@@ -1839,7 +3003,7 @@ fn build_output_config(
 
 impl AppState {
     fn ca_path(&self) -> Option<PathBuf> {
-        self.src_endpoint.ca_path.clone()
+        self.ca_path.clone()
     }
 }
 

@@ -50,7 +50,7 @@
           </div>
           <div class="page-body">
             <div class="row row-cards">
-              <div class="col-12 col-md-4">
+              <div class="col-12 col-md-3">
                 <div class="card">
                   <div class="card-body">
                     <div class="text-secondary">Host CPU</div>
@@ -58,11 +58,67 @@
                   </div>
                 </div>
               </div>
+              <div class="col-12 col-md-3">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Server CPU</div>
+                    <div class="h2 m-0" id="procCpu">{{ summary.proc_cpu }}%</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-3">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Children CPU</div>
+                    <div class="h2 m-0" id="childrenCpu">{{ summary.children_cpu }}%</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-3">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Total CPU</div>
+                    <div class="h2 m-0" id="totalCpu">{{ summary.total_cpu }}%</div>
+                  </div>
+                </div>
+              </div>
               <div class="col-12 col-md-4">
                 <div class="card">
                   <div class="card-body">
-                    <div class="text-secondary">Process CPU</div>
-                    <div class="h2 m-0" id="procCpu">{{ summary.proc_cpu }}%</div>
+                    <div class="text-secondary">Host Memory</div>
+                    <div class="h3 m-0" id="hostMem">{{ summary.host_mem_used_mb }} / {{ summary.host_mem_total_mb }} MB</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Server Memory</div>
+                    <div class="h3 m-0" id="procMem">{{ summary.proc_mem_mb }} MB</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Children Memory</div>
+                    <div class="h3 m-0" id="childrenMem">{{ summary.children_mem_mb }} MB</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Total Memory</div>
+                    <div class="h3 m-0" id="totalMem">{{ summary.total_mem_mb }} MB</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="text-secondary">Running Jobs</div>
+                    <div class="h2 m-0" id="runningJobs">{{ summary.running_jobs }}</div>
                   </div>
                 </div>
               </div>
@@ -74,22 +130,6 @@
                   </div>
                 </div>
               </div>
-              <div class="col-12 col-md-6">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Host Memory</div>
-                    <div class="h3 m-0" id="hostMem">{{ summary.host_mem_used_mb }} / {{ summary.host_mem_total_mb }} MB</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-6">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Process Memory</div>
-                    <div class="h3 m-0" id="procMem">{{ summary.proc_mem_mb }} MB</div>
-                  </div>
-                </div>
-              </div>
               <div class="col-12">
                 <div class="card">
                   <div class="card-header">
@@ -98,11 +138,29 @@
                   <div class="card-body">
                     <div class="chart-legend mb-2">
                       <span class="legend-dot" style="background:#4dabf7"></span>
-                      <span class="legend-label">Host CPU</span>
+                      <span class="legend-label">Server CPU</span>
                       <span class="legend-dot" style="background:#ffd43b"></span>
-                      <span class="legend-label">Process CPU</span>
+                      <span class="legend-label">Children CPU</span>
+                      <span class="legend-dot" style="background:#69db7c"></span>
+                      <span class="legend-label">Total CPU</span>
                     </div>
                     <div id="cpuChart" class="chart"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12">
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title">Host vs Total CPU (last 10 min)</div>
+                  </div>
+                  <div class="card-body">
+                    <div class="chart-legend mb-2">
+                      <span class="legend-dot" style="background:#4dabf7"></span>
+                      <span class="legend-label">Host CPU</span>
+                      <span class="legend-dot" style="background:#69db7c"></span>
+                      <span class="legend-label">Total CPU</span>
+                    </div>
+                    <div id="cpuTotalChart" class="chart"></div>
                   </div>
                 </div>
               </div>
@@ -113,10 +171,14 @@
                   </div>
                   <div class="card-body">
                     <div class="chart-legend mb-2">
+                      <span class="legend-dot" style="background:#4dabf7"></span>
+                      <span class="legend-label">Server MB</span>
+                      <span class="legend-dot" style="background:#ffd43b"></span>
+                      <span class="legend-label">Children MB</span>
                       <span class="legend-dot" style="background:#69db7c"></span>
-                      <span class="legend-label">Host Used MB</span>
+                      <span class="legend-label">Total MB</span>
                       <span class="legend-dot" style="background:#ffa8a8"></span>
-                      <span class="legend-label">Process MB</span>
+                      <span class="legend-label">Host Used MB</span>
                     </div>
                     <div id="memChart" class="chart"></div>
                   </div>
@@ -161,12 +223,19 @@
         const toMb = (value) => value / 1024 / 1024;
         document.getElementById("hostCpu").textContent = `${sample.host_cpu.toFixed(1)}%`;
         document.getElementById("procCpu").textContent = `${sample.proc_cpu.toFixed(1)}%`;
+        document.getElementById("childrenCpu").textContent = `${sample.children_cpu.toFixed(1)}%`;
+        document.getElementById("totalCpu").textContent = `${sample.total_cpu.toFixed(1)}%`;
         document.getElementById("loadAvg").textContent =
           `${sample.load1.toFixed(2)} / ${sample.load5.toFixed(2)} / ${sample.load15.toFixed(2)}`;
         document.getElementById("hostMem").textContent =
           `${Math.round(toMb(sample.host_mem_used_kb))} / ${Math.round(toMb(sample.host_mem_total_kb))} MB`;
         document.getElementById("procMem").textContent =
           `${Math.round(toMb(sample.proc_mem_kb))} MB`;
+        document.getElementById("childrenMem").textContent =
+          `${Math.round(toMb(sample.children_mem_kb))} MB`;
+        document.getElementById("totalMem").textContent =
+          `${Math.round(toMb(sample.total_mem_kb))} MB`;
+        document.getElementById("runningJobs").textContent = `${sample.running_jobs}`;
       }
 
       const cpuChart = new Chartkick.LineChart("cpuChart", [], {
@@ -175,7 +244,16 @@
         points: true,
         curve: false,
         legend: "bottom",
-        colors: ["#4dabf7", "#ffd43b"],
+        colors: ["#4dabf7", "#ffd43b", "#69db7c"],
+        height: "240px",
+      });
+      const cpuTotalChart = new Chartkick.LineChart("cpuTotalChart", [], {
+        min: 0,
+        max: 100,
+        points: true,
+        curve: false,
+        legend: "bottom",
+        colors: ["#4dabf7", "#69db7c"],
         height: "240px",
       });
       const memChart = new Chartkick.LineChart("memChart", [], {
@@ -183,7 +261,7 @@
         points: true,
         curve: false,
         legend: "bottom",
-        colors: ["#69db7c", "#ffa8a8"],
+        colors: ["#4dabf7", "#ffd43b", "#69db7c", "#ffa8a8"],
         height: "240px",
       });
       const loadChart = new Chartkick.LineChart("loadChart", [], {
@@ -199,23 +277,45 @@
         const toPoint = (value) => [new Date(value.ts * 1000), value.val];
         const cpuSeries = [
           {
+            name: "Server CPU",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.proc_cpu]),
+          },
+          {
+            name: "Children CPU",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.children_cpu]),
+          },
+          {
+            name: "Total CPU",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.total_cpu]),
+          },
+        ];
+        const cpuTotalSeries = [
+          {
             name: "Host CPU",
             data: samples.map((s) => [new Date(s.ts * 1000), s.host_cpu]),
           },
           {
-            name: "Process CPU",
-            data: samples.map((s) => [new Date(s.ts * 1000), s.proc_cpu]),
+            name: "Total CPU",
+            data: samples.map((s) => [new Date(s.ts * 1000), s.total_cpu]),
           },
         ];
         const toMb = (value) => value / 1024 / 1024;
         const memSeries = [
           {
-            name: "Host Used MB",
-            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.host_mem_used_kb)]),
+            name: "Server MB",
+            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.proc_mem_kb)]),
           },
           {
-            name: "Process MB",
-            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.proc_mem_kb)]),
+            name: "Children MB",
+            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.children_mem_kb)]),
+          },
+          {
+            name: "Total MB",
+            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.total_mem_kb)]),
+          },
+          {
+            name: "Host Used MB",
+            data: samples.map((s) => [new Date(s.ts * 1000), toMb(s.host_mem_used_kb)]),
           },
         ];
         const loadSeries = [
@@ -232,7 +332,7 @@
             data: samples.map((s) => [new Date(s.ts * 1000), s.load15]),
           },
         ];
-        return { cpuSeries, memSeries, loadSeries };
+        return { cpuSeries, cpuTotalSeries, memSeries, loadSeries };
       }
 
       function redraw() {
@@ -242,6 +342,7 @@
         }
         const series = buildSeries();
         cpuChart.updateData(series.cpuSeries);
+        cpuTotalChart.updateData(series.cpuTotalSeries);
         memChart.updateData(series.memSeries);
         loadChart.updateData(series.loadSeries);
       }

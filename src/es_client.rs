@@ -74,7 +74,7 @@ impl EsClient {
     ) -> Option<String> {
         let url = format!("{}{}", self.endpoint.get_url(), path);
         debug!("Getting url: {}", url);
-        let mut request_builder = self.http_client.get(url).query(&query);
+        let mut request_builder = self.http_client.get(&url).query(&query);
 
         for (key, val) in headers {
             request_builder = request_builder.header(key, val);
@@ -87,16 +87,42 @@ impl EsClient {
             .timeout(Duration::from_secs(*self.endpoint.get_timeout()))
             .send()
             .await;
-        if let Ok(call) = call {
-            let text = call.text().await;
-            if let Ok(text) = text {
-                return Some(text);
+        match call {
+            Ok(call) => {
+                let status = call.status();
+                match call.text().await {
+                    Ok(text) => {
+                        if text.is_empty() {
+                            error!("Empty response from {} (status {})", url, status);
+                            return None;
+                        }
+                        if !status.is_success() {
+                            if status == reqwest::StatusCode::NOT_FOUND && path.starts_with("/_alias/") {
+                                debug!(
+                                    "Alias not found at {} (status {}): {}",
+                                    url, status, text
+                                );
+                                return None;
+                            }
+                            error!(
+                                "Non-success response from {} (status {}): {}",
+                                url, status, text
+                            );
+                            return None;
+                        }
+                        return Some(text);
+                    }
+                    Err(e) => {
+                        error!("Failed to read response from {} (status {}): {:#?}", url, status, e);
+                        return None;
+                    }
+                }
             }
-        } else {
-            debug!("{:#?}", &call);
+            Err(e) => {
+                error!("Request error for {}: {:#?}", url, e);
+                return None;
+            }
         }
-
-        todo!("Implement empty response!")
     }
 
     async fn call_post(
@@ -154,7 +180,7 @@ impl EsClient {
     ) -> Option<String> {
         let url = format!("{}{}", self.endpoint.get_url(), path);
         debug!("Posting url: {}", url);
-        let mut request_builder = self.http_client.put(url).query(&query).body(body.clone());
+        let mut request_builder = self.http_client.put(&url).query(&query).body(body.clone());
 
         for (key, val) in headers {
             request_builder = request_builder.header(key, val);
@@ -167,15 +193,36 @@ impl EsClient {
             .timeout(Duration::from_secs(*self.endpoint.get_timeout()))
             .send()
             .await;
-        if let Ok(call) = call {
-            let text = call.text().await;
-            if let Ok(text) = text {
-                debug!("Put response text: {}", text);
-                return Some(text);
+        match call {
+            Ok(call) => {
+                let status = call.status();
+                match call.text().await {
+                    Ok(text) => {
+                        if text.is_empty() {
+                            error!("Empty response from {} (status {})", url, status);
+                            return None;
+                        }
+                        if !status.is_success() {
+                            error!(
+                                "Non-success response from {} (status {}): {}",
+                                url, status, text
+                            );
+                            return None;
+                        }
+                        debug!("Put response text: {}", text);
+                        return Some(text);
+                    }
+                    Err(e) => {
+                        error!("Failed to read response from {} (status {}): {:#?}", url, status, e);
+                        return None;
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Request error for {}: {:#?}", url, e);
+                return None;
             }
         }
-
-        todo!("Implement empty response!")
     }
 
     async fn call_delete(
@@ -189,7 +236,7 @@ impl EsClient {
         debug!("Deleting url: {}", url);
         let mut request_builder = self
             .http_client
-            .delete(url)
+            .delete(&url)
             .query(&query)
             .body(body.clone());
 
@@ -204,15 +251,36 @@ impl EsClient {
             .timeout(Duration::from_secs(*self.endpoint.get_timeout()))
             .send()
             .await;
-        if let Ok(call) = call {
-            let text = call.text().await;
-            if let Ok(text) = text {
-                debug!("Post response text: {}", text);
-                return Some(text);
+        match call {
+            Ok(call) => {
+                let status = call.status();
+                match call.text().await {
+                    Ok(text) => {
+                        if text.is_empty() {
+                            error!("Empty response from {} (status {})", url, status);
+                            return None;
+                        }
+                        if !status.is_success() {
+                            error!(
+                                "Non-success response from {} (status {}): {}",
+                                url, status, text
+                            );
+                            return None;
+                        }
+                        debug!("Post response text: {}", text);
+                        return Some(text);
+                    }
+                    Err(e) => {
+                        error!("Failed to read response from {} (status {}): {:#?}", url, status, e);
+                        return None;
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Request error for {}: {:#?}", url, e);
+                return None;
             }
         }
-
-        todo!("implement empty response!")
     }
 
     async fn server_info(&mut self) -> Option<ServerInfo> {

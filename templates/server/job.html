@@ -27,6 +27,26 @@
         border-top-left-radius: 8px;
         border-top-right-radius: 8px;
       }
+      .terminal-controls {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .terminal-controls .form-control {
+        background: #0b0f14;
+        color: #cfe3f4;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      .terminal-controls .form-control:focus {
+        background: #0b0f14;
+        color: #cfe3f4;
+      }
+      .log-highlight {
+        background: rgba(51, 154, 240, 0.25);
+        border-radius: 3px;
+        padding: 0 1px;
+      }
       .terminal-dot {
         width: 10px;
         height: 10px;
@@ -68,14 +88,24 @@
               </div>
               <div class="col-auto">
                 {% if job.status.as_str() == "pending" %}
-                  <span class="badge bg-secondary text-white">pending</span>
+                  <span class="badge bg-secondary text-white" id="jobStatusBadge">pending</span>
                 {% else if job.status.as_str() == "running" %}
-                  <span class="badge bg-yellow text-dark">running</span>
+                  <span class="badge bg-yellow text-dark" id="jobStatusBadge">running</span>
                 {% else if job.status.as_str() == "succeeded" %}
-                  <span class="badge bg-green text-dark">succeeded</span>
+                  <span class="badge bg-green text-dark" id="jobStatusBadge">succeeded</span>
+                {% else if job.status.as_str() == "stopped" %}
+                  <span class="badge bg-secondary text-white" id="jobStatusBadge">stopped</span>
                 {% else %}
-                  <span class="badge bg-red text-white">failed</span>
+                  <span class="badge bg-red text-white" id="jobStatusBadge">failed</span>
                 {% endif %}
+                <div class="text-secondary small mt-1" id="jobProgressMeta">
+                  {% if job.progress_label.is_some() %}
+                    {{ job.progress_label.as_deref().unwrap_or("") }}
+                    {% if job.eta_label.is_some() %}
+                      · {{ job.eta_label.as_deref().unwrap_or("") }}
+                    {% endif %}
+                  {% endif %}
+                </div>
               </div>
             </div>
           </div>
@@ -88,6 +118,15 @@
                     <span class="terminal-dot yellow"></span>
                     <span class="terminal-dot green"></span>
                     <span class="ms-2 text-secondary">STDOUT</span>
+                    <div class="terminal-controls">
+                      <input class="form-control form-control-sm log-filter" id="stdoutFilter" type="text" placeholder="Filter">
+                      <button class="btn btn-sm btn-ghost log-copy" id="stdoutCopy" type="button" title="Copy to clipboard">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   <div class="card-body">
                     <pre id="stdout">
@@ -103,6 +142,15 @@
                     <span class="terminal-dot yellow"></span>
                     <span class="terminal-dot green"></span>
                     <span class="ms-2 text-secondary">STDERR</span>
+                    <div class="terminal-controls">
+                      <input class="form-control form-control-sm log-filter" id="stderrFilter" type="text" placeholder="Filter">
+                      <button class="btn btn-sm btn-ghost log-copy" id="stderrCopy" type="button" title="Copy to clipboard">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   <div class="card-body">
                     <pre id="stderr">
@@ -117,14 +165,28 @@
       </div>
     </div>
     <script>
+      const highlightStart = "\u0001";
+      const highlightEnd = "\u0002";
       function escapeHtml(value) {
         return value
           .replaceAll("&", "&amp;")
           .replaceAll("<", "&lt;")
           .replaceAll(">", "&gt;");
       }
-      function renderAnsi(line) {
-        const escaped = escapeHtml(line);
+      function escapeRegExp(value) {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      }
+      function injectHighlight(line, query) {
+        const trimmed = (query || "").trim();
+        if (!trimmed) {
+          return line;
+        }
+        const regex = new RegExp(escapeRegExp(trimmed), "ig");
+        return line.replace(regex, (match) => `${highlightStart}${match}${highlightEnd}`);
+      }
+      function renderAnsi(line, highlightQuery) {
+        const highlighted = injectHighlight(line, highlightQuery);
+        const escaped = escapeHtml(highlighted);
         let output = "";
         let classes = [];
         let index = 0;
@@ -151,7 +213,9 @@
           classes = applyAnsiCodes(classes, codes);
           index = controlEnd.end + 1;
         }
-        return output;
+        return output
+          .replaceAll(highlightStart, '<span class="log-highlight">')
+          .replaceAll(highlightEnd, "</span>");
       }
       function findControlSequenceEnd(text, start) {
         for (let i = start; i < text.length; i += 1) {
@@ -207,30 +271,138 @@
           default: return "white";
         }
       }
-      function renderInitial(pre) {
-        const lines = pre.textContent.split("\n");
-        pre.innerHTML = lines.map(renderAnsi).join("\n");
+      function splitLines(text) {
+        const normalized = text.replace(/\r\n/g, "\n");
+        const raw = normalized.split("\n");
+        if (raw.length > 0 && raw[raw.length - 1] === "") {
+          raw.pop();
+        }
+        return raw;
       }
-      function appendLine(pre, line) {
-        const rendered = renderAnsi(line);
-        pre.innerHTML += rendered + "\n";
+      function filterLines(lines, query) {
+        const trimmed = (query || "").trim();
+        if (!trimmed) {
+          return lines;
+        }
+        const lower = trimmed.toLowerCase();
+        return lines.filter((line) => line.toLowerCase().includes(lower));
+      }
+      function renderStream(pre, lines, query) {
+        const filtered = filterLines(lines, query);
+        pre.innerHTML = filtered.map((line) => renderAnsi(line, query)).join("\n");
         pre.scrollTop = pre.scrollHeight;
       }
-      function connectStream(targetId, stream) {
+      function appendLine(pre, lines, line, query) {
+        lines.push(line);
+        if (!query || query.trim() === "") {
+          pre.innerHTML += renderAnsi(line, "") + "\n";
+          pre.scrollTop = pre.scrollHeight;
+          return;
+        }
+        renderStream(pre, lines, query);
+      }
+      function copyToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text);
+          return;
+        }
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      function connectStream(targetId, stream, lines, filterInput) {
         const target = document.getElementById(targetId);
-        renderInitial(target);
+        renderStream(target, lines, filterInput.value);
         const source = new EventSource(`{{ base_path }}/runs/{{ run_id }}/jobs/{{ job.id }}/stream?stream=${stream}`);
         source.onmessage = (event) => {
           try {
             const payload = JSON.parse(event.data);
-            appendLine(target, payload.line);
+            appendLine(target, lines, payload.line, filterInput.value);
           } catch (err) {
             console.log("Invalid event", err);
           }
         };
       }
-      connectStream("stdout", "stdout");
-      connectStream("stderr", "stderr");
+
+      const stdoutPre = document.getElementById("stdout");
+      const stderrPre = document.getElementById("stderr");
+      const stdoutFilter = document.getElementById("stdoutFilter");
+      const stderrFilter = document.getElementById("stderrFilter");
+      const stdoutCopy = document.getElementById("stdoutCopy");
+      const stderrCopy = document.getElementById("stderrCopy");
+      const stdoutLines = splitLines(stdoutPre.textContent);
+      const stderrLines = splitLines(stderrPre.textContent);
+
+      stdoutFilter.addEventListener("input", () => {
+        renderStream(stdoutPre, stdoutLines, stdoutFilter.value);
+      });
+      stderrFilter.addEventListener("input", () => {
+        renderStream(stderrPre, stderrLines, stderrFilter.value);
+      });
+      stdoutCopy.addEventListener("click", () => {
+        const filtered = filterLines(stdoutLines, stdoutFilter.value);
+        copyToClipboard(filtered.join("\n"));
+      });
+      stderrCopy.addEventListener("click", () => {
+        const filtered = filterLines(stderrLines, stderrFilter.value);
+        copyToClipboard(filtered.join("\n"));
+      });
+
+      connectStream("stdout", "stdout", stdoutLines, stdoutFilter);
+      connectStream("stderr", "stderr", stderrLines, stderrFilter);
+
+      function updateStatusBadge(status) {
+        const badge = document.getElementById("jobStatusBadge");
+        if (!badge || !status || status === "missing") {
+          return;
+        }
+        badge.textContent = status;
+        badge.className = "badge";
+        if (status === "pending") {
+          badge.classList.add("bg-secondary", "text-white");
+        } else if (status === "running") {
+          badge.classList.add("bg-yellow", "text-dark");
+        } else if (status === "succeeded") {
+          badge.classList.add("bg-green", "text-dark");
+        } else if (status === "stopped") {
+          badge.classList.add("bg-secondary", "text-white");
+        } else {
+          badge.classList.add("bg-red", "text-white");
+        }
+      }
+
+      function updateProgressMeta(progressLabel, etaLabel) {
+        const meta = document.getElementById("jobProgressMeta");
+        if (!meta) {
+          return;
+        }
+        if (!progressLabel) {
+          meta.textContent = "";
+          return;
+        }
+        const text = etaLabel ? `${progressLabel} · ${etaLabel}` : progressLabel;
+        meta.textContent = text;
+      }
+
+      if (window.EventSource) {
+        const statusSource = new EventSource(
+          `{{ base_path }}/runs/{{ run_id }}/jobs/{{ job.id }}/status`,
+        );
+        statusSource.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(event.data);
+            updateStatusBadge(payload.status);
+            updateProgressMeta(payload.progress_label, payload.eta_label);
+          } catch (err) {
+            console.log("Invalid status update", err);
+          }
+        };
+      }
     </script>
   </body>
 </html>

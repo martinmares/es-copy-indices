@@ -24,6 +24,144 @@ cargo build --release
 RUST_LOG=info ./target/release/es-copy-indices -c ./conf/main.toml
 ```
 
+## Server Mode (`es-copy-indices-server`)
+The server wraps `es-copy-indices` with a web UI for running many jobs in parallel, splitting large indices by date, and tracking logs/progress. It reads endpoints from a main config file and index templates from a directory.
+
+### Build
+```bash
+cargo build --bin es-copy-indices-server
+```
+
+### Run
+```bash
+./target/debug/es-copy-indices-server \
+  --main-config ./conf/main-server.toml \
+  --env-templates ./conf/templates \
+  --ca-path ./certs \
+  --runs-dir ./runs \
+  --bind 0.0.0.0:8080
+```
+
+### main-server.toml
+```toml
+[[endpoints]]
+  name = "REF prostředí"
+  url = "http://celzisr401.server.cetin:9200"
+  prefix = "tsm-ref"
+  number_of_replicas = 0
+  keep_alive = "10m"
+  auth = { username = "empty", password = "empty" }
+
+[[endpoints]]
+  name = "TEST prostředí"
+  url = "http://celzist401.server.cetin:9200"
+  prefix = "tsm-test"
+  number_of_replicas = 0
+  keep_alive = "10m"
+  auth = { username = "empty", password = "empty" }
+```
+
+Notes:
+- `auth` is optional. If omitted, no basic auth is used.
+- `prefix` is concatenated directly (`prefix + index_name`) to match legacy index naming.
+- `number_of_replicas` and `keep_alive` are per-endpoint defaults used when generating the final TOML for jobs.
+
+HTTPS example with self-signed certs:
+```toml
+[[endpoints]]
+  name = "PROD TLS"
+  url = "https://es-prod.local:9200"
+  prefix = "tsm"
+  number_of_replicas = 1
+  keep_alive = "10m"
+  auth = { username = "elastic", password = "secret" }
+```
+
+Run with CA bundle:
+```bash
+./target/debug/es-copy-indices-server \
+  --main-config ./conf/main-server.toml \
+  --env-templates ./conf/templates \
+  --ca-path ./certs
+```
+
+If you must bypass TLS validation for percentile queries:
+```bash
+./target/debug/es-copy-indices-server \
+  --main-config ./conf/main-server.toml \
+  --env-templates ./conf/templates \
+  --insecure
+```
+
+### Templates directory (`--env-templates`)
+Each template file contains only `[[indices]]` (no `[env]`). Optional metadata lives under `[global]`.
+
+Example `./conf/templates/normal.toml`:
+```toml
+[global]
+  name = "Zero replicas"
+
+[[indices]]
+  name = "ticket"
+  buffer_size = 2500
+  number_of_shards = 10
+  routing_field = "/joinField/parent"
+
+  [indices.split]
+    field_name = "whenInserted"
+    number_of_parts = 10
+```
+
+The template name shown in UI is:
+- `global.name` if present,
+- otherwise the file name.
+
+### UI flow
+- Home page lists runs and updates via SSE (no page refresh).
+- Create New Run opens a modal where you select:
+  - source endpoint
+  - destination endpoint
+  - template
+- Optional Dry run skips `es-copy-indices` execution and marks jobs succeeded (for testing).
+- If source == destination, a warning is shown (allowed).
+- Run details show `SRC → DST + template` and per-endpoint settings.
+- Each run card has a Remove button (with confirmation). Running jobs cannot be removed.
+- Run page actions: Export run ZIP (configs/logs/metadata) and Retry Failed jobs.
+- Logs stream via SSE with ANSI color support, per-stream filtering, and copy-to-clipboard.
+- Exported ZIP strips ANSI escape codes from `runs/<id>/logs/*.log` for readability.
+- Status page shows CPU/memory and load graphs for host + process.
+
+### Support helpers
+- Export run ZIP to share configs/logs/metadata with L2 support.
+- Retry Failed to re-run only the failed jobs without rebuilding the run.
+- Dry run to validate pipelines without touching Elasticsearch.
+- Log filter + copy to clipboard for fast diagnostics.
+
+### Server CLI reference (selected)
+Flags are strict CLI-only (no env fallbacks).
+
+- `--main-config PATH`: main config with endpoints.
+- `--env-templates DIR`: templates directory.
+- `--es-copy-indices-path PATH`: explicit path to the `es-copy-indices` binary (default resolves from `PATH`).
+- `--from-index-name-suffix SUFFIX`: adds `-SUFFIX` to source index name.
+- `--index-copy-suffix SUFFIX`: adds `-SUFFIX` to destination index name.
+- `--alias-suffix SUFFIX`: adds `-SUFFIX` to alias name.
+- `--alias-remove-if-exists`: if set, alias removal is enabled (default false).
+- `--audit`: if set, audit logging is enabled (default false).
+- `--timestamp STRING`: override timestamp used in `name_of_copy`.
+- `--ca-path DIR`: PEM directory for HTTPS.
+- `--insecure`: disable TLS verify for percentile queries (useful with self-signed).
+- `--runs-dir DIR`: store run history/logs (default `./runs`).
+- `--base-path PATH`: reverse-proxy base path (e.g. `/es-copy-indices`).
+
+### Troubleshooting
+- `percentile request failed: 404` usually means the source index name is wrong:
+  - wrong endpoint,
+  - wrong prefix,
+  - or `--from-index-name-suffix` is set incorrectly.
+- If templates directory is empty or invalid, the server will refuse to start.
+- If `--base-path` is set, open `http://host:port/<base-path>` (no trailing slash).
+
 ## How It Works
 1) Detects server info for both source and destination clusters.
 2) Optionally creates the destination index with mappings and settings.
@@ -219,4 +357,3 @@ scroll_mode = "scrolling_search"
 ## Logging and Troubleshooting
 - Use `RUST_LOG=info` or `RUST_LOG=debug` for more detail.
 - Audit log captures bulk requests and responses when `[audit]` is present.
-

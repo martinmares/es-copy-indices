@@ -7,6 +7,36 @@
     <meta http-equiv="refresh" content="{{ refresh_seconds }}">
     {% endif %}
     <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
+    <style>
+      dialog.modal {
+        border: none;
+        padding: 0;
+        width: min(720px, 92vw);
+        background: transparent;
+        color: inherit;
+      }
+      dialog.modal::backdrop {
+        background: rgba(10, 14, 20, 0.75);
+      }
+      dialog.modal[open] {
+        display: block;
+      }
+      .js-run-card {
+        cursor: pointer;
+        transition: background-color 0.12s ease, border-color 0.12s ease;
+      }
+      .js-run-card.run-active {
+        border-color: rgba(47, 158, 68, 0.6);
+        background: linear-gradient(135deg, rgba(20, 66, 40, 0.35), rgba(11, 15, 20, 0.1));
+      }
+      .js-run-card:hover {
+        background-color: #0f1622;
+        border-color: rgba(148, 163, 184, 0.35);
+      }
+      .js-run-card .js-remove-run {
+        cursor: pointer;
+      }
+    </style>
   </head>
   <body>
     <div class="page">
@@ -21,27 +51,45 @@
               <div class="col-auto">
                 <div class="btn-list">
                   <a class="btn btn-outline-secondary" href="{{ base_path }}/status">Status</a>
-                  <form action="{{ base_path }}/runs" method="post">
-                    <button class="btn btn-primary" type="submit">Create New Run</button>
-                  </form>
+                  <a class="btn btn-outline-secondary" href="{{ base_path }}/config">Config</a>
+                  <button class="btn btn-primary" id="openCreateRun" type="button">Create New Run</button>
                 </div>
               </div>
             </div>
           </div>
           <div class="page-body">
             {% if runs.len() == 0 %}
-              <div class="card">
+              <div class="card" id="noRunsCard">
                 <div class="card-body text-secondary">No runs yet. Create the first run to generate jobs.</div>
               </div>
             {% endif %}
-            <div class="row row-cards">
+            <div class="row row-cards" id="runsList">
               {% for run in runs %}
                 <div class="col-12">
-                  <a class="card card-link" href="{{ base_path }}/runs/{{ run.id }}">
+                  <div class="card position-relative js-run-card {% if run.jobs_running > 0 %}run-active{% endif %}" data-run-id="{{ run.id }}">
                     <div class="card-body">
-                      <div class="d-flex align-items-center justify-content-between">
-                        <div class="h3 m-0">{{ run.id }}</div>
-                        <div class="text-secondary">{{ run.created_at }}</div>
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div class="h3 m-0">
+                      {{ run.src_name }} → {{ run.dst_name }}
+                      <span class="text-secondary fw-normal small ms-2">({{ run.id }})</span>
+                      {% if run.dry_run %}
+                        <span class="badge bg-azure text-white ms-2">dry run</span>
+                      {% endif %}
+                    </div>
+                    <div class="text-end">
+                      <div class="text-secondary">{{ run.created_at }}</div>
+                      <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="{{ run.id }}">
+                        Remove
+                      </button>
+                      {% if run.jobs_running > 0 %}
+                        <button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="{{ run.id }}">
+                          Stop all running jobs
+                        </button>
+                      {% endif %}
+                    </div>
+                  </div>
+                      <div class="text-secondary small">
+                        {{ run.template_name }}
                       </div>
                       <div class="mt-3 d-flex flex-wrap gap-2">
                         <span class="badge bg-secondary text-white">Total {{ run.jobs_total }}</span>
@@ -50,7 +98,7 @@
                         <span class="badge bg-red text-white">Failed {{ run.jobs_failed }}</span>
                       </div>
                     </div>
-                  </a>
+                  </div>
                 </div>
               {% endfor %}
             </div>
@@ -58,5 +106,422 @@
         </div>
       </div>
     </div>
+    <dialog class="modal" id="createRunModal">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <form action="{{ base_path }}/runs" method="post" id="createRunForm">
+            <div class="modal-header">
+              <h3 class="modal-title">Create New Run</h3>
+              <button class="btn-close" type="button" id="closeCreateRun"></button>
+            </div>
+            <div class="modal-body">
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label">Source endpoint</label>
+                  <select class="form-select" name="src_endpoint_id" id="srcEndpointSelect" required autofocus>
+                    {% for endpoint in endpoints %}
+                      <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">Destination endpoint</label>
+                  <select class="form-select" name="dst_endpoint_id" id="dstEndpointSelect" required>
+                    {% for endpoint in endpoints %}
+                      <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-12">
+                  <label class="form-label">Template</label>
+                  <select class="form-select" name="template_id" id="templateSelect" required>
+                    {% for template in templates %}
+                      <option value="{{ template.id }}">{{ template.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-12">
+                  <label class="form-check">
+                    <input class="form-check-input" type="checkbox" name="dry_run" id="dryRunToggle" value="1">
+                    <span class="form-check-label">Dry run (skip es-copy-indices, mark jobs succeeded)</span>
+                  </label>
+                </div>
+              </div>
+              <div class="alert alert-warning mt-3 d-none" id="sameEndpointWarning">
+                Source and destination are the same endpoint. This will create a timestamped copy in the same cluster.
+              </div>
+              <div class="alert alert-danger mt-3 d-none" id="createRunError"></div>
+              <div class="card mt-3">
+                <div class="card-body">
+                  <div class="text-secondary">Selection details</div>
+                  <div class="mt-2">
+                    <div class="fw-semibold">Source</div>
+                    <div class="text-secondary small" id="srcDetails">-</div>
+                  </div>
+                  <div class="mt-2">
+                    <div class="fw-semibold">Destination</div>
+                    <div class="text-secondary small" id="dstDetails">-</div>
+                  </div>
+                  <div class="mt-2">
+                    <div class="fw-semibold">Template</div>
+                    <div class="text-secondary small" id="templateDetails">-</div>
+                  </div>
+                  <div class="mt-2">
+                    <div class="fw-semibold">Dry run</div>
+                    <div class="text-secondary small" id="dryRunDetails">-</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-outline-secondary" type="button" id="cancelCreateRun">Cancel</button>
+              <button class="btn btn-primary" type="submit" id="createRunSubmit">
+                <span class="spinner-border spinner-border-sm me-2 d-none" id="createRunSpinner" role="status"></span>
+                <span id="createRunLabel">Create</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </dialog>
+    <dialog class="modal" id="removeRunModal">
+      <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title">Remove Run</h3>
+            <button class="btn-close" type="button" id="closeRemoveRun"></button>
+          </div>
+          <div class="modal-body">
+            <div class="text-secondary" id="removeRunText">Remove this run?</div>
+            <div class="alert alert-danger mt-3 d-none" id="removeRunError"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline-secondary" type="button" id="cancelRemoveRun">No</button>
+            <button class="btn btn-danger" type="button" id="confirmRemoveRun">Yes, remove</button>
+          </div>
+        </div>
+      </div>
+    </dialog>
   </body>
+  <script>
+    const endpoints = {{ endpoints_json | safe }};
+    const templates = {{ templates_json | safe }};
+    const runsList = document.getElementById("runsList");
+    const noRunsCard = document.getElementById("noRunsCard");
+    const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+
+    function escapeHtml(value) {
+      return value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function renderRuns(runs) {
+      if (noRunsCard) {
+        noRunsCard.classList.toggle("d-none", runs.length > 0);
+      }
+      runsList.innerHTML = runs
+        .map((run) => {
+          const runId = String(run.id || "");
+          const created = escapeHtml(run.created_at);
+          const srcName = escapeHtml(run.src_name || "unknown");
+          const dstName = escapeHtml(run.dst_name || "unknown");
+          const templateName = escapeHtml(run.template_name || "unnamed");
+          const href = `${basePath}/runs/${encodeURIComponent(runId)}`;
+          const dryRunBadge = run.dry_run ? '<span class="badge bg-azure text-white ms-2">dry run</span>' : "";
+          return `
+            <div class="col-12">
+              <div class="card position-relative js-run-card ${run.jobs_running > 0 ? "run-active" : ""}" data-run-id="${escapeHtml(runId)}">
+                <div class="card-body">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <div class="h3 m-0">
+                      ${srcName} → ${dstName}
+                      <span class="text-secondary fw-normal small ms-2">(${escapeHtml(runId)})</span>
+                      ${dryRunBadge}
+                    </div>
+                    <div class="text-end">
+                      <div class="text-secondary">${created}</div>
+                      <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="${escapeHtml(runId)}">
+                        Remove
+                      </button>
+                      ${run.jobs_running > 0
+                        ? `<button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="${escapeHtml(runId)}">
+                            Stop all running jobs
+                          </button>`
+                        : ""}
+                    </div>
+                  </div>
+                  <div class="text-secondary small">${templateName}</div>
+                  <div class="mt-3 d-flex flex-wrap gap-2">
+                    <span class="badge bg-secondary text-white">Total ${run.jobs_total}</span>
+                    <span class="badge bg-yellow text-dark">Running ${run.jobs_running}</span>
+                    <span class="badge bg-green text-dark">Succeeded ${run.jobs_succeeded}</span>
+                    <span class="badge bg-red text-white">Failed ${run.jobs_failed}</span>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        })
+        .join("");
+      bindRunCardClicks();
+      bindRemoveRunButtons();
+      bindStopRunButtons();
+    }
+
+    if (window.EventSource) {
+      const source = new EventSource(`${basePath}/runs/stream`);
+      source.onmessage = (event) => {
+        try {
+          const runs = JSON.parse(event.data);
+          if (Array.isArray(runs)) {
+            renderRuns(runs);
+          }
+        } catch (err) {
+          console.log("Invalid runs update", err);
+        }
+      };
+    }
+
+    const dialog = document.getElementById("createRunModal");
+    const removeDialog = document.getElementById("removeRunModal");
+    const openButton = document.getElementById("openCreateRun");
+    const closeButton = document.getElementById("closeCreateRun");
+    const cancelButton = document.getElementById("cancelCreateRun");
+    const srcSelect = document.getElementById("srcEndpointSelect");
+    const dstSelect = document.getElementById("dstEndpointSelect");
+    const templateSelect = document.getElementById("templateSelect");
+    const warning = document.getElementById("sameEndpointWarning");
+    const createRunForm = document.getElementById("createRunForm");
+    const createRunError = document.getElementById("createRunError");
+    const srcDetails = document.getElementById("srcDetails");
+    const dstDetails = document.getElementById("dstDetails");
+    const templateDetails = document.getElementById("templateDetails");
+    const dryRunDetails = document.getElementById("dryRunDetails");
+    const dryRunToggle = document.getElementById("dryRunToggle");
+    const closeRemoveRun = document.getElementById("closeRemoveRun");
+    const cancelRemoveRun = document.getElementById("cancelRemoveRun");
+    const confirmRemoveRun = document.getElementById("confirmRemoveRun");
+    const removeRunError = document.getElementById("removeRunError");
+    const removeRunText = document.getElementById("removeRunText");
+    let removeRunId = null;
+    const createRunSubmit = document.getElementById("createRunSubmit");
+    const createRunSpinner = document.getElementById("createRunSpinner");
+    const createRunLabel = document.getElementById("createRunLabel");
+
+    function endpointById(id) {
+      return endpoints.find((ep) => ep.id === id);
+    }
+
+    function templateById(id) {
+      return templates.find((tpl) => tpl.id === id);
+    }
+
+    function updateDetails() {
+      const src = endpointById(srcSelect.value);
+      const dst = endpointById(dstSelect.value);
+      const tpl = templateById(templateSelect.value);
+      if (src) {
+        srcDetails.textContent =
+          `${src.name} · ${src.url} · prefix=${src.prefix} · replicas=${src.number_of_replicas} · keep_alive=${src.keep_alive}`;
+      }
+      if (dst) {
+        dstDetails.textContent =
+          `${dst.name} · ${dst.url} · prefix=${dst.prefix} · replicas=${dst.number_of_replicas} · keep_alive=${dst.keep_alive}`;
+      }
+      if (tpl) {
+        templateDetails.textContent = `${tpl.name} · file=${tpl.file_name} · indices=${tpl.indices_count}`;
+      }
+      dryRunDetails.textContent = dryRunToggle.checked ? "yes" : "no";
+      warning.classList.toggle("d-none", srcSelect.value !== dstSelect.value);
+    }
+
+    openButton.addEventListener("click", () => {
+      if (dialog.showModal) {
+        dialog.showModal();
+      } else {
+        dialog.setAttribute("open", "open");
+      }
+      updateDetails();
+      setTimeout(() => {
+        srcSelect.focus();
+      }, 0);
+    });
+    [closeButton, cancelButton].forEach((btn) =>
+      btn.addEventListener("click", () => dialog.close()),
+    );
+    [srcSelect, dstSelect, templateSelect, dryRunToggle].forEach((select) =>
+      select.addEventListener("change", updateDetails),
+    );
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      dialog.close();
+    });
+
+    function openRemoveDialog(runId) {
+      removeRunId = runId;
+      removeRunError.classList.add("d-none");
+      removeRunError.textContent = "";
+      removeRunText.textContent = `Remove run ${runId}?`;
+      if (removeDialog.showModal) {
+        removeDialog.showModal();
+      } else {
+        removeDialog.setAttribute("open", "open");
+      }
+      setTimeout(() => {
+        confirmRemoveRun.focus();
+      }, 0);
+    }
+
+    function closeRemoveDialog() {
+      removeDialog.close();
+      removeRunId = null;
+    }
+
+    function removeRunFromList(runId) {
+      const safeId = window.CSS && CSS.escape ? CSS.escape(runId) : runId;
+      const card = document.querySelector(`.js-run-card[data-run-id="${safeId}"]`);
+      if (!card) {
+        return;
+      }
+      const col = card.closest(".col-12");
+      if (col) {
+        col.remove();
+      }
+      if (noRunsCard && runsList.children.length === 0) {
+        noRunsCard.classList.remove("d-none");
+      }
+    }
+
+    function bindRunCardClicks() {
+      document.querySelectorAll(".js-run-card").forEach((card) => {
+        card.addEventListener("click", (event) => {
+          if (event.target.closest(".js-remove-run") || event.target.closest(".js-stop-run")) {
+            return;
+          }
+          const runId = card.getAttribute("data-run-id");
+          if (runId) {
+            window.location.assign(`${basePath}/runs/${encodeURIComponent(runId)}`);
+          }
+        });
+      });
+    }
+
+    function bindRemoveRunButtons() {
+      document.querySelectorAll(".js-remove-run").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const runId = btn.getAttribute("data-run-id");
+          if (runId) {
+            openRemoveDialog(runId);
+          }
+        });
+      });
+    }
+
+    function bindStopRunButtons() {
+      document.querySelectorAll(".js-stop-run").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const runId = btn.getAttribute("data-run-id");
+          if (!runId) {
+            return;
+          }
+          fetch(`${basePath}/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" })
+            .then(() => fetch(`${basePath}/runs/snapshot`))
+            .then((response) => response.json())
+            .then((runs) => {
+              if (Array.isArray(runs)) {
+                renderRuns(runs);
+              }
+            })
+            .catch(() => {});
+        });
+      });
+    }
+
+    bindRemoveRunButtons();
+    bindStopRunButtons();
+
+    [closeRemoveRun, cancelRemoveRun].forEach((btn) =>
+      btn.addEventListener("click", closeRemoveDialog),
+    );
+
+    removeDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeRemoveDialog();
+    });
+
+    confirmRemoveRun.addEventListener("click", () => {
+      if (!removeRunId) {
+        return;
+      }
+      removeRunError.classList.add("d-none");
+      removeRunError.textContent = "";
+      fetch(`${basePath}/runs/${removeRunId}/delete`, { method: "POST" })
+        .then(async (response) => {
+          if (response.ok) {
+            closeRemoveDialog();
+            removeRunFromList(removeRunId);
+            fetch(`${basePath}/runs/snapshot`)
+              .then((snapshot) => snapshot.json())
+              .then((runs) => {
+                if (Array.isArray(runs)) {
+                  renderRuns(runs);
+                }
+              })
+              .catch(() => {});
+            return;
+          }
+          const message = await response.text();
+          removeRunError.textContent = message || "Failed to remove run.";
+          removeRunError.classList.remove("d-none");
+        })
+        .catch((err) => {
+          removeRunError.textContent = `Failed to remove run: ${err}`;
+          removeRunError.classList.remove("d-none");
+        });
+    });
+
+    createRunForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      createRunError.classList.add("d-none");
+      createRunError.textContent = "";
+      createRunSubmit.disabled = true;
+      createRunSpinner.classList.remove("d-none");
+      createRunLabel.textContent = "Creating...";
+      const payload = new URLSearchParams(new FormData(createRunForm));
+      fetch(createRunForm.action, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: payload.toString(),
+        redirect: "follow",
+      })
+        .then(async (response) => {
+          if (response.ok) {
+            if (response.redirected) {
+              window.location.assign(response.url);
+              return;
+            }
+            window.location.assign(response.url);
+          } else {
+            const message = await response.text();
+            createRunError.textContent = message || "Failed to create run.";
+            createRunError.classList.remove("d-none");
+            createRunSubmit.disabled = false;
+            createRunSpinner.classList.add("d-none");
+            createRunLabel.textContent = "Create";
+          }
+        })
+        .catch((err) => {
+          createRunError.textContent = `Failed to create run: ${err}`;
+          createRunError.classList.remove("d-none");
+          createRunSubmit.disabled = false;
+          createRunSpinner.classList.add("d-none");
+          createRunLabel.textContent = "Create";
+        });
+    });
+  </script>
 </html>
