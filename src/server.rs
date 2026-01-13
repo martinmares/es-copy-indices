@@ -1625,6 +1625,8 @@ async fn stop_job_internal(
     run_id: &str,
     job_id: &str,
 ) -> Result<String, String> {
+    let mut stop_message = "Stop requested.".to_string();
+    let mut should_remove_queue = false;
     let (pid, stderr_path, snapshot) = {
         let mut runs = state.runs.write().await;
         let run = runs
@@ -1636,14 +1638,28 @@ async fn stop_job_internal(
                 .jobs
                 .get_mut(job_id)
                 .ok_or_else(|| "job not found".to_string())?;
-            if !matches!(job.status, JobStatus::Running) {
-                return Ok("Job not running.".to_string());
+            match job.status {
+                JobStatus::Running => {
+                    job.status = JobStatus::Stopped;
+                    job.exit_code = Some(-15);
+                    job.finished_at = Some(now_string());
+                    job.completed_line = false;
+                    should_remove_queue = true;
+                    (job.pid, job.stderr_path.clone())
+                }
+                JobStatus::Queued | JobStatus::Pending => {
+                    job.status = JobStatus::Stopped;
+                    job.exit_code = Some(-15);
+                    job.finished_at = Some(now_string());
+                    job.completed_line = false;
+                    should_remove_queue = true;
+                    stop_message = "Queued job stopped.".to_string();
+                    (None, job.stderr_path.clone())
+                }
+                _ => {
+                    return Ok("Job already finished.".to_string());
+                }
             }
-            job.status = JobStatus::Stopped;
-            job.exit_code = Some(-15);
-            job.finished_at = Some(now_string());
-            job.completed_line = false;
-            (job.pid, job.stderr_path.clone())
         };
         let snapshot = run_snapshot(run);
         (pid, stderr_path, snapshot)
@@ -1655,6 +1671,10 @@ async fn stop_job_internal(
             warn!("Failed to persist run: {}", err);
         }
     });
+
+    if should_remove_queue {
+        remove_from_queue(state, run_id, job_id).await;
+    }
 
     if let Some(pid) = pid {
         let result = unsafe { kill(pid as i32, SIGTERM) };
@@ -1671,14 +1691,18 @@ async fn stop_job_internal(
         run_id,
         job_id,
         LogStream::Stderr,
-        "Stop requested (SIGTERM).",
+        if pid.is_some() {
+            "Stop requested (SIGTERM)."
+        } else {
+            "Stop requested (queued)."
+        },
         &stderr_path,
     )
     .await;
 
     state.queue_notify.notify_one();
 
-    Ok("Stop requested.".to_string())
+    Ok(stop_message)
 }
 
 async fn run_dry_job(

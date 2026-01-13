@@ -133,7 +133,7 @@
                       </button>
                       {% if run.jobs_running > 0 %}
                         <button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="{{ run.id }}">
-                          Stop all running jobs
+                          Stop all jobs
                         </button>
                       {% endif %}
                     </div>
@@ -339,7 +339,7 @@
                       </button>
                       ${run.jobs_running > 0
                         ? `<button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="${escapeHtml(runId)}">
-                            Stop all running jobs
+                            Stop all jobs
                           </button>`
                         : ""}
                     </div>
