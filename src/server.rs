@@ -3109,6 +3109,10 @@ fn build_name_of_copy(prefix: &str, name: &str, timestamp: &str, suffix: Option<
     result
 }
 
+fn escape_shell_value(value: &str) -> String {
+    value.replace('$', "$$")
+}
+
 fn build_output_config(
     state: &AppState,
     job: &JobPlan,
@@ -3198,8 +3202,8 @@ fn build_output_config(
             url: src_endpoint.url.clone(),
             root_certificates: state.ca_path().map(|p| p.to_string_lossy().to_string()),
             basic_auth: src_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
-                username: auth.username.clone(),
-                password: auth.password.clone(),
+                username: escape_shell_value(&auth.username),
+                password: auth.password.as_ref().map(|value| escape_shell_value(value)),
             }),
         },
         OutputEndpoint {
@@ -3207,8 +3211,8 @@ fn build_output_config(
             url: dst_endpoint.url.clone(),
             root_certificates: state.ca_path().map(|p| p.to_string_lossy().to_string()),
             basic_auth: dst_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
-                username: auth.username.clone(),
-                password: auth.password.clone(),
+                username: escape_shell_value(&auth.username),
+                password: auth.password.as_ref().map(|value| escape_shell_value(value)),
             }),
         },
     ];

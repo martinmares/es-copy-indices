@@ -64,6 +64,7 @@ Notes:
 - `prefix` is concatenated directly (`prefix + index_name`) to match legacy index naming.
 - `keep_alive` is a per-endpoint default used when generating the final TOML for jobs.
 - `number_of_replicas` is defined in templates (see below). If a template does not set it, the server falls back to the endpoint default (0 unless specified).
+- If a username or password contains `$`, the server escapes it as `$$` in generated configs because `es-copy-indices` runs a shell-style env expansion when loading TOML.
 
 HTTPS example with self-signed certs:
 ```toml
