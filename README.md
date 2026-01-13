@@ -37,7 +37,7 @@ cargo build --bin es-copy-indices-server
 ./target/debug/es-copy-indices-server \
   --main-config ./conf/main-server.toml \
   --env-templates ./conf/templates \
-  --ca-path ./certs \
+  --root-certificates ./certs \
   --runs-dir ./runs \
   --bind 0.0.0.0:8080
 ```
@@ -81,10 +81,10 @@ Run with CA bundle:
 ./target/debug/es-copy-indices-server \
   --main-config ./conf/main-server.toml \
   --env-templates ./conf/templates \
-  --ca-path ./certs
+  --root-certificates ./certs
 ```
 
-If you must bypass TLS validation for percentile queries:
+If you must bypass TLS validation for percentile queries and generated jobs:
 ```bash
 ./target/debug/es-copy-indices-server \
   --main-config ./conf/main-server.toml \
@@ -174,8 +174,8 @@ Flags are strict CLI-only (no env fallbacks).
 - `--alias-remove-if-exists`: if set, alias removal is enabled (default false).
 - `--audit`: if set, audit logging is enabled (default false).
 - `--timestamp STRING`: override timestamp used in `name_of_copy`.
-- `--ca-path DIR`: PEM directory for HTTPS.
-- `--insecure`: disable TLS verify for percentile queries (useful with self-signed).
+- `--root-certificates DIR`: PEM directory for HTTPS (alias: `--ca-path`).
+- `--insecure`: disable TLS verify for percentile queries and generated jobs (useful with self-signed or non-compliant certs).
 - `--runs-dir DIR`: store run history/logs (default `./runs`).
 - `--base-path PATH`: reverse-proxy base path (e.g. `/es-copy-indices`).
 - `--max-concurrent-jobs COUNT`: limit concurrent jobs; additional jobs stay queued.
@@ -289,6 +289,7 @@ enabled = true
   - `username` (string, required)
   - `password` (string, optional)
 - `root_certificates` (string, optional): Directory with PEM files to trust.
+- `insecure` (bool, optional, default false): Disable TLS verification for this endpoint.
 
 ### indices
 - `name` (string, required): Source index name or pattern.

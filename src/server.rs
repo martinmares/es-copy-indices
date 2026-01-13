@@ -31,14 +31,14 @@ const SPLIT_SUFFIX: &str = "split";
 const MAX_TAIL_LINES: usize = 200;
 
 #[derive(Parser, Debug)]
-#[command(name = "es-copy-indices-server")]
+#[command(name = "es-copy-indices-server", version)]
 struct ServerArgs {
     #[arg(long, value_name = "PATH")]
     main_config: PathBuf,
     #[arg(long = "env-templates", alias = "templates", value_name = "DIR")]
     templates_dir: PathBuf,
-    #[arg(long, value_name = "PATH")]
-    ca_path: Option<PathBuf>,
+    #[arg(long = "root-certificates", alias = "ca-path", value_name = "PATH")]
+    root_certificates: Option<PathBuf>,
     #[arg(long)]
     insecure: bool,
     #[arg(long, default_value = "runs")]
@@ -79,6 +79,7 @@ struct AppState {
     refresh_seconds: u64,
     base_path: String,
     ca_path: Option<PathBuf>,
+    insecure: bool,
     metrics: Arc<RwLock<MetricsState>>,
     metrics_tx: broadcast::Sender<MetricsSample>,
     timestamp: Option<String>,
@@ -380,6 +381,8 @@ struct OutputEndpoint {
     #[serde(skip_serializing_if = "Option::is_none")]
     root_certificates: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    insecure: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     basic_auth: Option<OutputBasicAuth>,
 }
 
@@ -619,13 +622,16 @@ pub async fn run() {
         .init();
 
     let args = ServerArgs::parse();
-    if let Some(path) = &args.ca_path {
+    if let Some(path) = &args.root_certificates {
         if !path.is_dir() {
-            warn!("--ca-path {:?} is not a directory; HTTPS may fail.", path);
+            warn!(
+                "--root-certificates {:?} is not a directory; HTTPS may fail.",
+                path
+            );
         }
     }
-    if args.insecure && args.ca_path.is_none() {
-        warn!("--insecure affects percentile queries only; es-copy-indices still needs CA files for HTTPS.");
+    if args.insecure && args.root_certificates.is_none() {
+        warn!("--insecure disables TLS verification for percentile queries and generated jobs.");
     }
     let endpoints = load_main_config(&args.main_config);
     let templates = load_templates(&args.templates_dir);
@@ -636,7 +642,7 @@ pub async fn run() {
         panic!("No templates found in {:?}", args.templates_dir);
     }
 
-    let client = build_reqwest_client(args.ca_path.as_ref(), args.insecure)
+    let client = build_reqwest_client(args.root_certificates.as_ref(), args.insecure)
         .unwrap_or_else(|e| panic!("Failed to build HTTP client: {e}"));
 
     let runs_dir = args.runs_dir.clone();
@@ -654,7 +660,8 @@ pub async fn run() {
         es_copy_path: args.es_copy_path,
         refresh_seconds: args.refresh_seconds,
         base_path: normalize_base_path(&args.base_path),
-        ca_path: args.ca_path.clone(),
+        ca_path: args.root_certificates.clone(),
+        insecure: args.insecure,
         metrics: Arc::clone(&metrics),
         metrics_tx,
         timestamp: args.timestamp,
@@ -3201,6 +3208,7 @@ fn build_output_config(
             name: "es-source".to_string(),
             url: src_endpoint.url.clone(),
             root_certificates: state.ca_path().map(|p| p.to_string_lossy().to_string()),
+            insecure: if state.insecure { Some(true) } else { None },
             basic_auth: src_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
                 username: escape_shell_value(&auth.username),
                 password: auth.password.as_ref().map(|value| escape_shell_value(value)),
@@ -3210,6 +3218,7 @@ fn build_output_config(
             name: "es-destination".to_string(),
             url: dst_endpoint.url.clone(),
             root_certificates: state.ca_path().map(|p| p.to_string_lossy().to_string()),
+            insecure: if state.insecure { Some(true) } else { None },
             basic_auth: dst_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
                 username: escape_shell_value(&auth.username),
                 password: auth.password.as_ref().map(|value| escape_shell_value(value)),

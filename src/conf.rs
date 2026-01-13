@@ -18,6 +18,8 @@ pub struct Endpoint {
     basic_auth: Option<BasicAuth>,
     #[serde(default)]
     root_certificates: Option<String>,
+    #[serde(default)]
+    insecure: bool,
     #[serde(default = "default_timeout")]
     timeout: u64,
 }
@@ -170,6 +172,9 @@ impl Endpoint {
     }
     pub fn get_root_certificates(&self) -> &Option<String> {
         &self.root_certificates
+    }
+    pub fn get_insecure(&self) -> bool {
+        self.insecure
     }
     pub fn is_basic_auth(&self) -> bool {
         let mut result = false;

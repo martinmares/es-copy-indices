@@ -49,6 +49,11 @@ async fn create_http_client(
         }
     }
 
+    if endpoint.get_insecure() {
+        info!("Disable TLS verification for {}", endpoint.get_name());
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+
     if let Ok(client) = builder.build() {
         Ok(client)
     } else {
