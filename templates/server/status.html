@@ -337,7 +337,7 @@
       const cpuChart = new ApexCharts(document.getElementById("cpuChart"), {
         ...baseChartOptions,
         colors: [tablerColors.blue, tablerColors.yellow, tablerColors.green],
-        yaxis: { min: 0, max: 100 },
+        yaxis: { min: 0 },
         series: [],
       });
       cpuChart.render();
@@ -345,7 +345,7 @@
       const cpuTotalChart = new ApexCharts(document.getElementById("cpuTotalChart"), {
         ...baseChartOptions,
         colors: [tablerColors.cyan, tablerColors.green],
-        yaxis: { min: 0, max: 100 },
+        yaxis: { min: 0 },
         series: [],
       });
       cpuTotalChart.render();
