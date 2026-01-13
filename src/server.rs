@@ -1625,15 +1625,13 @@ async fn stop_job_internal(
     run_id: &str,
     job_id: &str,
 ) -> Result<String, String> {
-    let mut stop_message = "Stop requested.".to_string();
-    let mut should_remove_queue = false;
-    let (pid, stderr_path, snapshot) = {
+    let (pid, stderr_path, snapshot, should_remove_queue, stop_message) = {
         let mut runs = state.runs.write().await;
         let run = runs
             .runs
             .get_mut(run_id)
             .ok_or_else(|| "run not found".to_string())?;
-        let (pid, stderr_path) = {
+        let (pid, stderr_path, should_remove_queue, stop_message) = {
             let job = run
                 .jobs
                 .get_mut(job_id)
@@ -1644,17 +1642,24 @@ async fn stop_job_internal(
                     job.exit_code = Some(-15);
                     job.finished_at = Some(now_string());
                     job.completed_line = false;
-                    should_remove_queue = true;
-                    (job.pid, job.stderr_path.clone())
+                    (
+                        job.pid,
+                        job.stderr_path.clone(),
+                        true,
+                        "Stop requested.".to_string(),
+                    )
                 }
                 JobStatus::Queued | JobStatus::Pending => {
                     job.status = JobStatus::Stopped;
                     job.exit_code = Some(-15);
                     job.finished_at = Some(now_string());
                     job.completed_line = false;
-                    should_remove_queue = true;
-                    stop_message = "Queued job stopped.".to_string();
-                    (None, job.stderr_path.clone())
+                    (
+                        None,
+                        job.stderr_path.clone(),
+                        true,
+                        "Queued job stopped.".to_string(),
+                    )
                 }
                 _ => {
                     return Ok("Job already finished.".to_string());
@@ -1662,7 +1667,13 @@ async fn stop_job_internal(
             }
         };
         let snapshot = run_snapshot(run);
-        (pid, stderr_path, snapshot)
+        (
+            pid,
+            stderr_path,
+            snapshot,
+            should_remove_queue,
+            stop_message,
+        )
     };
 
     let runs_dir = state.runs_dir.clone();
