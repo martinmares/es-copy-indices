@@ -1382,16 +1382,14 @@ async fn start_job_runner(
     job_id: String,
 ) -> Result<(), String> {
     let max_concurrent_jobs = state.max_concurrent_jobs.read().await.clone();
-    let running_count = if max_concurrent_jobs.is_some() {
-        let runs = state.runs.read().await;
-        count_running_jobs(&runs)
-    } else {
-        0
-    };
-
-    let mut queued = false;
-    let (config_path, stdout_path, stderr_path, snapshot, dry_run) = {
+    let (config_path, stdout_path, stderr_path, snapshot, dry_run, queued) = {
+        let mut queued = false;
         let mut runs = state.runs.write().await;
+        let running_count = if max_concurrent_jobs.is_some() {
+            count_running_jobs(&runs)
+        } else {
+            0
+        };
         let run = runs
             .runs
             .get_mut(&run_id)
@@ -1429,7 +1427,7 @@ async fn start_job_runner(
             )
         };
         let snapshot = run_snapshot(run);
-        (config_path, stdout_path, stderr_path, snapshot, dry_run)
+        (config_path, stdout_path, stderr_path, snapshot, dry_run, queued)
     };
     let runs_dir = state.runs_dir.clone();
     tokio::spawn(async move {
