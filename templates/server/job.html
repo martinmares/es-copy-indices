@@ -1,412 +1,288 @@
-<!doctype html>
-<html lang="en" data-bs-theme="dark">
-  <head>
-    <meta charset="utf-8">
-    <title>Job {{ job.name }}</title>
-    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
-    <style>
-      .log-panel pre {
-        margin: 0;
-        max-height: 360px;
-        overflow: auto;
-        font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
-        font-size: 12px;
-        line-height: 1.4;
-        background: #0b0f14;
-        color: #cfe3f4;
-        padding: 12px;
-        border-radius: 6px;
-      }
-      .terminal-header {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 10px 12px;
-        background: #12171d;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        border-top-left-radius: 8px;
-        border-top-right-radius: 8px;
-      }
-      .terminal-controls {
-        margin-left: auto;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .terminal-controls .form-control {
-        background: #0b0f14;
-        color: #cfe3f4;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-      }
-      .terminal-controls .form-control:focus {
-        background: #0b0f14;
-        color: #cfe3f4;
-      }
-      .log-highlight {
-        background: rgba(51, 154, 240, 0.25);
-        border-radius: 3px;
-        padding: 0 1px;
-      }
-      .terminal-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        display: inline-block;
-      }
-      .terminal-dot.red { background: #ff5f57; }
-      .terminal-dot.yellow { background: #febc2e; }
-      .terminal-dot.green { background: #28c840; }
-      .ansi-bold { font-weight: 700; }
-      .ansi-fg-black { color: #0b0f14; }
-      .ansi-fg-red { color: #ff6b6b; }
-      .ansi-fg-green { color: #51cf66; }
-      .ansi-fg-yellow { color: #fcc419; }
-      .ansi-fg-blue { color: #339af0; }
-      .ansi-fg-magenta { color: #cc5de8; }
-      .ansi-fg-cyan { color: #22b8cf; }
-      .ansi-fg-white { color: #f1f3f5; }
-      .ansi-fg-bright-black { color: #868e96; }
-      .ansi-fg-bright-red { color: #ff8787; }
-      .ansi-fg-bright-green { color: #69db7c; }
-      .ansi-fg-bright-yellow { color: #ffe066; }
-      .ansi-fg-bright-blue { color: #74c0fc; }
-      .ansi-fg-bright-magenta { color: #da77f2; }
-      .ansi-fg-bright-cyan { color: #66d9e8; }
-      .ansi-fg-bright-white { color: #ffffff; }
-    </style>
-  </head>
-  <body>
-    <div class="page">
-      <div class="page-wrapper">
-        <div class="container-xl">
-          <div class="page-header d-print-none">
-            <div class="row align-items-center">
-              <div class="col">
-                <a class="text-secondary" href="{{ base_path }}/runs/{{ run_id }}">&#8592; Back to run</a>
-                <h2 class="page-title">{{ job.name }}</h2>
-                <div class="text-secondary">Stage {{ job.stage_name }}</div>
-              </div>
-              <div class="col-auto">
-                {% if job.status.as_str() == "pending" %}
-                  <span class="badge bg-secondary text-white" id="jobStatusBadge">pending</span>
-                {% else if job.status.as_str() == "running" %}
-                  <span class="badge bg-yellow text-dark" id="jobStatusBadge">running</span>
-                {% else if job.status.as_str() == "queued" %}
-                  <span class="badge bg-blue text-white" id="jobStatusBadge">queued</span>
-                {% else if job.status.as_str() == "succeeded" %}
-                  <span class="badge bg-green text-dark" id="jobStatusBadge">succeeded</span>
-                {% else if job.status.as_str() == "stopped" %}
-                  <span class="badge bg-secondary text-white" id="jobStatusBadge">stopped</span>
-                {% else %}
-                  <span class="badge bg-red text-white" id="jobStatusBadge">failed</span>
-                {% endif %}
-                <div class="text-secondary small mt-1" id="jobProgressMeta">
-                  {% if job.progress_label.is_some() %}
-                    {{ job.progress_label.as_deref().unwrap_or("") }}
-                    {% if job.eta_label.is_some() %}
-                      · {{ job.eta_label.as_deref().unwrap_or("") }}
-                    {% endif %}
-                  {% endif %}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="page-body">
-            <div class="row row-cards">
-              <div class="col-12">
-                <div class="card log-panel">
-                  <div class="terminal-header">
-                    <span class="terminal-dot red"></span>
-                    <span class="terminal-dot yellow"></span>
-                    <span class="terminal-dot green"></span>
-                    <span class="ms-2 text-secondary">STDOUT</span>
-                    <div class="terminal-controls">
-                      <input class="form-control form-control-sm log-filter" id="stdoutFilter" type="text" placeholder="Filter">
-                      <button class="btn btn-sm btn-ghost log-copy" id="stdoutCopy" type="button" title="Copy to clipboard">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <rect x="9" y="9" width="13" height="13" rx="2"></rect>
-                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <div class="card-body">
-                    <pre id="stdout">
-{% for line in job.stdout_tail %}{{ line }}
-{% endfor %}</pre>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12">
-                <div class="card log-panel">
-                  <div class="terminal-header">
-                    <span class="terminal-dot red"></span>
-                    <span class="terminal-dot yellow"></span>
-                    <span class="terminal-dot green"></span>
-                    <span class="ms-2 text-secondary">STDERR</span>
-                    <div class="terminal-controls">
-                      <input class="form-control form-control-sm log-filter" id="stderrFilter" type="text" placeholder="Filter">
-                      <button class="btn btn-sm btn-ghost log-copy" id="stderrCopy" type="button" title="Copy to clipboard">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <rect x="9" y="9" width="13" height="13" rx="2"></rect>
-                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <div class="card-body">
-                    <pre id="stderr">
-{% for line in job.stderr_tail %}{{ line }}
-{% endfor %}</pre>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+{% extends "server/layout.html" %}
+
+{% block title %}Job {{ job.name }} · ES Copy Runner{% endblock %}
+
+{% block styles %}
+  <style>
+    .log-panel pre {
+      margin: 0;
+      max-height: 360px;
+      overflow: auto;
+      font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      background: #0b0f14;
+      color: #cfe3f4;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    .terminal-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 12px;
+      background: #12171d;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      border-top-left-radius: 8px;
+      border-top-right-radius: 8px;
+    }
+    .terminal-controls {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .terminal-controls .form-control {
+      background: #0b0f14;
+      color: #cfe3f4;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .terminal-controls .form-control:focus {
+      background: #0b0f14;
+      color: #cfe3f4;
+    }
+    .log-highlight {
+      background: rgba(51, 154, 240, 0.25);
+      border-radius: 3px;
+      padding: 0 1px;
+    }
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+    .terminal-dot.red { background: #ff5f57; }
+    .terminal-dot.yellow { background: #febc2e; }
+    .terminal-dot.green { background: #28c840; }
+    .ansi-bold { font-weight: 700; }
+    .ansi-fg-black { color: #0b0f14; }
+    .ansi-fg-red { color: #ff6b6b; }
+    .ansi-fg-green { color: #51cf66; }
+    .ansi-fg-yellow { color: #fcc419; }
+    .ansi-fg-blue { color: #339af0; }
+    .ansi-fg-magenta { color: #cc5de8; }
+    .ansi-fg-cyan { color: #22b8cf; }
+    .ansi-fg-white { color: #f1f3f5; }
+    .ansi-fg-bright-black { color: #868e96; }
+    .ansi-fg-bright-red { color: #ff8787; }
+    .ansi-fg-bright-green { color: #69db7c; }
+    .ansi-fg-bright-yellow { color: #ffe066; }
+    .ansi-fg-bright-blue { color: #74c0fc; }
+    .ansi-fg-bright-magenta { color: #da77f2; }
+    .ansi-fg-bright-cyan { color: #66d9e8; }
+    .ansi-fg-bright-white { color: #ffffff; }
+  </style>
+{% endblock %}
+
+{% block header %}
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <ol class="breadcrumb breadcrumb-arrows" aria-label="breadcrumbs">
+          <li class="breadcrumb-item">
+            <a href="{{ base_path }}/">Dashboard</a>
+          </li>
+          <li class="breadcrumb-item">
+            <a href="{{ base_path }}/runs/{{ run_id }}">Run {{ run_id }}</a>
+          </li>
+          <li class="breadcrumb-item active" aria-current="page">
+            {{ job.name }}
+          </li>
+        </ol>
+        <h2 class="page-title">{{ job.name }}</h2>
+        <div class="text-secondary">Stage {{ job.stage_name }}</div>
+      </div>
+      <div class="col-auto">
+        {% if job.status.as_str() == "pending" %}
+          <span class="badge bg-secondary text-white" id="jobStatusBadge">pending</span>
+        {% else if job.status.as_str() == "running" %}
+          <span class="badge bg-yellow text-dark" id="jobStatusBadge">running</span>
+        {% else if job.status.as_str() == "queued" %}
+          <span class="badge bg-blue text-white" id="jobStatusBadge">queued</span>
+        {% else if job.status.as_str() == "succeeded" %}
+          <span class="badge bg-green text-dark" id="jobStatusBadge">succeeded</span>
+        {% else if job.status.as_str() == "stopped" %}
+          <span class="badge bg-secondary text-white" id="jobStatusBadge">stopped</span>
+        {% else %}
+          <span class="badge bg-red text-white" id="jobStatusBadge">failed</span>
+        {% endif %}
+        <div class="text-secondary small mt-1" id="jobProgressMeta">
+          {% if job.progress_label.is_some() %}
+            {{ job.progress_label.as_deref().unwrap_or("") }}
+            {% if job.eta_label.is_some() %}
+              · {{ job.eta_label.as_deref().unwrap_or("") }}
+            {% endif %}
+          {% endif %}
         </div>
       </div>
     </div>
-    <script>
-      const highlightStart = "\u0001";
-      const highlightEnd = "\u0002";
-      function escapeHtml(value) {
-        return value
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;");
-      }
-      function escapeRegExp(value) {
-        return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      }
-      function injectHighlight(line, query) {
-        const trimmed = (query || "").trim();
-        if (!trimmed) {
-          return line;
-        }
-        const regex = new RegExp(escapeRegExp(trimmed), "ig");
-        return line.replace(regex, (match) => `${highlightStart}${match}${highlightEnd}`);
-      }
-      function renderAnsi(line, highlightQuery) {
-        const highlighted = injectHighlight(line, highlightQuery);
-        const escaped = escapeHtml(highlighted);
-        let output = "";
-        let classes = [];
-        let index = 0;
-        while (index < escaped.length) {
-          const escIndex = escaped.indexOf("\u001b[", index);
-          if (escIndex === -1) {
-            output += wrapAnsi(escaped.slice(index), classes);
-            break;
-          }
-          output += wrapAnsi(escaped.slice(index, escIndex), classes);
-          const controlEnd = findControlSequenceEnd(escaped, escIndex + 2);
-          if (controlEnd.end === -1) {
-            output += wrapAnsi(escaped.slice(escIndex), classes);
-            break;
-          }
-          if (controlEnd.code !== "m") {
-            index = controlEnd.end + 1;
-            continue;
-          }
-          const codes = escaped
-            .slice(escIndex + 2, controlEnd.end)
-            .split(";")
-            .map((c) => parseInt(c, 10));
-          classes = applyAnsiCodes(classes, codes);
-          index = controlEnd.end + 1;
-        }
-        return output
-          .replaceAll(highlightStart, '<span class="log-highlight">')
-          .replaceAll(highlightEnd, "</span>");
-      }
-      function findControlSequenceEnd(text, start) {
-        for (let i = start; i < text.length; i += 1) {
-          const code = text.charCodeAt(i);
-          if (code >= 64 && code <= 126) {
-            return { end: i, code: text[i] };
-          }
-        }
-        return { end: -1, code: "" };
-      }
-      function wrapAnsi(text, classes) {
-        if (!text) {
-          return "";
-        }
-        if (classes.length === 0) {
-          return text;
-        }
-        return `<span class="${classes.join(" ")}">${text}</span>`;
-      }
-      function applyAnsiCodes(current, codes) {
-        let next = current.filter((c) => !c.startsWith("ansi-fg-") && c !== "ansi-bold");
-        for (const code of codes) {
-          if (code === 0) {
-            next = [];
-          } else if (code === 1) {
-            if (!next.includes("ansi-bold")) {
-              next.push("ansi-bold");
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="row row-cards">
+    <div class="col-12">
+      <div class="card log-panel">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="ms-2 text-secondary">STDOUT</span>
+          <div class="terminal-controls">
+            <input class="form-control form-control-sm log-filter" id="stdoutFilter" type="text" placeholder="Filter">
+            <button class="btn btn-sm btn-ghost log-copy" id="stdoutCopy" type="button" title="Copy to clipboard">
+              <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <pre id="stdout">
+{% for line in job.stdout_tail %}{{ line }}
+{% endfor %}</pre>
+        </div>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="card log-panel">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="ms-2 text-secondary">STDERR</span>
+          <div class="terminal-controls">
+            <input class="form-control form-control-sm log-filter" id="stderrFilter" type="text" placeholder="Filter">
+            <button class="btn btn-sm btn-ghost log-copy" id="stderrCopy" type="button" title="Copy to clipboard">
+              <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <pre id="stderr">
+{% for line in job.stderr_tail %}{{ line }}
+{% endfor %}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    const highlightStart = "\u0001";
+    const highlightEnd = "\u0002";
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+    function escapeRegExp(value) {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    function ansiToHtml(text) {
+      const cleaned = text.replaceAll("\u001b[?25l", "").replaceAll("\u001b[?25h", "");
+      const parts = cleaned.split(/(\u001b\[[0-9;]*m)/g);
+      let html = "";
+      let currentClasses = [];
+      for (const part of parts) {
+        if (part.startsWith("\u001b[")) {
+          const codes = part.slice(2, -1).split(";").map((value) => parseInt(value, 10));
+          for (const code of codes) {
+            if (code === 0) {
+              currentClasses = [];
+            } else if (code === 1) {
+              if (!currentClasses.includes("ansi-bold")) currentClasses.push("ansi-bold");
+            } else if (code >= 30 && code <= 37) {
+              currentClasses = currentClasses.filter((value) => !value.startsWith("ansi-fg-"));
+              const name = ["black","red","green","yellow","blue","magenta","cyan","white"][code - 30];
+              currentClasses.push(`ansi-fg-${name}`);
+            } else if (code >= 90 && code <= 97) {
+              currentClasses = currentClasses.filter((value) => !value.startsWith("ansi-fg-"));
+              const name = ["black","red","green","yellow","blue","magenta","cyan","white"][code - 90];
+              currentClasses.push(`ansi-fg-bright-${name}`);
             }
-          } else if (code === 22) {
-            next = next.filter((c) => c !== "ansi-bold");
-          } else if (code >= 30 && code <= 37) {
-            next = next.filter((c) => !c.startsWith("ansi-fg-"));
-            next.push(`ansi-fg-${ansiColorName(code - 30)}`);
-          } else if (code >= 90 && code <= 97) {
-            next = next.filter((c) => !c.startsWith("ansi-fg-"));
-            next.push(`ansi-fg-bright-${ansiColorName(code - 90)}`);
-          } else if (code === 39) {
-            next = next.filter((c) => !c.startsWith("ansi-fg-"));
           }
-        }
-        return next;
-      }
-      function ansiColorName(offset) {
-        switch (offset) {
-          case 0: return "black";
-          case 1: return "red";
-          case 2: return "green";
-          case 3: return "yellow";
-          case 4: return "blue";
-          case 5: return "magenta";
-          case 6: return "cyan";
-          case 7: return "white";
-          default: return "white";
+        } else if (part.length) {
+          const escaped = escapeHtml(part);
+          const classAttr = currentClasses.length ? ` class="${currentClasses.join(" ")}"` : "";
+          html += `<span${classAttr}>${escaped}</span>`;
         }
       }
-      function splitLines(text) {
-        const normalized = text.replace(/\r\n/g, "\n");
-        const raw = normalized.split("\n");
-        if (raw.length > 0 && raw[raw.length - 1] === "") {
-          raw.pop();
+      return html;
+    }
+    function highlightMatches(lines, filter) {
+      if (!filter) {
+        return lines;
+      }
+      const regex = new RegExp(escapeRegExp(filter), "gi");
+      return lines.map((line) => line.replace(regex, (match) => `${highlightStart}${match}${highlightEnd}`));
+    }
+    function renderLog(container, lines, filter) {
+      const highlighted = highlightMatches(lines, filter);
+      const html = highlighted
+        .map((line) => ansiToHtml(line))
+        .join("\n")
+        .replaceAll(highlightStart, '<span class="log-highlight">')
+        .replaceAll(highlightEnd, "</span>");
+      container.innerHTML = html;
+    }
+    const stdoutEl = document.getElementById("stdout");
+    const stderrEl = document.getElementById("stderr");
+    let stdoutLines = stdoutEl.textContent.split("\n");
+    let stderrLines = stderrEl.textContent.split("\n");
+    const stdoutFilter = document.getElementById("stdoutFilter");
+    const stderrFilter = document.getElementById("stderrFilter");
+    renderLog(stdoutEl, stdoutLines, "");
+    renderLog(stderrEl, stderrLines, "");
+    stdoutFilter.addEventListener("input", () => renderLog(stdoutEl, stdoutLines, stdoutFilter.value.trim()));
+    stderrFilter.addEventListener("input", () => renderLog(stderrEl, stderrLines, stderrFilter.value.trim()));
+    document.getElementById("stdoutCopy").addEventListener("click", () => {
+      navigator.clipboard.writeText(stdoutLines.join("\n"));
+    });
+    document.getElementById("stderrCopy").addEventListener("click", () => {
+      navigator.clipboard.writeText(stderrLines.join("\n"));
+    });
+    const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+    const stream = new EventSource(`${basePath}/runs/{{ run_id }}/jobs/{{ job.id }}/stream`);
+    const jobStatusBadge = document.getElementById("jobStatusBadge");
+    const jobProgressMeta = document.getElementById("jobProgressMeta");
+    stream.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.stdout_tail) {
+          stdoutLines = data.stdout_tail;
+          renderLog(stdoutEl, stdoutLines, stdoutFilter.value.trim());
         }
-        return raw;
-      }
-      function filterLines(lines, query) {
-        const trimmed = (query || "").trim();
-        if (!trimmed) {
-          return lines;
+        if (data.stderr_tail) {
+          stderrLines = data.stderr_tail;
+          renderLog(stderrEl, stderrLines, stderrFilter.value.trim());
         }
-        const lower = trimmed.toLowerCase();
-        return lines.filter((line) => line.toLowerCase().includes(lower));
-      }
-      function renderStream(pre, lines, query) {
-        const filtered = filterLines(lines, query);
-        pre.innerHTML = filtered.map((line) => renderAnsi(line, query)).join("\n");
-        pre.scrollTop = pre.scrollHeight;
-      }
-      function appendLine(pre, lines, line, query) {
-        lines.push(line);
-        if (!query || query.trim() === "") {
-          pre.innerHTML += renderAnsi(line, "") + "\n";
-          pre.scrollTop = pre.scrollHeight;
-          return;
+        if (data.status && jobStatusBadge) {
+          const classMap = {
+            pending: "bg-secondary text-white",
+            running: "bg-yellow text-dark",
+            queued: "bg-blue text-white",
+            succeeded: "bg-green text-dark",
+            failed: "bg-red text-white",
+            stopped: "bg-secondary text-white",
+          };
+          jobStatusBadge.textContent = data.status;
+          jobStatusBadge.className = `badge ${classMap[data.status] || "bg-secondary text-white"}`;
         }
-        renderStream(pre, lines, query);
-      }
-      function copyToClipboard(text) {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text);
-          return;
+        if (jobProgressMeta) {
+          const parts = [];
+          if (data.progress_label) parts.push(data.progress_label);
+          if (data.eta_label) parts.push(data.eta_label);
+          jobProgressMeta.textContent = parts.join(" · ");
         }
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textarea);
-      }
-      function connectStream(targetId, stream, lines, filterInput) {
-        const target = document.getElementById(targetId);
-        renderStream(target, lines, filterInput.value);
-        const source = new EventSource(`{{ base_path }}/runs/{{ run_id }}/jobs/{{ job.id }}/stream?stream=${stream}`);
-        source.onmessage = (event) => {
-          try {
-            const payload = JSON.parse(event.data);
-            appendLine(target, lines, payload.line, filterInput.value);
-          } catch (err) {
-            console.log("Invalid event", err);
-          }
-        };
-      }
-
-      const stdoutPre = document.getElementById("stdout");
-      const stderrPre = document.getElementById("stderr");
-      const stdoutFilter = document.getElementById("stdoutFilter");
-      const stderrFilter = document.getElementById("stderrFilter");
-      const stdoutCopy = document.getElementById("stdoutCopy");
-      const stderrCopy = document.getElementById("stderrCopy");
-      const stdoutLines = splitLines(stdoutPre.textContent);
-      const stderrLines = splitLines(stderrPre.textContent);
-
-      stdoutFilter.addEventListener("input", () => {
-        renderStream(stdoutPre, stdoutLines, stdoutFilter.value);
-      });
-      stderrFilter.addEventListener("input", () => {
-        renderStream(stderrPre, stderrLines, stderrFilter.value);
-      });
-      stdoutCopy.addEventListener("click", () => {
-        const filtered = filterLines(stdoutLines, stdoutFilter.value);
-        copyToClipboard(filtered.join("\n"));
-      });
-      stderrCopy.addEventListener("click", () => {
-        const filtered = filterLines(stderrLines, stderrFilter.value);
-        copyToClipboard(filtered.join("\n"));
-      });
-
-      connectStream("stdout", "stdout", stdoutLines, stdoutFilter);
-      connectStream("stderr", "stderr", stderrLines, stderrFilter);
-
-      function updateStatusBadge(status) {
-        const badge = document.getElementById("jobStatusBadge");
-        if (!badge || !status || status === "missing") {
-          return;
-        }
-        badge.textContent = status;
-        badge.className = "badge";
-        if (status === "pending") {
-          badge.classList.add("bg-secondary", "text-white");
-        } else if (status === "running") {
-          badge.classList.add("bg-yellow", "text-dark");
-        } else if (status === "queued") {
-          badge.classList.add("bg-blue", "text-white");
-        } else if (status === "succeeded") {
-          badge.classList.add("bg-green", "text-dark");
-        } else if (status === "stopped") {
-          badge.classList.add("bg-secondary", "text-white");
-        } else {
-          badge.classList.add("bg-red", "text-white");
-        }
-      }
-
-      function updateProgressMeta(progressLabel, etaLabel) {
-        const meta = document.getElementById("jobProgressMeta");
-        if (!meta) {
-          return;
-        }
-        if (!progressLabel) {
-          meta.textContent = "";
-          return;
-        }
-        const text = etaLabel ? `${progressLabel} · ${etaLabel}` : progressLabel;
-        meta.textContent = text;
-      }
-
-      if (window.EventSource) {
-        const statusSource = new EventSource(
-          `{{ base_path }}/runs/{{ run_id }}/jobs/{{ job.id }}/status`,
-        );
-        statusSource.onmessage = (event) => {
-          try {
-            const payload = JSON.parse(event.data);
-            updateStatusBadge(payload.status);
-            updateProgressMeta(payload.progress_label, payload.eta_label);
-          } catch (err) {
-            console.log("Invalid status update", err);
-          }
-        };
-      }
-    </script>
-  </body>
-</html>
+      } catch (_) {}
+    };
+  </script>
+{% endblock %}

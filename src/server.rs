@@ -446,12 +446,13 @@ struct OutputCustom {
 #[template(path = "server/index.html")]
 struct IndexTemplate {
     runs: Vec<RunSummary>,
-    refresh_seconds: u64,
     base_path: String,
+    active_nav: String,
     endpoints: Vec<EndpointView>,
     templates: Vec<TemplateView>,
     endpoints_json: String,
     templates_json: String,
+    metrics_samples_json: String,
     max_concurrent_jobs: Option<usize>,
     running_total: usize,
     queued_total: usize,
@@ -464,6 +465,7 @@ struct IndexTemplate {
 struct RunTemplate {
     run: RunView,
     base_path: String,
+    active_nav: String,
 }
 
 #[derive(Template)]
@@ -472,14 +474,15 @@ struct JobTemplate {
     run_id: String,
     job: JobView,
     base_path: String,
+    active_nav: String,
 }
 
 #[derive(Template)]
 #[template(path = "server/status.html")]
 struct StatusTemplate {
     base_path: String,
-    refresh_seconds: u64,
     summary: MetricsSummary,
+    active_nav: String,
 }
 
 #[derive(Template)]
@@ -488,6 +491,16 @@ struct ConfigTemplate {
     base_path: String,
     endpoints: Vec<EndpointView>,
     templates: Vec<TemplateView>,
+    active_nav: String,
+}
+
+#[derive(Template)]
+#[template(path = "server/jobs.html")]
+struct JobsTemplate {
+    base_path: String,
+    runs: Vec<RunOption>,
+    runs_json: String,
+    active_nav: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -506,6 +519,12 @@ struct TemplateView {
     file_name: String,
     indices_count: usize,
     number_of_replicas: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
+struct RunOption {
+    id: String,
+    label: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -564,6 +583,7 @@ struct JobSummary {
     status: JobStatus,
     progress_label: Option<String>,
     progress_width: Option<u8>,
+    eta_label: Option<String>,
     completed_line: bool,
 }
 
@@ -577,6 +597,23 @@ struct JobView {
     stderr_tail: Vec<String>,
     progress_label: Option<String>,
     eta_label: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct JobListEntry {
+    run_id: String,
+    run_label: String,
+    stage_name: String,
+    job_name: String,
+    status: JobStatus,
+    progress_label: Option<String>,
+    progress_width: Option<u8>,
+    eta_label: Option<String>,
+    logs_url: String,
+    start_url: String,
+    stop_url: String,
+    can_start: bool,
+    can_stop: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -705,11 +742,15 @@ pub async fn run() {
 
     let routes = Router::new()
         .route("/", get(index))
+        .route("/dashboard", get(index))
+        .route("/runs", get(index).post(create_run))
+        .route("/jobs", get(jobs_view))
         .route("/config", get(config_view))
         .route("/status", get(status_view))
         .route("/status/snapshot", get(status_snapshot))
         .route("/status/stream", get(status_stream))
-        .route("/runs", post(create_run))
+        .route("/jobs/snapshot", get(jobs_snapshot))
+        .route("/jobs/stream", get(jobs_stream))
         .route("/runs/snapshot", get(runs_snapshot))
         .route("/runs/stream", get(runs_stream))
         .route(
@@ -758,12 +799,13 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let max_concurrent_jobs = state.max_concurrent_jobs.read().await.clone();
     let template = IndexTemplate {
         runs,
-        refresh_seconds: 0,
         base_path: state.base_path.clone(),
+        active_nav: "dashboard".to_string(),
         endpoints: build_endpoint_views(&state),
         templates: build_template_views(&state),
         endpoints_json: endpoints_json(&state),
         templates_json: templates_json(&state),
+        metrics_samples_json: metrics_samples_json(state.as_ref()).await,
         max_concurrent_jobs,
         running_total,
         queued_total,
@@ -778,6 +820,7 @@ async fn config_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         base_path: state.base_path.clone(),
         endpoints: build_endpoint_views(&state),
         templates: build_template_views(&state),
+        active_nav: "config".to_string(),
     };
     Html(render_template(&template)).into_response()
 }
@@ -888,6 +931,7 @@ async fn run_view(
             let template = RunTemplate {
                 run,
                 base_path: state.base_path.clone(),
+                active_nav: "dashboard".to_string(),
             };
             Html(render_template(&template))
                 .into_response()
@@ -906,6 +950,7 @@ async fn job_view(
                 run_id,
                 job,
                 base_path: state.base_path.clone(),
+                active_nav: "dashboard".to_string(),
             };
             Html(render_template(&template))
                 .into_response()
@@ -1008,8 +1053,8 @@ async fn status_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     let template = StatusTemplate {
         base_path: state.base_path.clone(),
-        refresh_seconds: 0,
         summary,
+        active_nav: "status".to_string(),
     };
     Html(render_template(&template)).into_response()
 }
@@ -1057,6 +1102,42 @@ async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn runs_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_summaries(&state).await;
     Json(runs).into_response()
+}
+
+async fn jobs_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let runs = build_run_options(&state).await;
+    let template = JobsTemplate {
+        base_path: state.base_path.clone(),
+        runs,
+        runs_json: runs_json(&state).await,
+        active_nav: "jobs".to_string(),
+    };
+    Html(render_template(&template)).into_response()
+}
+
+async fn jobs_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let jobs = build_jobs_list(&state).await;
+    Json(jobs).into_response()
+}
+
+async fn jobs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let seconds = if state.refresh_seconds == 0 {
+        5
+    } else {
+        state.refresh_seconds.max(1)
+    };
+    let interval = tokio::time::interval(Duration::from_secs(seconds));
+    let stream = IntervalStream::new(interval).then(move |_| {
+        let state = Arc::clone(&state);
+        async move {
+            let jobs = build_jobs_list(&state).await;
+            let payload = serde_json::to_string(&jobs).unwrap_or_else(|_| "[]".to_string());
+            Ok::<axum::response::sse::Event, Infallible>(
+                axum::response::sse::Event::default().data(payload),
+            )
+        }
+    });
+    Sse::new(stream).into_response()
 }
 
 async fn run_stream(
@@ -2185,6 +2266,74 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
     summaries
 }
 
+async fn build_run_options(state: &Arc<AppState>) -> Vec<RunOption> {
+    let mut summaries = build_run_summaries(state).await;
+    summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    summaries
+        .into_iter()
+        .map(|run| RunOption {
+            id: run.id.clone(),
+            label: format!(
+                "{} - {} → {} ({})",
+                run.id, run.src_name, run.dst_name, run.created_at
+            ),
+        })
+        .collect()
+}
+
+async fn build_jobs_list(state: &Arc<AppState>) -> Vec<JobListEntry> {
+    let runs = state.runs.read().await;
+    let mut entries = Vec::new();
+    let mut run_list: Vec<&RunState> = runs.runs.values().collect();
+    run_list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    for run in run_list {
+        let run_label = format!(
+            "{} - {} → {}",
+            run.id, run.src_endpoint.name, run.dst_endpoint.name
+        );
+        let mut job_list: Vec<&JobState> = run.jobs.values().collect();
+        job_list.sort_by(|a, b| a.name.cmp(&b.name));
+        for job in job_list {
+            let (progress_label, progress_width, eta_label) = match job.status {
+                JobStatus::Running => {
+                    let label = job.progress_percent.map(|value| format!("{:.2} %", value));
+                    let width = job
+                        .progress_percent
+                        .map(|value| value.max(0.0).min(100.0).round() as u8);
+                    let eta = estimate_eta_label(&job.started_at, job.progress_percent);
+                    (label, width, eta)
+                }
+                JobStatus::Succeeded => {
+                    let label = job.progress_percent.map(|value| format!("{:.2} %", value));
+                    let width = job
+                        .progress_percent
+                        .map(|value| value.max(0.0).min(100.0).round() as u8);
+                    (label, width, None)
+                }
+                _ => (None, None, None),
+            };
+            let can_stop = matches!(job.status, JobStatus::Running | JobStatus::Queued);
+            let can_start = !matches!(job.status, JobStatus::Running | JobStatus::Queued);
+            entries.push(JobListEntry {
+                run_id: run.id.clone(),
+                run_label: run_label.clone(),
+                stage_name: job.stage_name.clone(),
+                job_name: job.name.clone(),
+                status: job.status.clone(),
+                progress_label,
+                progress_width,
+                eta_label,
+                logs_url: with_base(state, &format!("/runs/{}/jobs/{}", run.id, job.id)),
+                start_url: with_base(state, &format!("/runs/{}/jobs/{}/start", run.id, job.id)),
+                stop_url: with_base(state, &format!("/runs/{}/jobs/{}/stop", run.id, job.id)),
+                can_start,
+                can_stop,
+            });
+        }
+    }
+    entries
+}
+
 async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> {
     let runs = state.runs.read().await;
     let run = runs.runs.get(run_id)?;
@@ -2194,29 +2343,23 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
         let mut split_details = Vec::new();
         for job_id in &stage.job_ids {
             if let Some(job) = run.jobs.get(job_id) {
-                let (progress_label, progress_width) = match job.status {
+                let (progress_label, progress_width, eta_label) = match job.status {
                     JobStatus::Running => {
-                        let label = job.progress_percent.map(|value| {
-                            let base = format!("{:.2} %", value);
-                            if let Some(eta) = estimate_eta_label(&job.started_at, job.progress_percent) {
-                                format!("{base} · {eta}")
-                            } else {
-                                base
-                            }
-                        });
+                        let label = job.progress_percent.map(|value| format!("{:.2} %", value));
                         let width = job
                             .progress_percent
                             .map(|value| value.max(0.0).min(100.0).round() as u8);
-                        (label, width)
+                        let eta = estimate_eta_label(&job.started_at, job.progress_percent);
+                        (label, width, eta)
                     }
                     JobStatus::Succeeded => {
                         let label = job.progress_percent.map(|value| format!("{:.2} %", value));
                         let width = job
                             .progress_percent
                             .map(|value| value.max(0.0).min(100.0).round() as u8);
-                        (label, width)
+                        (label, width, None)
                     }
-                    _ => (None, None),
+                    _ => (None, None, None),
                 };
                 jobs.push(JobSummary {
                     id: job.id.clone(),
@@ -2224,6 +2367,7 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
                     status: job.status.clone(),
                     progress_label,
                     progress_width,
+                    eta_label,
                     completed_line: job.completed_line,
                 });
                 if let Some(field_name) = &job.split_field {
@@ -2864,6 +3008,17 @@ fn endpoints_json(state: &AppState) -> String {
 fn templates_json(state: &AppState) -> String {
     let templates = build_template_views(state);
     serde_json::to_string(&templates).unwrap_or_else(|_| "[]".to_string())
+}
+
+async fn metrics_samples_json(state: &AppState) -> String {
+    let metrics = state.metrics.read().await;
+    let samples: Vec<MetricsSample> = metrics.samples.iter().cloned().collect();
+    serde_json::to_string(&samples).unwrap_or_else(|_| "[]".to_string())
+}
+
+async fn runs_json(state: &Arc<AppState>) -> String {
+    let runs = build_run_options(state).await;
+    serde_json::to_string(&runs).unwrap_or_else(|_| "[]".to_string())
 }
 
 fn build_run_id() -> String {

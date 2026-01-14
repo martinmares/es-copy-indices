@@ -1,97 +1,58 @@
-<!doctype html>
-<html lang="en" data-bs-theme="dark">
-  <head>
-    <meta charset="utf-8">
-    <title>Configuration</title>
-    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
-  </head>
-  <body>
-    <div class="page">
-      <div class="page-wrapper">
-        <div class="container-xl">
-          <div class="page-header d-print-none">
-            <div class="row align-items-center">
-              <div class="col">
-                <a class="text-secondary" href="{{ base_path }}/">&#8592; Back to runs</a>
-                <h2 class="page-title">Config</h2>
-                <div class="text-secondary">Read-only view of endpoints and templates.</div>
-              </div>
+{% extends "server/layout.html" %}
+
+{% block title %}Config · ES Copy Runner{% endblock %}
+
+{% block header %}
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <div class="page-pretitle">Configuration</div>
+        <h2 class="page-title">Config</h2>
+        <div class="text-secondary">Read-only view of endpoints and templates.</div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="row row-cards">
+    <div class="col-12 col-lg-6">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Endpoints</div>
+        </div>
+        <div class="card-body">
+          {% if endpoints.len() == 0 %}
+            <div class="text-secondary">No endpoints configured.</div>
+          {% endif %}
+          {% for endpoint in endpoints %}
+            <div class="mb-3">
+              <div class="fw-semibold">{{ endpoint.name }}</div>
+              <div class="text-secondary small">{{ endpoint.url }}</div>
+              <div class="text-secondary small">prefix={{ endpoint.prefix }} · keep_alive={{ endpoint.keep_alive }}</div>
             </div>
-          </div>
-          <div class="page-body">
-            <div class="row row-cards">
-              <div class="col-12">
-                <div class="card">
-                  <div class="card-header">
-                    <div class="card-title">Endpoints</div>
-                  </div>
-                  <div class="card-body">
-                    <div class="table-responsive">
-                      <table class="table table-vcenter">
-                        <thead>
-                          <tr>
-                            <th>Name</th>
-                            <th>URL</th>
-                            <th>Prefix</th>
-                            <th>Keep Alive</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {% for endpoint in endpoints %}
-                          <tr>
-                            <td>{{ endpoint.name }}</td>
-                            <td>{{ endpoint.url }}</td>
-                            <td>{{ endpoint.prefix }}</td>
-                            <td>{{ endpoint.keep_alive }}</td>
-                          </tr>
-                          {% endfor %}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12">
-                <div class="card">
-                  <div class="card-header">
-                    <div class="card-title">Templates</div>
-                  </div>
-                  <div class="card-body">
-                    <div class="table-responsive">
-                      <table class="table table-vcenter">
-                        <thead>
-                          <tr>
-                            <th>Name</th>
-                            <th>File</th>
-                            <th>Indices</th>
-                            <th>Default Replicas</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {% for template in templates %}
-                          <tr>
-                            <td>{{ template.name }}</td>
-                            <td>{{ template.file_name }}</td>
-                            <td>{{ template.indices_count }}</td>
-                            <td>
-                              {% if template.number_of_replicas.is_some() %}
-                                {{ template.number_of_replicas.unwrap() }}
-                              {% else %}
-                                inherit
-                              {% endif %}
-                            </td>
-                          </tr>
-                          {% endfor %}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          {% endfor %}
         </div>
       </div>
     </div>
-  </body>
-</html>
+    <div class="col-12 col-lg-6">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Templates</div>
+        </div>
+        <div class="card-body">
+          {% if templates.len() == 0 %}
+            <div class="text-secondary">No templates configured.</div>
+          {% endif %}
+          {% for template in templates %}
+            <div class="mb-3">
+              <div class="fw-semibold">{{ template.name }}</div>
+              <div class="text-secondary small">file={{ template.file_name }}</div>
+              <div class="text-secondary small">indices={{ template.indices_count }} · replicas={% if template.number_of_replicas.is_some() %}{{ template.number_of_replicas.unwrap() }}{% else %}inherit{% endif %}</div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

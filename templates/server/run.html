@@ -1,216 +1,253 @@
-<!doctype html>
-<html lang="en" data-bs-theme="dark">
-  <head>
-    <meta charset="utf-8">
-    <title>Run {{ run.id }}</title>
-    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
-    <script src="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/js/tabler.min.js"></script>
-    <style>
-      .status-text {
-        font-weight: 600;
-      }
-      .split-query {
-        background: #000;
-        color: #cfe3f4;
-        padding: 8px;
-        border-radius: 6px;
-        font-size: 12px;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-      .split-query-wrap {
-        border-radius: 6px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        overflow: hidden;
-      }
-      .split-query-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 6px 8px;
-        background: rgba(255, 255, 255, 0.04);
-      }
-      .split-query {
-        margin: 0;
-        border-radius: 0;
-      }
-      details.split-details > summary {
-        cursor: pointer;
-        list-style: none;
-        padding: 8px 0;
-        font-weight: 600;
-      }
-      details.split-details > summary::before {
-        content: "›";
-        display: inline-block;
-        margin-right: 8px;
-        transform: translateY(-1px);
-      }
-      details.split-details[open] > summary::before {
-        content: "⌄";
-      }
-      .split-chart {
-        background: var(--tblr-body-bg, #0b0f14);
-        border-radius: 6px;
-        padding: 6px;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="page">
-      <div class="page-wrapper">
-        <div class="container-xl">
-          <div class="page-header d-print-none">
-            <div class="row align-items-center">
-              <div class="col">
-                <a class="text-secondary" href="{{ base_path }}/">&#8592; Back to runs</a>
-                <h2 class="page-title">Run {{ run.id }}</h2>
-                <div class="text-secondary">Created at {{ run.created_at }}</div>
-                <div class="text-secondary mt-1">
-                  {{ run.src_endpoint.name }} → {{ run.dst_endpoint.name }} · template {{ run.template.name }}
-                  {% if run.dry_run %}
-                    <span class="badge bg-azure text-white ms-2">dry run</span>
-                  {% endif %}
-                </div>
-                <div class="text-secondary small">
-                  Src prefix={{ run.src_endpoint.prefix }}, keep_alive={{ run.src_endpoint.keep_alive }}
-                  · Dst prefix={{ run.dst_endpoint.prefix }}, keep_alive={{ run.dst_endpoint.keep_alive }}
-                  · template replicas={% if run.template.number_of_replicas.is_some() %}{{ run.template.number_of_replicas.unwrap() }}{% else %}inherit{% endif %}
-                  · index_copy_suffix={% if run.copy_suffix.is_some() %}{{ run.copy_suffix.clone().unwrap() }}{% else %}none{% endif %}
-                  · alias_suffix={% if run.alias_suffix.is_some() %}{{ run.alias_suffix.clone().unwrap() }}{% else %}none{% endif %}
-                </div>
-              </div>
-              <div class="col-auto">
-                <div class="btn-list">
-                  <a class="btn btn-outline-secondary" href="{{ base_path }}/runs/{{ run.id }}/export">Export</a>
-                  <button class="btn btn-outline-warning" type="button" id="retryFailedBtn">Retry Failed</button>
-                </div>
-                <div class="text-secondary small mt-2 d-none" id="retryFailedStatus"></div>
-              </div>
-            </div>
-          </div>
-          <div class="page-body">
-            <div id="stagesContainer">
-              {% for stage in run.stages %}
-                <div class="card mb-3">
-                  <div class="card-header">
-                    <div class="card-title">{{ stage.name }}</div>
-                    <div class="card-actions d-flex gap-2 align-items-center">
-                      <form class="js-start-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/start" method="post">
-                        <button class="btn btn-primary" type="submit">Start Stage</button>
-                      </form>
-                      <form class="js-stop-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/stop" method="post">
-                        <button class="btn btn-outline-danger" type="submit">Stop Stage</button>
-                      </form>
-                    </div>
-                  </div>
-                  <div class="card-body">
-                    <div class="list-group list-group-flush">
-                      {% for job in stage.jobs %}
-                        <div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">
-                          <div>
-                            <div class="fw-bold">{{ job.name }}</div>
-                            {% if job.status.as_str() == "pending" %}
-                              <span class="badge bg-secondary text-white status-text">pending</span>
-                            {% else if job.status.as_str() == "running" %}
-                              <span class="badge bg-yellow text-dark status-text">running</span>
-                            {% else if job.status.as_str() == "queued" %}
-                              <span class="badge bg-blue text-white status-text">queued</span>
-                            {% else if job.status.as_str() == "succeeded" %}
-                              <span class="badge bg-green text-dark status-text">succeeded</span>
-                            {% else if job.status.as_str() == "stopped" %}
-                              <span class="badge bg-secondary text-white status-text">stopped</span>
-                            {% else %}
-                              <span class="badge bg-red text-white status-text">failed</span>
-                            {% endif %}
-                          </div>
-                          <div class="flex-grow-1" style="min-width: 220px; max-width: 320px;">
-                            {% if job.progress_width.is_some() %}
-                              <div class="progress">
-                                <div class="progress-bar bg-blue" style="width: {{ job.progress_width.unwrap() }}%"></div>
-                              </div>
-                              <div class="text-secondary small mt-1">
-                                {{ job.progress_label.as_deref().unwrap_or("n/a") }}
-                              </div>
-                            {% endif %}
-                          </div>
-                          <div class="btn-list">
-                            {% if job.status.as_str() == "running" || job.status.as_str() == "queued" %}
-                              <form class="js-stop-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/stop" method="post">
-                                <button class="btn btn-outline-danger" type="submit">Stop Job</button>
-                              </form>
-                            {% else %}
-                              <form class="js-start-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/start?redirect=run" method="post">
-                                <button class="btn btn-outline-primary" type="submit">Start Job</button>
-                              </form>
-                            {% endif %}
-                            <a class="btn btn-outline-secondary js-view-logs" href="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}">View Logs</a>
-                          </div>
-                        </div>
-                      {% endfor %}
-                    </div>
-                    {% if stage.split_details.len() > 0 %}
-                      <div class="mt-3">
-                        <details class="split-details">
-                          <summary>Split details</summary>
-                          <div class="mb-3">
-                            <div class="text-secondary small">Quantile distribution</div>
-                    <div class="mt-2 split-chart" data-split-chart="true" data-split-chart-values='[
-                              {% for detail in stage.split_details %}
-                                {% if detail.leftover == false %}["Q{{ loop.index }}", {{ detail.doc_count.unwrap_or(0) }}],{% endif %}
-                              {% endfor %}
-                              ["_end",0]
-                            ]'></div>
-                          </div>
-                          <div class="list-group list-group-flush">
-                            {% for detail in stage.split_details %}
-                              <div class="list-group-item">
-                                <div class="fw-semibold">{{ detail.job_name }}</div>
-                                <div class="text-secondary small">
-                                  field={{ detail.field_name }}
-                                  {% if detail.leftover %} · leftover{% endif %}
-                                </div>
-                                <div class="text-secondary small">
-                                  {% if detail.date_from.is_some() %}gte={{ detail.date_from.as_deref().unwrap_or("") }}{% endif %}
-                                  {% if detail.date_to.is_some() %}
-                                    {% if detail.date_from.is_some() %} · {% endif %}
-                                    lt={{ detail.date_to.as_deref().unwrap_or("") }}
-                                  {% endif %}
-                                  {% if detail.leftover %}missing field{% endif %}
-                                  {% if detail.doc_count.is_some() %}
-                                    · docs={{ detail.doc_count.unwrap() }}
-                                  {% endif %}
-                                </div>
-                                {% if detail.query.is_some() %}
-                                  <div class="split-query-wrap mt-2">
-                                    <div class="split-query-header">
-                                      <span class="text-secondary small">ES query</span>
-                                      <button class="btn btn-sm btn-ghost split-copy" type="button" title="Copy to clipboard">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                          <rect x="9" y="9" width="13" height="13" rx="2"></rect>
-                                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                                        </svg>
-                                      </button>
-                                    </div>
-                                    <pre class="split-query">{{ detail.query.as_deref().unwrap_or("") }}</pre>
-                                  </div>
-                                {% endif %}
-                              </div>
-                            {% endfor %}
-                          </div>
-                        </details>
-                      </div>
-                    {% endif %}
-                  </div>
-                </div>
-              {% endfor %}
-            </div>
-          </div>
+{% extends "server/layout.html" %}
+
+{% block title %}Run {{ run.id }} · ES Copy Runner{% endblock %}
+
+{% block head_extra %}
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
+{% endblock %}
+
+{% block styles %}
+  <style>
+    .status-text {
+      font-weight: 600;
+    }
+    .split-query {
+      background: #000;
+      color: #cfe3f4;
+      padding: 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .split-query-wrap {
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+    .split-query-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 8px;
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .split-query {
+      margin: 0;
+      border-radius: 0;
+    }
+    details.split-details > summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 8px 0;
+      font-weight: 600;
+    }
+    details.split-details > summary::before {
+      content: "›";
+      display: inline-block;
+      margin-right: 8px;
+      transform: translateY(-1px);
+    }
+    details.split-details[open] > summary::before {
+      content: "⌄";
+    }
+    .split-chart {
+      background: var(--tblr-body-bg, #0b0f14);
+      border-radius: 6px;
+      padding: 6px;
+    }
+  </style>
+{% endblock %}
+
+{% block header %}
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <ol class="breadcrumb breadcrumb-arrows" aria-label="breadcrumbs">
+          <li class="breadcrumb-item">
+            <a href="{{ base_path }}/">Dashboard</a>
+          </li>
+          <li class="breadcrumb-item active" aria-current="page">
+            Run {{ run.id }}
+          </li>
+        </ol>
+        <div class="text-secondary">Created at {{ run.created_at }}</div>
+      </div>
+      <div class="col-auto">
+        <div class="btn-list">
+          <a class="btn btn-outline-secondary" href="{{ base_path }}/runs/{{ run.id }}/export">Export</a>
+          <button class="btn btn-outline-warning" type="button" id="retryFailedBtn">Retry Failed</button>
         </div>
+        <div class="text-secondary small mt-2 d-none" id="retryFailedStatus"></div>
       </div>
     </div>
-  </body>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <div class="h3 m-0">{{ run.src_endpoint.name }} → {{ run.dst_endpoint.name }}</div>
+        {% if run.dry_run %}
+          <span class="badge bg-azure text-white">dry run</span>
+        {% endif %}
+      </div>
+      <div class="text-secondary mt-1">template {{ run.template.name }}</div>
+      <div class="text-secondary small">
+        Src prefix={{ run.src_endpoint.prefix }}, keep_alive={{ run.src_endpoint.keep_alive }}
+        · Dst prefix={{ run.dst_endpoint.prefix }}, keep_alive={{ run.dst_endpoint.keep_alive }}
+        · template replicas={% if run.template.number_of_replicas.is_some() %}{{ run.template.number_of_replicas.unwrap() }}{% else %}inherit{% endif %}
+        · index_copy_suffix={% if run.copy_suffix.is_some() %}{{ run.copy_suffix.clone().unwrap() }}{% else %}none{% endif %}
+        · alias_suffix={% if run.alias_suffix.is_some() %}{{ run.alias_suffix.clone().unwrap() }}{% else %}none{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div id="stagesContainer">
+    {% for stage in run.stages %}
+      <div class="card mb-3">
+        <div class="card-header">
+          <div class="card-title">{{ stage.name }}</div>
+          <div class="card-actions d-flex gap-2 align-items-center">
+            <form class="js-start-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/start" method="post">
+              <button class="btn btn-primary" type="submit">Start Stage</button>
+            </form>
+            <form class="js-stop-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/stop" method="post">
+              <button class="btn btn-outline-danger" type="submit">Stop Stage</button>
+            </form>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th>Job name</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>ETA</th>
+                <th class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for job in stage.jobs %}
+                <tr>
+                  <td>
+                    <div class="fw-semibold">{{ job.name }}</div>
+                  </td>
+                  <td>
+                    {% if job.status.as_str() == "pending" %}
+                      <span class="badge bg-secondary text-white status-text">pending</span>
+                    {% else if job.status.as_str() == "running" %}
+                      <span class="badge bg-yellow text-dark status-text">running</span>
+                    {% else if job.status.as_str() == "queued" %}
+                      <span class="badge bg-blue text-white status-text">queued</span>
+                    {% else if job.status.as_str() == "succeeded" %}
+                      <span class="badge bg-green text-dark status-text">succeeded</span>
+                    {% else if job.status.as_str() == "stopped" %}
+                      <span class="badge bg-secondary text-white status-text">stopped</span>
+                    {% else %}
+                      <span class="badge bg-red text-white status-text">failed</span>
+                    {% endif %}
+                  </td>
+                  <td style="min-width: 200px;">
+                    {% if job.progress_width.is_some() %}
+                      <div class="progress">
+                        <div class="progress-bar bg-blue" style="width: {{ job.progress_width.unwrap() }}%"></div>
+                      </div>
+                      <div class="text-secondary small mt-1">
+                        {{ job.progress_label.as_deref().unwrap_or("n/a") }}
+                      </div>
+                    {% else %}
+                      <span class="text-secondary small">-</span>
+                    {% endif %}
+                  </td>
+                  <td class="text-secondary small">
+                    {% if job.eta_label.is_some() %}
+                      {{ job.eta_label.as_deref().unwrap_or("") }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                  <td class="text-end">
+                    <div class="btn-list justify-content-end">
+                      {% if job.status.as_str() == "running" || job.status.as_str() == "queued" %}
+                        <form class="js-stop-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/stop" method="post">
+                          <button class="btn btn-outline-danger" type="submit">Stop Job</button>
+                        </form>
+                      {% else %}
+                        <form class="js-start-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/start?redirect=run" method="post">
+                          <button class="btn btn-outline-primary" type="submit">Start Job</button>
+                        </form>
+                      {% endif %}
+                      <a class="btn btn-outline-secondary js-view-logs" href="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}">View Logs</a>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="card-body">
+          {% if stage.split_details.len() > 0 %}
+            <div>
+              <details class="split-details" data-stage-id="{{ stage.id }}">
+                <summary>Split details</summary>
+                <div class="mb-3">
+                  <div class="text-secondary small">Quantile distribution</div>
+                  <div class="mt-2 split-chart" data-split-chart="true" data-split-chart-values='[
+                    {% for detail in stage.split_details %}
+                      {% if detail.leftover == false %}["Q{{ loop.index }}", {{ detail.doc_count.unwrap_or(0) }}],{% endif %}
+                    {% endfor %}
+                    ["_end",0]
+                  ]'></div>
+                </div>
+                <div class="list-group list-group-flush">
+                  {% for detail in stage.split_details %}
+                    <div class="list-group-item">
+                      <div class="fw-semibold">{{ detail.job_name }}</div>
+                      <div class="text-secondary small">
+                        field={{ detail.field_name }}
+                        {% if detail.leftover %} · leftover{% endif %}
+                      </div>
+                      <div class="text-secondary small">
+                        {% if detail.date_from.is_some() %}gte={{ detail.date_from.as_deref().unwrap_or("") }}{% endif %}
+                        {% if detail.date_to.is_some() %}
+                          {% if detail.date_from.is_some() %} · {% endif %}
+                          lt={{ detail.date_to.as_deref().unwrap_or("") }}
+                        {% endif %}
+                        {% if detail.leftover %}missing field{% endif %}
+                        {% if detail.doc_count.is_some() %}
+                          · docs={{ detail.doc_count.unwrap() }}
+                        {% endif %}
+                      </div>
+                      {% if detail.query.is_some() %}
+                        <div class="split-query-wrap mt-2">
+                          <div class="split-query-header">
+                            <span class="text-secondary small">ES query</span>
+                            <button class="btn btn-sm btn-ghost split-copy" type="button" title="Copy to clipboard">
+                              <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                              </svg>
+                            </button>
+                          </div>
+                          <pre class="split-query">{{ detail.query.as_deref().unwrap_or("") }}</pre>
+                        </div>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                </div>
+              </details>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}
+
+{% block scripts %}
   <script>
     const scrollKey = "es-copy-scroll";
     const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
@@ -218,122 +255,37 @@
     const retryFailedStatus = document.getElementById("retryFailedStatus");
     const saved = sessionStorage.getItem(scrollKey);
     let pendingScroll = saved ? parseInt(saved, 10) || 0 : null;
-    if ("scrollRestoration" in history) {
-      history.scrollRestoration = "manual";
-    }
-    if (pendingScroll !== null) {
-      window.scrollTo(0, pendingScroll);
-    }
+
     function escapeHtml(value) {
-      return String(value || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-    }
-    function bindAsyncStart(selector, storeScroll) {
-      document.querySelectorAll(selector).forEach((form) => {
-        form.addEventListener("submit", (event) => {
-          event.preventDefault();
-          if (storeScroll) {
-            sessionStorage.setItem(scrollKey, String(window.scrollY || 0));
-          }
-          fetch(form.action, { method: "POST" })
-            .then(() => {})
-            .catch(() => {});
-        });
-      });
-    }
-    function bindViewLogsLinks() {
-      document.querySelectorAll(".js-view-logs").forEach((link) => {
-        link.addEventListener("click", () => {
-          sessionStorage.setItem(scrollKey, String(window.scrollY || 0));
-        });
-      });
-    }
-
-    function copyToClipboard(text) {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text);
-        return;
-      }
-      const temp = document.createElement("textarea");
-      temp.value = text;
-      document.body.appendChild(temp);
-      temp.select();
-      document.execCommand("copy");
-      document.body.removeChild(temp);
-    }
-
-    function bindSplitCopyButtons() {
-      document.querySelectorAll(".split-copy").forEach((btn) => {
-        if (btn.dataset.bound === "true") {
-          return;
-        }
-        btn.dataset.bound = "true";
-        btn.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const wrap = btn.closest(".split-query-wrap");
-          const pre = wrap ? wrap.querySelector(".split-query") : null;
-          const text = pre ? pre.textContent || "" : "";
-          const scrollTop = window.scrollY || 0;
-          pendingScroll = scrollTop;
-          sessionStorage.setItem(scrollKey, String(scrollTop));
-          copyToClipboard(text);
-          btn.blur();
-        });
-      });
-    }
-    bindAsyncStart(".js-start-job", true);
-    bindAsyncStart(".js-stop-job", true);
-    bindAsyncStart(".js-start-stage", false);
-    bindAsyncStart(".js-stop-stage", false);
-    bindViewLogsLinks();
-    bindSplitCopyButtons();
-
-    if (retryFailedBtn) {
-      retryFailedBtn.addEventListener("click", () => {
-        retryFailedBtn.disabled = true;
-        retryFailedStatus.classList.add("d-none");
-        retryFailedStatus.textContent = "";
-        fetch(`${basePath}/runs/{{ run.id }}/retry-failed`, { method: "POST" })
-          .then(async (response) => {
-            const message = await response.text();
-            retryFailedStatus.textContent = message || "Retry requested.";
-            retryFailedStatus.classList.remove("d-none");
-            retryFailedBtn.disabled = false;
-          })
-          .catch((err) => {
-            retryFailedStatus.textContent = `Retry failed: ${err}`;
-            retryFailedStatus.classList.remove("d-none");
-            retryFailedBtn.disabled = false;
-          });
-      });
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
     }
 
     function statusBadge(status) {
-      if (status === "pending") return '<span class="badge bg-secondary text-white status-text">pending</span>';
-      if (status === "running") return '<span class="badge bg-yellow text-dark status-text">running</span>';
-      if (status === "queued") return '<span class="badge bg-blue text-white status-text">queued</span>';
-      if (status === "succeeded") return '<span class="badge bg-green text-dark status-text">succeeded</span>';
-      if (status === "stopped") return '<span class="badge bg-secondary text-white status-text">stopped</span>';
-      return '<span class="badge bg-red text-white status-text">failed</span>';
+      switch (status) {
+        case "running":
+          return `<span class="badge bg-yellow text-dark status-text">running</span>`;
+        case "queued":
+          return `<span class="badge bg-blue text-white status-text">queued</span>`;
+        case "succeeded":
+          return `<span class="badge bg-green text-dark status-text">succeeded</span>`;
+        case "failed":
+          return `<span class="badge bg-red text-white status-text">failed</span>`;
+        case "stopped":
+          return `<span class="badge bg-secondary text-white status-text">stopped</span>`;
+        default:
+          return `<span class="badge bg-secondary text-white status-text">pending</span>`;
+      }
     }
 
     function renderSplitCharts() {
-      if (!window.ApexCharts) {
-        return;
-      }
-      const tablerColors = {
-        blue: tabler.getColor("blue"),
-      };
       document.querySelectorAll("[data-split-chart]").forEach((chartEl) => {
         const raw = chartEl.dataset.splitChartValues || "[]";
         let data = [];
         try {
-          data = JSON.parse(raw).filter((item) => item && item[0] !== "_end");
+          data = JSON.parse(raw);
         } catch (err) {
           data = [];
         }
@@ -363,7 +315,7 @@
           },
           grid: { borderColor: "rgba(255, 255, 255, 0.1)" },
           dataLabels: { enabled: false },
-          colors: [tablerColors.blue],
+          colors: ["#4dabf7"],
           xaxis: { categories, title: { text: "Quantile" } },
           yaxis: { title: { text: "Docs" } },
           series: [{ name: "Docs", data: values }],
@@ -390,13 +342,14 @@
             .map((job) => {
               const progress = job.progress_width !== null && job.progress_width !== undefined
                 ? `
-                  <div class="progress">
-                    <div class="progress-bar bg-blue" style="width: ${job.progress_width}%"></div>
-                  </div>
-                  <div class="text-secondary small mt-1">
-                    ${job.progress_label || "n/a"}
-                  </div>`
-                : "";
+                    <div class="progress">
+                      <div class="progress-bar bg-blue" style="width: ${job.progress_width}%"></div>
+                    </div>
+                    <div class="text-secondary small mt-1">
+                      ${job.progress_label || "n/a"}
+                    </div>`
+                : `<span class="text-secondary small">-</span>`;
+              const eta = job.eta_label ? `<span class="text-secondary small">${job.eta_label}</span>` : `<span class="text-secondary small">-</span>`;
               const stopButton = (job.status === "running" || job.status === "queued")
                 ? `
                     <form class="js-stop-job" action="${basePath}/runs/${run.id}/jobs/${job.id}/stop" method="post">
@@ -410,25 +363,26 @@
                     </form>`
                 : "";
               return `
-                <div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">
-                  <div>
-                    <div class="fw-bold">${job.name}</div>
-                    ${statusBadge(job.status)}
-                  </div>
-                  <div class="flex-grow-1" style="min-width: 220px; max-width: 320px;">
-                    ${progress}
-                  </div>
-                  <div class="btn-list">
-                    ${startButton}
-                    ${stopButton}
-                    <a class="btn btn-outline-secondary js-view-logs" href="${basePath}/runs/${run.id}/jobs/${job.id}">View Logs</a>
-                  </div>
-                </div>`;
+                <tr>
+                  <td>
+                    <div class="fw-semibold">${escapeHtml(job.name)}</div>
+                  </td>
+                  <td>${statusBadge(job.status)}</td>
+                  <td style="min-width: 200px;">${progress}</td>
+                  <td>${eta}</td>
+                  <td class="text-end">
+                    <div class="btn-list justify-content-end">
+                      ${startButton}
+                      ${stopButton}
+                      <a class="btn btn-outline-secondary js-view-logs" href="${basePath}/runs/${run.id}/jobs/${job.id}">View Logs</a>
+                    </div>
+                  </td>
+                </tr>`;
             })
             .join("");
           const splitHtml = splitDetails.length
             ? `
-              <div class="mt-3">
+              <div class="card-body">
                 <details class="split-details" data-stage-id="${escapeHtml(stage.id)}">
                   <summary>Split details</summary>
                   <div class="mb-3">
@@ -489,12 +443,23 @@
                   </form>
                 </div>
               </div>
-              <div class="card-body">
-                <div class="list-group list-group-flush">
-                  ${jobs}
-                </div>
-                ${splitHtml}
+              <div class="table-responsive">
+                <table class="table table-vcenter card-table">
+                  <thead>
+                    <tr>
+                      <th>Job name</th>
+                      <th>Status</th>
+                      <th>Progress</th>
+                      <th>ETA</th>
+                      <th class="text-end">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${jobs}
+                  </tbody>
+                </table>
               </div>
+              ${splitHtml}
             </div>`;
         })
         .join("");
@@ -519,39 +484,49 @@
           detail.open = true;
         }
       });
-      if (pendingScroll !== null) {
-        const scrollTarget = pendingScroll;
-        requestAnimationFrame(() => {
-          window.scrollTo(0, scrollTarget);
-          sessionStorage.removeItem(scrollKey);
-          pendingScroll = null;
-        });
-      }
-      bindAsyncStart(".js-start-job", true);
-      bindAsyncStart(".js-stop-job", true);
-      bindAsyncStart(".js-start-stage", false);
-      bindAsyncStart(".js-stop-stage", false);
-      bindViewLogsLinks();
-      bindSplitCopyButtons();
     }
 
-    if (window.EventSource) {
-      const source = new EventSource(`${basePath}/runs/{{ run.id }}/stream`);
-      let lastPayload = null;
-      source.onmessage = (event) => {
-        try {
-          if (event.data === lastPayload) {
-            return;
-          }
-          lastPayload = event.data;
-          const data = JSON.parse(event.data);
-          if (data && data.stages) {
-            renderStages(data);
-          }
-        } catch (err) {
-          console.log("Invalid run update", err);
-        }
-      };
+    async function fetchRetryFailed() {
+      if (!retryFailedBtn || !retryFailedStatus) return;
+      retryFailedBtn.disabled = true;
+      retryFailedStatus.classList.remove("d-none");
+      retryFailedStatus.textContent = "Retrying failed jobs...";
+      try {
+        const response = await fetch(`${basePath}/runs/{{ run.id }}/retry-failed`, { method: "POST" });
+        const text = await response.text();
+        retryFailedStatus.textContent = text || "Retry request sent.";
+      } catch (_) {
+        retryFailedStatus.textContent = "Retry request failed.";
+      } finally {
+        retryFailedBtn.disabled = false;
+      }
     }
+
+    retryFailedBtn?.addEventListener("click", fetchRetryFailed);
+
+    document.addEventListener("click", (event) => {
+      const copyBtn = event.target.closest(".split-copy");
+      if (!copyBtn) return;
+      const queryEl = copyBtn.closest(".split-query-wrap")?.querySelector(".split-query");
+      if (!queryEl) return;
+      navigator.clipboard.writeText(queryEl.textContent || "");
+    });
+
+    if (pendingScroll !== null) {
+      window.scrollTo(0, pendingScroll);
+    }
+    window.addEventListener("scroll", () => {
+      sessionStorage.setItem(scrollKey, `${window.scrollY}`);
+    });
+
+    const stream = new EventSource(`${basePath}/runs/{{ run.id }}/stream`);
+    stream.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data && data.id) {
+          renderStages(data);
+        }
+      } catch (_) {}
+    };
   </script>
-</html>
+{% endblock %}

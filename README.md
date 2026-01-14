@@ -121,7 +121,7 @@ Template replica defaults:
 - `indices.number_of_replicas` overrides the global default per index.
 
 ### UI flow
-- Home page lists runs and updates via SSE (no page refresh).
+- Dashboard (home) lists runs and updates via SSE (no page refresh).
 - Create New Run opens a modal where you select:
   - source endpoint
   - destination endpoint
@@ -131,12 +131,14 @@ Template replica defaults:
   - `alias_suffix` (empty disables the suffix)
 - Optional Dry run skips `es-copy-indices` execution and marks jobs succeeded (for testing).
 - If source == destination, a warning is shown (allowed).
-- Run details show `SRC → DST + template` and the template replica default.
-- Each run card has a Remove button (with confirmation). Running jobs cannot be removed.
+- Dashboard concurrency controls let you adjust the live queue limit (up/down). Running and queued totals are always visible.
+- Run details show `SRC → DST + template`, suffixes, and per-stage tables for jobs.
+- Each run card has a Remove button (with confirmation) and optional Stop All Jobs (stops running + queued).
 - Run page actions: Export run ZIP (configs/logs/metadata) and Retry Failed jobs.
 - Logs stream via SSE with ANSI color support, per-stream filtering, and copy-to-clipboard.
 - Exported ZIP strips ANSI escape codes from `runs/<id>/logs/*.log` for readability.
 - Status page shows CPU/memory and load graphs for host + process.
+- Jobs page lists all jobs across all runs with filters (run dropdown, name substring, status OR checkboxes).
 
 ### Status page metrics (overview)
 The `/status` page shows live host + application resource usage. Values update via SSE.
@@ -164,6 +166,14 @@ Charts:
 - Retry Failed to re-run only the failed jobs without rebuilding the run.
 - Dry run to validate pipelines without touching Elasticsearch.
 - Log filter + copy to clipboard for fast diagnostics.
+
+### Routes
+- `/` (Dashboard), plus aliases `/dashboard` and `/runs`.
+- `/runs/<id>` Run detail page (per-stage job tables).
+- `/runs/<id>/jobs/<job_id>` Job logs (breadcrumbs + live status/progress).
+- `/jobs` Global job list with filters.
+- `/status` Host/process metrics and charts.
+- `/config` Read-only view of main config and templates.
 
 ### Server CLI reference (selected)
 Flags are strict CLI-only (no env fallbacks).
@@ -389,3 +399,9 @@ scroll_mode = "scrolling_search"
 ## Logging and Troubleshooting
 - Use `RUST_LOG=info` or `RUST_LOG=debug` for more detail.
 - Audit log captures bulk requests and responses when `[audit]` is present.
+
+## Built With
+This project includes server UI and workflow improvements built with the help of CatGPT 5.2 codex.
+
+## License
+See `LICENSE`.

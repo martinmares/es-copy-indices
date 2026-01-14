@@ -1,464 +1,384 @@
-<!doctype html>
-<html lang="en" data-bs-theme="dark">
-  <head>
-    <meta charset="utf-8">
-    <title>System Status</title>
-    {% if refresh_seconds > 0 %}
-    <meta http-equiv="refresh" content="{{ refresh_seconds }}">
-    {% endif %}
-    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
-    <script src="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/js/tabler.min.js"></script>
-    <style>
-      .chart {
-        width: 100%;
-        height: 240px;
-        background: var(--tblr-body-bg, #0b0f14);
-        border-radius: 6px;
-      }
-      .chart-legend {
-        display: flex;
-        gap: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-      .legend-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        display: inline-block;
-      }
-      .legend-label {
-        font-size: 12px;
-        color: #9aa3ab;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="page">
-      <div class="page-wrapper">
-        <div class="container-xl">
-          <div class="page-header d-print-none">
-            <div class="row align-items-center">
-              <div class="col">
-                <a class="text-secondary" href="{{ base_path }}/">&#8592; Back to runs</a>
-                <h2 class="page-title">System Status</h2>
-                <div class="text-secondary">CPU is percent of total host capacity. Load is runnable/blocked tasks (compare to CPU core count).</div>
-              </div>
-              <div class="col-auto">
-                <div class="d-flex align-items-center gap-2">
-                  <span class="badge bg-yellow text-dark d-none" id="livePausedBadge">Live paused</span>
-                  <button class="btn btn-outline-warning btn-sm d-none" id="resumeLiveBtn" type="button">
-                    Resume live
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="page-body">
-            <div class="row row-cards">
-              <div class="col-12 col-md-3">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Host CPU (%)</div>
-                    <div class="h2 m-0" id="hostCpu">{{ summary.host_cpu }}%</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-3">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Server CPU (%)</div>
-                    <div class="h2 m-0" id="procCpu">{{ summary.proc_cpu }}%</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-3">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Child processes CPU (%)</div>
-                    <div class="h2 m-0" id="childrenCpu">{{ summary.children_cpu }}%</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-3">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Total CPU (%)</div>
-                    <div class="h2 m-0" id="totalCpu">{{ summary.total_cpu }}%</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Host Memory</div>
-                    <div class="h3 m-0" id="hostMem">{{ summary.host_mem_used_mb }} / {{ summary.host_mem_total_mb }} MB</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Server Memory</div>
-                    <div class="h3 m-0" id="procMem">{{ summary.proc_mem_mb }} MB</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Child processes Memory</div>
-                    <div class="h3 m-0" id="childrenMem">{{ summary.children_mem_mb }} MB</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Total Memory</div>
-                    <div class="h3 m-0" id="totalMem">{{ summary.total_mem_mb }} MB</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Running Jobs</div>
-                    <div class="h2 m-0" id="runningJobs">{{ summary.running_jobs }}</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Queued Jobs</div>
-                    <div class="h2 m-0" id="queuedJobs">{{ summary.queued_jobs }}</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Concurrency Limit</div>
-                    <div class="h2 m-0" id="jobLimit">
-                      {% if summary.max_concurrent_jobs.is_some() %}
-                        {{ summary.max_concurrent_jobs.unwrap() }}
-                      {% else %}
-                        Unlimited
-                      {% endif %}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="card">
-                  <div class="card-body">
-                    <div class="text-secondary">Load 1 / 5 / 15 (tasks)</div>
-                    <div class="h2 m-0" id="loadAvg">{{ summary.load1 }} / {{ summary.load5 }} / {{ summary.load15 }}</div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12">
-                <div class="card">
-                  <div class="card-header">
-                    <div class="card-title">CPU Usage (last 10 min, % of host)</div>
-                  </div>
-                  <div class="card-body">
-                    <div class="chart-legend mb-2">
-                      <span class="legend-dot" style="background:#4dabf7"></span>
-                      <span class="legend-label">Server CPU</span>
-                      <span class="legend-dot" style="background:#ffd43b"></span>
-                      <span class="legend-label">Child processes CPU</span>
-                      <span class="legend-dot" style="background:#69db7c"></span>
-                      <span class="legend-label">Total CPU</span>
-                    </div>
-                    <div id="cpuChart" class="chart"></div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12">
-                <div class="card">
-                  <div class="card-header">
-                    <div class="card-title">Host vs Total CPU (last 10 min, %)</div>
-                  </div>
-                  <div class="card-body">
-                    <div class="chart-legend mb-2">
-                      <span class="legend-dot" style="background:#4dabf7"></span>
-                      <span class="legend-label">Host CPU</span>
-                      <span class="legend-dot" style="background:#69db7c"></span>
-                      <span class="legend-label">Total CPU</span>
-                    </div>
-                    <div id="cpuTotalChart" class="chart"></div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12">
-                <div class="card">
-                  <div class="card-header">
-                    <div class="card-title">Memory (last 10 min, MB)</div>
-                  </div>
-                  <div class="card-body">
-                    <div class="chart-legend mb-2">
-                      <span class="legend-dot" style="background:#4dabf7"></span>
-                      <span class="legend-label">Server MB</span>
-                      <span class="legend-dot" style="background:#ffd43b"></span>
-                      <span class="legend-label">Child processes MB</span>
-                      <span class="legend-dot" style="background:#69db7c"></span>
-                      <span class="legend-label">Total MB</span>
-                      <span class="legend-dot" style="background:#ffa8a8"></span>
-                      <span class="legend-label">Host Used MB</span>
-                    </div>
-                    <div id="memChart" class="chart"></div>
-                  </div>
-                </div>
-              </div>
-              <div class="col-12">
-                <div class="card">
-                  <div class="card-header">
-                    <div class="card-title">Load Average (last 10 min, tasks)</div>
-                  </div>
-                  <div class="card-body">
-                    <div class="chart-legend mb-2">
-                      <span class="legend-dot" style="background:#74c0fc"></span>
-                      <span class="legend-label">Load 1</span>
-                      <span class="legend-dot" style="background:#c0eb75"></span>
-                      <span class="legend-label">Load 5</span>
-                      <span class="legend-dot" style="background:#ffa94d"></span>
-                      <span class="legend-label">Load 15</span>
-                    </div>
-                    <div id="loadChart" class="chart"></div>
-                  </div>
-                </div>
-              </div>
-            </div>
+{% extends "server/layout.html" %}
+
+{% block title %}Status · ES Copy Runner{% endblock %}
+
+{% block head_extra %}
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
+{% endblock %}
+
+{% block styles %}
+  <style>
+    .chart {
+      width: 100%;
+      height: 240px;
+      background: var(--tblr-body-bg, #0b0f14);
+      border-radius: 6px;
+    }
+    .chart-legend {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+    .legend-label {
+      font-size: 12px;
+      color: #9aa3ab;
+    }
+  </style>
+{% endblock %}
+
+{% block header %}
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <div class="page-pretitle">System</div>
+        <h2 class="page-title">Status</h2>
+        <div class="text-secondary">CPU is percent of total host capacity. Load is runnable/blocked tasks (compare to CPU core count).</div>
+      </div>
+      <div class="col-auto">
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-yellow text-dark d-none" id="livePausedBadge">Live paused</span>
+          <button class="btn btn-outline-warning btn-sm d-none" id="resumeLiveBtn" type="button">
+            Resume live
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="row row-cards">
+    <div class="col-12 col-md-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Host CPU (%)</div>
+          <div class="h2 m-0" id="hostCpu">{{ summary.host_cpu }}%</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Server CPU (%)</div>
+          <div class="h2 m-0" id="procCpu">{{ summary.proc_cpu }}%</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Child processes CPU (%)</div>
+          <div class="h2 m-0" id="childrenCpu">{{ summary.children_cpu }}%</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Total CPU (%)</div>
+          <div class="h2 m-0" id="totalCpu">{{ summary.total_cpu }}%</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Host Memory</div>
+          <div class="h3 m-0" id="hostMem">{{ summary.host_mem_used_mb }} / {{ summary.host_mem_total_mb }} MB</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Server Memory</div>
+          <div class="h3 m-0" id="procMem">{{ summary.proc_mem_mb }} MB</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Child processes Memory</div>
+          <div class="h3 m-0" id="childrenMem">{{ summary.children_mem_mb }} MB</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Total Memory</div>
+          <div class="h3 m-0" id="totalMem">{{ summary.total_mem_mb }} MB</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Running Jobs</div>
+          <div class="h2 m-0" id="runningJobs">{{ summary.running_jobs }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Queued Jobs</div>
+          <div class="h2 m-0" id="queuedJobs">{{ summary.queued_jobs }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Concurrency Limit</div>
+          <div class="h2 m-0" id="jobLimit">
+            {% if summary.max_concurrent_jobs.is_some() %}
+              {{ summary.max_concurrent_jobs.unwrap() }}
+            {% else %}
+              Unlimited
+            {% endif %}
           </div>
         </div>
       </div>
     </div>
-    <script>
-      const basePath = "{{ base_path }}";
-      const samples = [];
-      const windowSeconds = 600;
+    <div class="col-12 col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">Load 1 / 5 / 15 (tasks)</div>
+          <div class="h2 m-0" id="loadAvg">{{ summary.load1 }} / {{ summary.load5 }} / {{ summary.load15 }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">CPU Usage (last 10 min, % of host)</div>
+        </div>
+        <div class="card-body">
+          <div class="chart-legend mb-2">
+            <span class="legend-dot" style="background:#4dabf7"></span>
+            <span class="legend-label">Server CPU</span>
+            <span class="legend-dot" style="background:#ffd43b"></span>
+            <span class="legend-label">Child processes CPU</span>
+            <span class="legend-dot" style="background:#69db7c"></span>
+            <span class="legend-label">Total CPU</span>
+          </div>
+          <div id="cpuChart" class="chart"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Host vs Total CPU (last 10 min, %)</div>
+        </div>
+        <div class="card-body">
+          <div class="chart-legend mb-2">
+            <span class="legend-dot" style="background:#4dabf7"></span>
+            <span class="legend-label">Host CPU</span>
+            <span class="legend-dot" style="background:#69db7c"></span>
+            <span class="legend-label">Total CPU</span>
+          </div>
+          <div id="cpuTotalChart" class="chart"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Memory (last 10 min, MB)</div>
+        </div>
+        <div class="card-body">
+          <div class="chart-legend mb-2">
+            <span class="legend-dot" style="background:#4dabf7"></span>
+            <span class="legend-label">Server</span>
+            <span class="legend-dot" style="background:#ffd43b"></span>
+            <span class="legend-label">Child processes</span>
+            <span class="legend-dot" style="background:#69db7c"></span>
+            <span class="legend-label">Total</span>
+          </div>
+          <div id="memChart" class="chart"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Load average (last 10 min)</div>
+        </div>
+        <div class="card-body">
+          <div class="chart-legend mb-2">
+            <span class="legend-dot" style="background:#4dabf7"></span>
+            <span class="legend-label">Load 1</span>
+            <span class="legend-dot" style="background:#ffd43b"></span>
+            <span class="legend-label">Load 5</span>
+            <span class="legend-dot" style="background:#69db7c"></span>
+            <span class="legend-label">Load 15</span>
+          </div>
+          <div id="loadChart" class="chart"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
 
-      function trimSamples() {
-        const cutoff = Math.floor(Date.now() / 1000) - windowSeconds;
-        while (samples.length && samples[0].ts < cutoff) {
-          samples.shift();
-        }
+{% block scripts %}
+  <script>
+    const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+    const livePausedBadge = document.getElementById("livePausedBadge");
+    const resumeLiveBtn = document.getElementById("resumeLiveBtn");
+    const hostCpu = document.getElementById("hostCpu");
+    const procCpu = document.getElementById("procCpu");
+    const childrenCpu = document.getElementById("childrenCpu");
+    const totalCpu = document.getElementById("totalCpu");
+    const hostMem = document.getElementById("hostMem");
+    const procMem = document.getElementById("procMem");
+    const childrenMem = document.getElementById("childrenMem");
+    const totalMem = document.getElementById("totalMem");
+    const runningJobs = document.getElementById("runningJobs");
+    const queuedJobs = document.getElementById("queuedJobs");
+    const jobLimit = document.getElementById("jobLimit");
+    const loadAvg = document.getElementById("loadAvg");
+    const charts = {};
+    let paused = false;
+    let samples = [];
+
+    function renderCharts() {
+      const labels = samples.map((sample) => new Date(sample.ts * 1000).toLocaleTimeString());
+      const cpuSeries = [
+        { name: "Server", data: samples.map((sample) => sample.proc_cpu) },
+        { name: "Children", data: samples.map((sample) => sample.children_cpu) },
+        { name: "Total", data: samples.map((sample) => sample.total_cpu) },
+      ];
+      const cpuTotalSeries = [
+        { name: "Host", data: samples.map((sample) => sample.host_cpu) },
+        { name: "Total", data: samples.map((sample) => sample.total_cpu) },
+      ];
+      const memSeries = [
+        { name: "Server", data: samples.map((sample) => Math.round(sample.proc_mem_kb / 1024)) },
+        { name: "Children", data: samples.map((sample) => Math.round(sample.children_mem_kb / 1024)) },
+        { name: "Total", data: samples.map((sample) => Math.round(sample.total_mem_kb / 1024)) },
+      ];
+      const loadSeries = [
+        { name: "Load 1", data: samples.map((sample) => sample.load1) },
+        { name: "Load 5", data: samples.map((sample) => sample.load5) },
+        { name: "Load 15", data: samples.map((sample) => sample.load15) },
+      ];
+      charts.cpu ??= new ApexCharts(document.getElementById("cpuChart"), buildLineChart(cpuSeries));
+      charts.cpuTotal ??= new ApexCharts(document.getElementById("cpuTotalChart"), buildLineChart(cpuTotalSeries));
+      charts.mem ??= new ApexCharts(document.getElementById("memChart"), buildLineChart(memSeries));
+      charts.load ??= new ApexCharts(document.getElementById("loadChart"), buildLineChart(loadSeries));
+      charts.cpu.render();
+      charts.cpuTotal.render();
+      charts.mem.render();
+      charts.load.render();
+      charts.cpu.updateOptions({ xaxis: { categories: labels } }, false, true);
+      charts.cpu.updateSeries(cpuSeries, true);
+      charts.cpuTotal.updateOptions({ xaxis: { categories: labels } }, false, true);
+      charts.cpuTotal.updateSeries(cpuTotalSeries, true);
+      charts.mem.updateOptions({ xaxis: { categories: labels } }, false, true);
+      charts.mem.updateSeries(memSeries, true);
+      charts.load.updateOptions({ xaxis: { categories: labels } }, false, true);
+      charts.load.updateSeries(loadSeries, true);
+    }
+
+    function pauseLive() {
+      if (!paused) {
+        paused = true;
+        livePausedBadge.classList.remove("d-none");
+        resumeLiveBtn.classList.remove("d-none");
       }
+    }
 
-      function updateSummary(sample) {
-        const toMb = (value) => value / 1024 / 1024;
-        document.getElementById("hostCpu").textContent = `${sample.host_cpu.toFixed(1)}%`;
-        document.getElementById("procCpu").textContent = `${sample.proc_cpu.toFixed(1)}%`;
-        document.getElementById("childrenCpu").textContent = `${sample.children_cpu.toFixed(1)}%`;
-        document.getElementById("totalCpu").textContent = `${sample.total_cpu.toFixed(1)}%`;
-        document.getElementById("loadAvg").textContent =
-          `${sample.load1.toFixed(2)} / ${sample.load5.toFixed(2)} / ${sample.load15.toFixed(2)}`;
-        document.getElementById("hostMem").textContent =
-          `${Math.round(toMb(sample.host_mem_used_kb))} / ${Math.round(toMb(sample.host_mem_total_kb))} MB`;
-        document.getElementById("procMem").textContent =
-          `${Math.round(toMb(sample.proc_mem_kb))} MB`;
-        document.getElementById("childrenMem").textContent =
-          `${Math.round(toMb(sample.children_mem_kb))} MB`;
-        document.getElementById("totalMem").textContent =
-          `${Math.round(toMb(sample.total_mem_kb))} MB`;
-        document.getElementById("runningJobs").textContent = `${sample.running_jobs}`;
-        document.getElementById("queuedJobs").textContent = `${sample.queued_jobs}`;
-        const limitLabel = sample.max_concurrent_jobs === null || sample.max_concurrent_jobs === undefined
-          ? "Unlimited"
-          : sample.max_concurrent_jobs;
-        document.getElementById("jobLimit").textContent = `${limitLabel}`;
-      }
+    function resumeLive() {
+      paused = false;
+      livePausedBadge.classList.add("d-none");
+      resumeLiveBtn.classList.add("d-none");
+    }
 
-      let livePaused = false;
-      const livePausedBadge = document.getElementById("livePausedBadge");
-      const resumeLiveBtn = document.getElementById("resumeLiveBtn");
-
-      function setLivePaused(value) {
-        livePaused = value;
-        if (!livePausedBadge || !resumeLiveBtn) {
-          return;
-        }
-        if (value) {
-          livePausedBadge.classList.remove("d-none");
-          resumeLiveBtn.classList.remove("d-none");
-        } else {
-          livePausedBadge.classList.add("d-none");
-          resumeLiveBtn.classList.add("d-none");
-        }
-      }
-
-      if (resumeLiveBtn) {
-        resumeLiveBtn.addEventListener("click", () => {
-          setLivePaused(false);
-          redraw();
-        });
-      }
-
-      const tablerColors = {
-        blue: tabler.getColor("blue"),
-        yellow: tabler.getColor("yellow"),
-        green: tabler.getColor("green"),
-        red: tabler.getColor("red"),
-        orange: tabler.getColor("orange"),
-        cyan: tabler.getColor("cyan"),
-        lime: tabler.getColor("lime"),
-      };
-
-      const baseChartOptions = {
+    function buildLineChart(series) {
+      return {
         chart: {
           type: "line",
           height: 240,
-          zoom: { enabled: true },
-          toolbar: { show: true },
+          toolbar: {
+            show: true,
+            tools: {
+              zoom: true,
+              zoomin: true,
+              zoomout: true,
+              pan: true,
+              reset: true,
+            },
+          },
+          zoom: {
+            enabled: true,
+            type: "x",
+            autoScaleYaxis: true,
+          },
           animations: { enabled: false },
           background: "transparent",
           events: {
-            zoomed: () => {
-              setLivePaused(true);
-            },
-            beforeResetZoom: () => {
-              setLivePaused(false);
-            },
+            zoomed: pauseLive,
+            scrolled: pauseLive,
           },
         },
         theme: { mode: "dark" },
-        stroke: { curve: "straight", width: 2 },
-        markers: { size: 2 },
-        grid: { borderColor: "rgba(255, 255, 255, 0.1)" },
-        xaxis: { type: "datetime" },
-        yaxis: { min: 0 },
-        legend: { position: "bottom" },
-        tooltip: { x: { format: "HH:mm:ss" }, theme: "dark" },
+        stroke: { width: 2, curve: "smooth" },
+        dataLabels: { enabled: false },
+        series,
+        grid: { borderColor: "rgba(255, 255, 255, 0.08)" },
       };
+    }
 
-      const cpuChart = new ApexCharts(document.getElementById("cpuChart"), {
-        ...baseChartOptions,
-        colors: [tablerColors.blue, tablerColors.yellow, tablerColors.green],
-        yaxis: { min: 0 },
-        series: [],
-      });
-      cpuChart.render();
+    function updateSnapshot(sample) {
+      hostCpu.textContent = `${sample.host_cpu.toFixed(1)}%`;
+      procCpu.textContent = `${sample.proc_cpu.toFixed(1)}%`;
+      childrenCpu.textContent = `${sample.children_cpu.toFixed(1)}%`;
+      totalCpu.textContent = `${sample.total_cpu.toFixed(1)}%`;
+      hostMem.textContent = `${Math.round(sample.host_mem_used_kb / 1024)} / ${Math.round(sample.host_mem_total_kb / 1024)} MB`;
+      procMem.textContent = `${Math.round(sample.proc_mem_kb / 1024)} MB`;
+      childrenMem.textContent = `${Math.round(sample.children_mem_kb / 1024)} MB`;
+      totalMem.textContent = `${Math.round(sample.total_mem_kb / 1024)} MB`;
+      runningJobs.textContent = sample.running_jobs;
+      queuedJobs.textContent = sample.queued_jobs;
+      jobLimit.textContent = sample.max_concurrent_jobs ? sample.max_concurrent_jobs : "Unlimited";
+      loadAvg.textContent = `${sample.load1.toFixed(2)} / ${sample.load5.toFixed(2)} / ${sample.load15.toFixed(2)}`;
+    }
 
-      const cpuTotalChart = new ApexCharts(document.getElementById("cpuTotalChart"), {
-        ...baseChartOptions,
-        colors: [tablerColors.cyan, tablerColors.green],
-        yaxis: { min: 0 },
-        series: [],
-      });
-      cpuTotalChart.render();
-
-      const memChart = new ApexCharts(document.getElementById("memChart"), {
-        ...baseChartOptions,
-        colors: [tablerColors.blue, tablerColors.yellow, tablerColors.green, tablerColors.red],
-        series: [],
-      });
-      memChart.render();
-
-      const loadChart = new ApexCharts(document.getElementById("loadChart"), {
-        ...baseChartOptions,
-        colors: [tablerColors.cyan, tablerColors.lime, tablerColors.orange],
-        series: [],
-      });
-      loadChart.render();
-
-      function buildSeries() {
-        const cpuSeries = [
-          {
-            name: "Server CPU",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: s.proc_cpu })),
-          },
-          {
-            name: "Child processes CPU",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: s.children_cpu })),
-          },
-          {
-            name: "Total CPU",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: s.total_cpu })),
-          },
-        ];
-        const cpuTotalSeries = [
-          {
-            name: "Host CPU",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: s.host_cpu })),
-          },
-          {
-            name: "Total CPU",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: s.total_cpu })),
-          },
-        ];
-        const toMb = (value) => value / 1024 / 1024;
-        const memSeries = [
-          {
-            name: "Server MB",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: toMb(s.proc_mem_kb) })),
-          },
-          {
-            name: "Child processes MB",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: toMb(s.children_mem_kb) })),
-          },
-          {
-            name: "Total MB",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: toMb(s.total_mem_kb) })),
-          },
-          {
-            name: "Host Used MB",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: toMb(s.host_mem_used_kb) })),
-          },
-        ];
-        const loadSeries = [
-          {
-            name: "Load 1",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: s.load1 })),
-          },
-          {
-            name: "Load 5",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: s.load5 })),
-          },
-          {
-            name: "Load 15",
-            data: samples.map((s) => ({ x: s.ts * 1000, y: s.load15 })),
-          },
-        ];
-        return { cpuSeries, cpuTotalSeries, memSeries, loadSeries };
-      }
-
-      function redraw() {
-        trimSamples();
-        if (samples.length) {
-          updateSummary(samples[samples.length - 1]);
-        }
-        const series = buildSeries();
-        if (!livePaused) {
-          cpuChart.updateSeries(series.cpuSeries, true);
-          cpuTotalChart.updateSeries(series.cpuTotalSeries, true);
-          memChart.updateSeries(series.memSeries, true);
-          loadChart.updateSeries(series.loadSeries, true);
-        }
-      }
-
-      fetch(`${basePath}/status/snapshot`)
-        .then((response) => response.json())
-        .then((data) => {
-          if (Array.isArray(data)) {
-            samples.push(...data);
-            redraw();
+    fetch(`${basePath}/status/snapshot`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          samples = data;
+          if (samples.length > 0) {
+            updateSnapshot(samples[samples.length - 1]);
           }
-        })
-        .catch(() => {});
-
-      const source = new EventSource(`${basePath}/status/stream`);
-      source.onmessage = (event) => {
-        try {
-          const sample = JSON.parse(event.data);
-          samples.push(sample);
-          redraw();
-        } catch (err) {
-          console.log("Invalid metrics event", err);
+          renderCharts();
         }
-      };
-    </script>
-  </body>
-</html>
+      });
+
+    const stream = new EventSource(`${basePath}/status/stream`);
+    stream.onmessage = (event) => {
+      if (paused) return;
+      const sample = JSON.parse(event.data);
+      samples.push(sample);
+      if (samples.length > 120) {
+        samples.shift();
+      }
+      updateSnapshot(sample);
+      renderCharts();
+    };
+
+    document.getElementById("cpuChart")?.addEventListener("wheel", pauseLive);
+    resumeLiveBtn.addEventListener("click", resumeLive);
+  </script>
+{% endblock %}

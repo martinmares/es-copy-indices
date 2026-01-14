@@ -1,653 +1,682 @@
-<!doctype html>
-<html lang="en" data-bs-theme="dark">
-  <head>
-    <meta charset="utf-8">
-    <title>ES Copy Runner</title>
-    {% if refresh_seconds > 0 %}
-    <meta http-equiv="refresh" content="{{ refresh_seconds }}">
-    {% endif %}
-    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
-    <style>
-      dialog.modal {
-        border: none;
-        padding: 0;
-        width: min(720px, 92vw);
-        background: transparent;
-        color: inherit;
-      }
-      dialog.modal::backdrop {
-        background: rgba(10, 14, 20, 0.75);
-      }
-      dialog.modal[open] {
-        display: block;
-      }
-      .js-run-card {
-        cursor: pointer;
-        transition: background-color 0.12s ease, border-color 0.12s ease;
-      }
-      .js-run-card.run-active {
-        border-color: rgba(47, 158, 68, 0.6);
-        background-color: rgba(20, 66, 40, 0.28);
-      }
-      .js-run-card:hover {
-        background-color: #0f1622;
-        border-color: rgba(148, 163, 184, 0.35);
-      }
-      .js-run-card .js-remove-run {
-        cursor: pointer;
-      }
-      .run-total-badge {
-        font-size: 0.95rem;
-        padding: 6px 10px;
-      }
-      .page-subtitle {
-        font-size: 1.05rem;
-      }
-      .concurrency-row {
-        font-size: 0.85rem;
-        padding: 6px 0;
-      }
-      .concurrency-value {
-        font-weight: 700;
-        color: #ffffff !important;
-        border-color: rgba(255, 255, 255, 0.25);
-        background-color: rgba(59, 130, 246, 0.25);
-        font-size: 0.95rem;
-        min-width: 44px;
-        justify-content: center;
-        opacity: 1;
-      }
-      .concurrency-row .btn {
-        min-width: 32px;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="page">
-      <div class="page-wrapper">
-        <div class="container-xl">
-          <div class="page-header d-print-none">
-            <div class="row align-items-center">
-              <div class="col">
-                <h2 class="page-title">ES Copy Runner</h2>
-                <div class="text-secondary page-subtitle">Run history with manual stage/job control.</div>
-                <div class="d-flex align-items-center gap-2 concurrency-row">
-                  <div class="text-secondary">Max concurrent jobs</div>
-                  <div class="btn-group btn-group-sm" role="group" aria-label="Adjust concurrency">
-                    <button class="btn btn-outline-secondary" id="decreaseConcurrency" type="button">&nbsp;&nbsp;
-                      <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M6 9l6 6l6-6"></path>
-                      </svg>
-                      &nbsp;&nbsp;</button>
-                    <span class="btn btn-outline-secondary disabled concurrency-value" id="maxConcurrencyValue" data-max-concurrency="{{ max_concurrent_jobs.unwrap_or(0) }}">
-                      {% if max_concurrent_jobs.is_some() %}
-                        {{ max_concurrent_jobs.unwrap() }}
-                      {% else %}
-                        ∞
-                      {% endif %}
-                    </span>
-                    <button class="btn btn-outline-secondary" id="increaseConcurrency" type="button">&nbsp;&nbsp;
-                      <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M6 15l6-6l6 6"></path>
-                      </svg>
-                      &nbsp;&nbsp;</button>
-                  </div>
-                </div>
-                <div class="mt-1" id="runTotals">
-                  <span class="badge bg-green text-dark run-total-badge">Running {{ running_total }}</span>
-                  <span class="badge bg-blue text-white run-total-badge">Queued {{ queued_total }}</span>
-                </div>
-              </div>
-              <div class="col-auto">
-                <div class="btn-list">
-                  <a class="btn btn-outline-secondary" href="{{ base_path }}/status">Status</a>
-                  <a class="btn btn-outline-secondary" href="{{ base_path }}/config">Config</a>
-                  <button class="btn btn-primary" id="openCreateRun" type="button">Create New Run</button>
-                </div>
-              </div>
+{% extends "server/layout.html" %}
+
+{% block title %}Dashboard · ES Copy Runner{% endblock %}
+
+{% block head_extra %}
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
+{% endblock %}
+
+{% block styles %}
+  <style>
+    dialog.modal {
+      border: none;
+      padding: 0;
+      width: min(720px, 92vw);
+      background: transparent;
+      color: inherit;
+    }
+    dialog.modal::backdrop {
+      background: rgba(10, 14, 20, 0.75);
+    }
+    dialog.modal[open] {
+      display: block;
+    }
+    .js-run-card {
+      cursor: pointer;
+      transition: background-color 0.12s ease, border-color 0.12s ease;
+    }
+    .js-run-card.run-active {
+      border-color: rgba(47, 158, 68, 0.6);
+      background-color: rgba(20, 66, 40, 0.28);
+    }
+    .js-run-card:hover {
+      background-color: #0f1622;
+      border-color: rgba(148, 163, 184, 0.35);
+    }
+    .js-run-card .js-remove-run {
+      cursor: pointer;
+    }
+    .run-total-badge {
+      font-size: 0.95rem;
+      padding: 6px 10px;
+    }
+    .concurrency-row {
+      font-size: 0.85rem;
+      padding: 6px 0;
+    }
+    .concurrency-value {
+      font-weight: 700;
+      color: #ffffff !important;
+      border-color: rgba(255, 255, 255, 0.25);
+      background-color: rgba(59, 130, 246, 0.25);
+      font-size: 0.95rem;
+      min-width: 44px;
+      justify-content: center;
+      opacity: 1;
+    }
+    .concurrency-row .btn {
+      min-width: 32px;
+    }
+    .sparkline {
+      height: 68px;
+    }
+  </style>
+{% endblock %}
+
+{% block header %}
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <div class="page-pretitle">Dashboard</div>
+        <h2 class="page-title">Run history</h2>
+        <div class="text-secondary">Manual stage/job control with live queue visibility.</div>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-primary" id="openCreateRun" type="button">Create New Run</button>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="row row-cards mb-3">
+    <div class="col-12 col-lg-6">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary mb-2">Concurrency</div>
+          <div class="d-flex align-items-center gap-2 flex-wrap concurrency-row">
+            <div class="text-secondary">Max concurrent jobs</div>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Adjust concurrency">
+              <button class="btn btn-outline-secondary" id="decreaseConcurrency" type="button">&nbsp;&nbsp;
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M6 9l6 6l6-6"></path>
+                </svg>
+                &nbsp;&nbsp;</button>
+              <span class="btn btn-outline-secondary disabled concurrency-value" id="maxConcurrencyValue" data-max-concurrency="{{ max_concurrent_jobs.unwrap_or(0) }}">
+                {% if max_concurrent_jobs.is_some() %}
+                  {{ max_concurrent_jobs.unwrap() }}
+                {% else %}
+                  ∞
+                {% endif %}
+              </span>
+              <button class="btn btn-outline-secondary" id="increaseConcurrency" type="button">&nbsp;&nbsp;
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M6 15l6-6l6 6"></path>
+                </svg>
+                &nbsp;&nbsp;</button>
             </div>
           </div>
-          <div class="page-body">
-            {% if runs.len() == 0 %}
-              <div class="card" id="noRunsCard">
-                <div class="card-body text-secondary">No runs yet. Create the first run to generate jobs.</div>
-              </div>
-            {% endif %}
-            <div class="row row-cards" id="runsList">
-              {% for run in runs %}
-                <div class="col-12">
-                  <div class="card position-relative js-run-card {% if run.jobs_running > 0 %}run-active{% endif %}" data-run-id="{{ run.id }}">
-                    <div class="card-body">
-                  <div class="d-flex align-items-center justify-content-between">
-                    <div class="h3 m-0">
-                      {{ run.src_name }} → {{ run.dst_name }}
-                      <span class="text-secondary fw-normal small ms-2">({{ run.id }})</span>
-                      {% if run.dry_run %}
-                        <span class="badge bg-azure text-white ms-2">dry run</span>
-                      {% endif %}
-                    </div>
-                    <div class="text-end">
-                      <div class="text-secondary">{{ run.created_at }}</div>
-                      <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="{{ run.id }}">
-                        Remove
-                      </button>
-                      {% if run.jobs_running > 0 %}
-                        <button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="{{ run.id }}">
-                          Stop all jobs
-                        </button>
-                      {% endif %}
-                    </div>
-                  </div>
-                  <div class="text-secondary small">
-                    {{ run.template_name }}
-                    · copy_suffix={% if run.copy_suffix.is_some() %}{{ run.copy_suffix.as_deref().unwrap_or("") }}{% else %}none{% endif %}
-                    · alias_suffix={% if run.alias_suffix.is_some() %}{{ run.alias_suffix.as_deref().unwrap_or("") }}{% else %}none{% endif %}
-                  </div>
-                      <div class="mt-3 d-flex flex-wrap gap-2">
-                        <span class="badge bg-secondary text-white">Total {{ run.jobs_total }}</span>
-                        <span class="badge bg-yellow text-dark">Running {{ run.jobs_running }}</span>
-                        <span class="badge bg-blue text-white">Queued {{ run.jobs_queued }}</span>
-                        <span class="badge bg-green text-dark">Succeeded {{ run.jobs_succeeded }}</span>
-                        <span class="badge bg-red text-white">Failed {{ run.jobs_failed }}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              {% endfor %}
+          <div class="mt-2" id="runTotals">
+            <span class="badge bg-green text-dark run-total-badge">Running {{ running_total }}</span>
+            <span class="badge bg-blue text-white run-total-badge">Queued {{ queued_total }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-secondary">System snapshot</div>
+          <div class="row g-3 mt-1">
+            <div class="col-6">
+              <div class="text-secondary small">CPU (%)</div>
+              <div class="h3 m-0" id="dashboardCpuValue">-</div>
+              <div id="dashboardCpuSpark" class="sparkline"></div>
+            </div>
+            <div class="col-6">
+              <div class="text-secondary small">Total memory (MB)</div>
+              <div class="h3 m-0" id="dashboardMemValue">-</div>
+              <div id="dashboardMemSpark" class="sparkline"></div>
             </div>
           </div>
         </div>
       </div>
     </div>
-    <dialog class="modal" id="createRunModal">
-      <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-          <form action="{{ base_path }}/runs" method="post" id="createRunForm">
-            <div class="modal-header">
-              <h3 class="modal-title">Create New Run</h3>
-              <button class="btn-close" type="button" id="closeCreateRun"></button>
-            </div>
-            <div class="modal-body">
-              <div class="row g-3">
-                <div class="col-md-6">
-                  <label class="form-label">Source endpoint</label>
-                  <select class="form-select" name="src_endpoint_id" id="srcEndpointSelect" required autofocus>
-                    {% for endpoint in endpoints %}
-                      <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Destination endpoint</label>
-                  <select class="form-select" name="dst_endpoint_id" id="dstEndpointSelect" required>
-                    {% for endpoint in endpoints %}
-                      <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-                <div class="col-12">
-                  <label class="form-label">Template</label>
-                  <select class="form-select" name="template_id" id="templateSelect" required>
-                    {% for template in templates %}
-                      <option value="{{ template.id }}">{{ template.name }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Index copy suffix</label>
-                  <input class="form-control" type="text" name="index_copy_suffix" id="indexCopySuffix" value="{{ copy_suffix.as_deref().unwrap_or("") }}">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Alias suffix</label>
-                  <input class="form-control" type="text" name="alias_suffix" id="aliasSuffix" value="{{ alias_suffix.as_deref().unwrap_or("") }}">
-                </div>
-                <div class="col-12">
-                  <label class="form-check">
-                    <input class="form-check-input" type="checkbox" name="dry_run" id="dryRunToggle" value="1">
-                    <span class="form-check-label">Dry run (skip es-copy-indices, mark jobs succeeded)</span>
-                  </label>
-                </div>
+  </div>
+
+  {% if runs.len() == 0 %}
+    <div class="card" id="noRunsCard">
+      <div class="card-body text-secondary">No runs yet. Create the first run to generate jobs.</div>
+    </div>
+  {% endif %}
+  <div class="row row-cards" id="runsList">
+    {% for run in runs %}
+      <div class="col-12">
+        <div class="card position-relative js-run-card {% if run.jobs_running > 0 %}run-active{% endif %}" data-run-id="{{ run.id }}">
+          <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between">
+              <div class="h3 m-0">
+                {{ run.src_name }} → {{ run.dst_name }}
+                <span class="text-secondary fw-normal small ms-2">({{ run.id }})</span>
+                {% if run.dry_run %}
+                  <span class="badge bg-azure text-white ms-2">dry run</span>
+                {% endif %}
               </div>
-              <div class="alert alert-warning mt-3 d-none" id="sameEndpointWarning">
-                Source and destination are the same endpoint. This will create a timestamped copy in the same cluster.
-              </div>
-              <div class="alert alert-danger mt-3 d-none" id="createRunError"></div>
-              <div class="card mt-3">
-                <div class="card-body">
-                  <div class="text-secondary">Selection details</div>
-                  <div class="mt-2">
-                    <div class="fw-semibold">Source</div>
-                    <div class="text-secondary small" id="srcDetails">-</div>
-                  </div>
-                  <div class="mt-2">
-                    <div class="fw-semibold">Destination</div>
-                    <div class="text-secondary small" id="dstDetails">-</div>
-                  </div>
-                  <div class="mt-2">
-                    <div class="fw-semibold">Template</div>
-                    <div class="text-secondary small" id="templateDetails">-</div>
-                  </div>
-                  <div class="mt-2">
-                    <div class="fw-semibold">Suffixes</div>
-                    <div class="text-secondary small" id="suffixDetails">-</div>
-                  </div>
-                  <div class="mt-2">
-                    <div class="fw-semibold">Dry run</div>
-                    <div class="text-secondary small" id="dryRunDetails">-</div>
-                  </div>
-                </div>
+              <div class="text-end">
+                <div class="text-secondary">{{ run.created_at }}</div>
+                <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="{{ run.id }}">
+                  Remove
+                </button>
+                {% if run.jobs_running > 0 %}
+                  <button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="{{ run.id }}">
+                    Stop all jobs
+                  </button>
+                {% endif %}
               </div>
             </div>
-            <div class="modal-footer">
-              <button class="btn btn-outline-secondary" type="button" id="cancelCreateRun">Cancel</button>
-              <button class="btn btn-primary" type="submit" id="createRunSubmit">
-                <span class="spinner-border spinner-border-sm me-2 d-none" id="createRunSpinner" role="status"></span>
-                <span id="createRunLabel">Create</span>
-              </button>
+            <div class="text-secondary small">
+              {{ run.template_name }}
+              · copy_suffix={% if run.copy_suffix.is_some() %}{{ run.copy_suffix.as_deref().unwrap_or("") }}{% else %}none{% endif %}
+              · alias_suffix={% if run.alias_suffix.is_some() %}{{ run.alias_suffix.as_deref().unwrap_or("") }}{% else %}none{% endif %}
             </div>
-          </form>
+            <div class="mt-3 d-flex flex-wrap gap-2">
+              <span class="badge bg-secondary text-white">Total {{ run.jobs_total }}</span>
+              <span class="badge bg-yellow text-dark">Running {{ run.jobs_running }}</span>
+              <span class="badge bg-blue text-white">Queued {{ run.jobs_queued }}</span>
+              <span class="badge bg-green text-dark">Succeeded {{ run.jobs_succeeded }}</span>
+              <span class="badge bg-red text-white">Failed {{ run.jobs_failed }}</span>
+            </div>
+          </div>
         </div>
       </div>
-    </dialog>
-    <dialog class="modal" id="removeRunModal">
-      <div class="modal-dialog modal-sm">
-        <div class="modal-content">
+    {% endfor %}
+  </div>
+
+  <dialog class="modal" id="createRunModal">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <form action="{{ base_path }}/runs" method="post" id="createRunForm">
           <div class="modal-header">
-            <h3 class="modal-title">Remove Run</h3>
-            <button class="btn-close" type="button" id="closeRemoveRun"></button>
+            <h3 class="modal-title">Create New Run</h3>
+            <button class="btn-close" type="button" id="closeCreateRun"></button>
           </div>
           <div class="modal-body">
-            <div class="text-secondary" id="removeRunText">Remove this run?</div>
-            <div class="alert alert-danger mt-3 d-none" id="removeRunError"></div>
-          </div>
-          <div class="modal-footer">
-            <button class="btn btn-outline-secondary" type="button" id="cancelRemoveRun">No</button>
-            <button class="btn btn-danger" type="button" id="confirmRemoveRun">Yes, remove</button>
-          </div>
-        </div>
-      </div>
-    </dialog>
-  </body>
-  <script>
-    const endpoints = {{ endpoints_json | safe }};
-    const templates = {{ templates_json | safe }};
-    const runsList = document.getElementById("runsList");
-    const noRunsCard = document.getElementById("noRunsCard");
-    const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
-    const maxConcurrencyValue = document.getElementById("maxConcurrencyValue");
-    const decreaseConcurrencyBtn = document.getElementById("decreaseConcurrency");
-    const increaseConcurrencyBtn = document.getElementById("increaseConcurrency");
-    let maxConcurrency = maxConcurrencyValue
-      ? parseInt(maxConcurrencyValue.dataset.maxConcurrency || "0", 10)
-      : 0;
-
-    function escapeHtml(value) {
-      return value
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-    }
-
-    function renderMaxConcurrency(value) {
-      if (!maxConcurrencyValue) {
-        return;
-      }
-      maxConcurrency = Number.isFinite(value) ? value : 0;
-      maxConcurrencyValue.dataset.maxConcurrency = String(maxConcurrency);
-      maxConcurrencyValue.textContent = maxConcurrency > 0 ? String(maxConcurrency) : "∞";
-    }
-
-    function updateMaxConcurrency(delta) {
-      const params = new URLSearchParams();
-      params.set("delta", String(delta));
-      fetch(`${basePath}/settings/max-concurrent-jobs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
-      })
-        .then((response) => response.json())
-        .then((data) => {
-          const next = data && data.max_concurrent_jobs ? data.max_concurrent_jobs : 0;
-          renderMaxConcurrency(next);
-        })
-        .catch(() => {});
-    }
-
-    if (decreaseConcurrencyBtn) {
-      decreaseConcurrencyBtn.addEventListener("click", () => updateMaxConcurrency(-1));
-    }
-    if (increaseConcurrencyBtn) {
-      increaseConcurrencyBtn.addEventListener("click", () => updateMaxConcurrency(1));
-    }
-
-    function renderRuns(runs) {
-      updateRunTotals(runs);
-      if (noRunsCard) {
-        noRunsCard.classList.toggle("d-none", runs.length > 0);
-      }
-      runsList.innerHTML = runs
-        .map((run) => {
-          const runId = String(run.id || "");
-          const created = escapeHtml(run.created_at);
-          const srcName = escapeHtml(run.src_name || "unknown");
-          const dstName = escapeHtml(run.dst_name || "unknown");
-          const templateName = escapeHtml(run.template_name || "unnamed");
-          const href = `${basePath}/runs/${encodeURIComponent(runId)}`;
-          const dryRunBadge = run.dry_run ? '<span class="badge bg-azure text-white ms-2">dry run</span>' : "";
-          return `
-            <div class="col-12">
-              <div class="card position-relative js-run-card ${run.jobs_running > 0 ? "run-active" : ""}" data-run-id="${escapeHtml(runId)}">
-                <div class="card-body">
-                  <div class="d-flex align-items-center justify-content-between">
-                    <div class="h3 m-0">
-                      ${srcName} → ${dstName}
-                      <span class="text-secondary fw-normal small ms-2">(${escapeHtml(runId)})</span>
-                      ${dryRunBadge}
-                    </div>
-                    <div class="text-end">
-                      <div class="text-secondary">${created}</div>
-                      <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="${escapeHtml(runId)}">
-                        Remove
-                      </button>
-                      ${run.jobs_running > 0
-                        ? `<button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="${escapeHtml(runId)}">
-                            Stop all jobs
-                          </button>`
-                        : ""}
-                    </div>
-                  </div>
-                  <div class="text-secondary small">${templateName} · copy_suffix=${run.copy_suffix || "none"} · alias_suffix=${run.alias_suffix || "none"}</div>
-                  <div class="mt-3 d-flex flex-wrap gap-2">
-                    <span class="badge bg-secondary text-white">Total ${run.jobs_total}</span>
-                    <span class="badge bg-yellow text-dark">Running ${run.jobs_running}</span>
-                    <span class="badge bg-blue text-white">Queued ${run.jobs_queued || 0}</span>
-                    <span class="badge bg-green text-dark">Succeeded ${run.jobs_succeeded}</span>
-                    <span class="badge bg-red text-white">Failed ${run.jobs_failed}</span>
-                  </div>
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">Source endpoint</label>
+                <select class="form-select" name="src_endpoint_id" id="srcEndpointSelect" required autofocus>
+                  {% for endpoint in endpoints %}
+                    <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Destination endpoint</label>
+                <select class="form-select" name="dst_endpoint_id" id="dstEndpointSelect" required>
+                  {% for endpoint in endpoints %}
+                    <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-12">
+                <label class="form-label">Template</label>
+                <select class="form-select" name="template_id" id="templateSelect" required>
+                  {% for template in templates %}
+                    <option value="{{ template.id }}">{{ template.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Index copy suffix</label>
+                <input class="form-control" type="text" name="index_copy_suffix" id="indexCopySuffix" value="{{ copy_suffix.as_deref().unwrap_or("") }}">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Alias suffix</label>
+                <input class="form-control" type="text" name="alias_suffix" id="aliasSuffix" value="{{ alias_suffix.as_deref().unwrap_or("") }}">
+              </div>
+              <div class="col-12">
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" name="dry_run" id="dryRunToggle" value="1">
+                  <span class="form-check-label">Dry run (skip es-copy-indices, mark jobs succeeded)</span>
+                </label>
+              </div>
+            </div>
+            <div class="alert alert-warning mt-3 d-none" id="sameEndpointWarning">
+              Source and destination are the same endpoint. This will create a timestamped copy in the same cluster.
+            </div>
+            <div class="alert alert-danger mt-3 d-none" id="createRunError"></div>
+            <div class="card mt-3">
+              <div class="card-body">
+                <div class="text-secondary">Selection details</div>
+                <div class="mt-2">
+                  <div class="fw-semibold">Source</div>
+                  <div class="text-secondary small" id="srcDetails">-</div>
+                </div>
+                <div class="mt-2">
+                  <div class="fw-semibold">Destination</div>
+                  <div class="text-secondary small" id="dstDetails">-</div>
+                </div>
+                <div class="mt-2">
+                  <div class="fw-semibold">Template</div>
+                  <div class="text-secondary small" id="templateDetails">-</div>
                 </div>
               </div>
-            </div>`;
-        })
-        .join("");
-      bindRunCardClicks();
-      bindRemoveRunButtons();
-      bindStopRunButtons();
-    }
+            </div>
+          </div>
+          <div class="modal-footer d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-2">
+              <div class="spinner-border spinner-border-sm text-primary d-none" role="status" id="createRunSpinner">
+                <span class="visually-hidden">Loading...</span>
+              </div>
+              <span class="text-secondary small d-none" id="createRunSpinnerLabel">Creating...</span>
+            </div>
+            <div class="btn-list">
+              <button class="btn btn-outline-secondary" type="button" id="cancelCreateRun">Cancel</button>
+              <button class="btn btn-primary" type="submit" id="submitCreateRun">Create</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </dialog>
+  <dialog class="modal" id="removeRunModal">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Remove run</h3>
+          <button class="btn-close" type="button" id="removeRunClose"></button>
+        </div>
+        <div class="modal-body">
+          <div>Remove run <span class="fw-semibold" id="removeRunId"></span>?</div>
+          <div class="text-secondary small mt-1">This will delete run metadata and logs.</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline-secondary" type="button" id="cancelRemoveRun">Cancel</button>
+          <button class="btn btn-danger" type="button" id="confirmRemoveRun">Yes, remove</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+{% endblock %}
 
-    function updateRunTotals(runs) {
-      const totalsEl = document.getElementById("runTotals");
-      if (!totalsEl) {
-        return;
-      }
-      const running = runs.reduce((sum, run) => sum + (run.jobs_running || 0), 0);
-      const queued = runs.reduce((sum, run) => sum + (run.jobs_queued || 0), 0);
-      totalsEl.innerHTML = `
-        <span class="badge bg-green text-dark run-total-badge">Running ${running}</span>
-        <span class="badge bg-blue text-white run-total-badge">Queued ${queued}</span>
-      `;
-    }
-
-    if (window.EventSource) {
-      const source = new EventSource(`${basePath}/runs/stream`);
-      source.onmessage = (event) => {
-        try {
-          const runs = JSON.parse(event.data);
-          if (Array.isArray(runs)) {
-            renderRuns(runs);
-          }
-        } catch (err) {
-          console.log("Invalid runs update", err);
-        }
-      };
-    }
-
-    const dialog = document.getElementById("createRunModal");
-    const removeDialog = document.getElementById("removeRunModal");
-    const openButton = document.getElementById("openCreateRun");
-    const closeButton = document.getElementById("closeCreateRun");
-    const cancelButton = document.getElementById("cancelCreateRun");
-    const srcSelect = document.getElementById("srcEndpointSelect");
-    const dstSelect = document.getElementById("dstEndpointSelect");
-    const templateSelect = document.getElementById("templateSelect");
-    const indexCopySuffix = document.getElementById("indexCopySuffix");
-    const aliasSuffix = document.getElementById("aliasSuffix");
-    const warning = document.getElementById("sameEndpointWarning");
+{% block scripts %}
+  <script>
+    const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+    const runCardClicks = new Set();
+    const endpoints = {{ endpoints_json | safe }};
+    const templates = {{ templates_json | safe }};
+    const metricsSamples = {{ metrics_samples_json | safe }};
+    const concurrencyValueEl = document.getElementById("maxConcurrencyValue");
+    const runTotalsEl = document.getElementById("runTotals");
+    const runsListEl = document.getElementById("runsList");
+    const noRunsCard = document.getElementById("noRunsCard");
+    const modal = document.getElementById("createRunModal");
+    const openModalBtn = document.getElementById("openCreateRun");
+    const closeModalBtn = document.getElementById("closeCreateRun");
+    const cancelModalBtn = document.getElementById("cancelCreateRun");
     const createRunForm = document.getElementById("createRunForm");
     const createRunError = document.getElementById("createRunError");
+    const sameEndpointWarning = document.getElementById("sameEndpointWarning");
+    const srcEndpointSelect = document.getElementById("srcEndpointSelect");
+    const dstEndpointSelect = document.getElementById("dstEndpointSelect");
+    const templateSelect = document.getElementById("templateSelect");
     const srcDetails = document.getElementById("srcDetails");
     const dstDetails = document.getElementById("dstDetails");
     const templateDetails = document.getElementById("templateDetails");
-    const suffixDetails = document.getElementById("suffixDetails");
-    const dryRunDetails = document.getElementById("dryRunDetails");
-    const dryRunToggle = document.getElementById("dryRunToggle");
-    const closeRemoveRun = document.getElementById("closeRemoveRun");
-    const cancelRemoveRun = document.getElementById("cancelRemoveRun");
-    const confirmRemoveRun = document.getElementById("confirmRemoveRun");
-    const removeRunError = document.getElementById("removeRunError");
-    const removeRunText = document.getElementById("removeRunText");
-    let removeRunId = null;
-    const createRunSubmit = document.getElementById("createRunSubmit");
     const createRunSpinner = document.getElementById("createRunSpinner");
-    const createRunLabel = document.getElementById("createRunLabel");
+    const createRunSpinnerLabel = document.getElementById("createRunSpinnerLabel");
+    const submitCreateRun = document.getElementById("submitCreateRun");
+    const dashboardCpuValue = document.getElementById("dashboardCpuValue");
+    const dashboardMemValue = document.getElementById("dashboardMemValue");
 
-    function endpointById(id) {
-      return endpoints.find((ep) => ep.id === id);
+    function formatEndpointDetail(endpoint) {
+      if (!endpoint) return "-";
+      return `${endpoint.name} · ${endpoint.url} · prefix=${endpoint.prefix} · keep_alive=${endpoint.keep_alive}`;
     }
 
-    function templateById(id) {
-      return templates.find((tpl) => tpl.id === id);
+    function formatTemplateDetail(template) {
+      if (!template) return "-";
+      const replicas = template.number_of_replicas === null || template.number_of_replicas === undefined
+        ? "inherit"
+        : template.number_of_replicas;
+      return `${template.name} · indices=${template.indices_count} · replicas=${replicas}`;
     }
 
-    function updateDetails() {
-      const src = endpointById(srcSelect.value);
-      const dst = endpointById(dstSelect.value);
-      const tpl = templateById(templateSelect.value);
-      if (src) {
-        srcDetails.textContent =
-          `${src.name} · ${src.url} · prefix=${src.prefix} · keep_alive=${src.keep_alive}`;
-      }
-      if (dst) {
-        dstDetails.textContent =
-          `${dst.name} · ${dst.url} · prefix=${dst.prefix} · keep_alive=${dst.keep_alive}`;
-      }
-      if (tpl) {
-        const replicas = tpl.number_of_replicas == null ? "inherit" : tpl.number_of_replicas;
-        templateDetails.textContent =
-          `${tpl.name} · file=${tpl.file_name} · indices=${tpl.indices_count} · replicas=${replicas}`;
-      }
-      const copySuffix = indexCopySuffix.value.trim() || "none";
-      const aliasSuffixValue = aliasSuffix.value.trim() || "none";
-      suffixDetails.textContent = `index_copy_suffix=${copySuffix} · alias_suffix=${aliasSuffixValue}`;
-      dryRunDetails.textContent = dryRunToggle.checked ? "yes" : "no";
-      warning.classList.toggle("d-none", srcSelect.value !== dstSelect.value);
-    }
-
-    openButton.addEventListener("click", () => {
-      if (dialog.showModal) {
-        dialog.showModal();
+    function updateModalDetails() {
+      const src = endpoints.find((item) => item.id === srcEndpointSelect.value);
+      const dst = endpoints.find((item) => item.id === dstEndpointSelect.value);
+      const template = templates.find((item) => item.id === templateSelect.value);
+      srcDetails.textContent = formatEndpointDetail(src);
+      dstDetails.textContent = formatEndpointDetail(dst);
+      templateDetails.textContent = formatTemplateDetail(template);
+      if (src && dst && src.id === dst.id) {
+        sameEndpointWarning.classList.remove("d-none");
       } else {
-        dialog.setAttribute("open", "open");
-      }
-      updateDetails();
-      setTimeout(() => {
-        srcSelect.focus();
-      }, 0);
-    });
-    [closeButton, cancelButton].forEach((btn) =>
-      btn.addEventListener("click", () => dialog.close()),
-    );
-    [srcSelect, dstSelect, templateSelect, indexCopySuffix, aliasSuffix, dryRunToggle].forEach((select) =>
-      select.addEventListener("change", updateDetails),
-    );
-    dialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      dialog.close();
-    });
-
-    function openRemoveDialog(runId) {
-      removeRunId = runId;
-      removeRunError.classList.add("d-none");
-      removeRunError.textContent = "";
-      removeRunText.textContent = `Remove run ${runId}?`;
-      if (removeDialog.showModal) {
-        removeDialog.showModal();
-      } else {
-        removeDialog.setAttribute("open", "open");
-      }
-      setTimeout(() => {
-        confirmRemoveRun.focus();
-      }, 0);
-    }
-
-    function closeRemoveDialog() {
-      removeDialog.close();
-      removeRunId = null;
-    }
-
-    function removeRunFromList(runId) {
-      const safeId = window.CSS && CSS.escape ? CSS.escape(runId) : runId;
-      const card = document.querySelector(`.js-run-card[data-run-id="${safeId}"]`);
-      if (!card) {
-        return;
-      }
-      const col = card.closest(".col-12");
-      if (col) {
-        col.remove();
-      }
-      if (noRunsCard && runsList.children.length === 0) {
-        noRunsCard.classList.remove("d-none");
+        sameEndpointWarning.classList.add("d-none");
       }
     }
 
-    function bindRunCardClicks() {
-      document.querySelectorAll(".js-run-card").forEach((card) => {
-        card.addEventListener("click", (event) => {
-          if (event.target.closest(".js-remove-run") || event.target.closest(".js-stop-run")) {
-            return;
-          }
-          const runId = card.getAttribute("data-run-id");
-          if (runId) {
-            window.location.assign(`${basePath}/runs/${encodeURIComponent(runId)}`);
-          }
-        });
-      });
-    }
-
-    function bindRemoveRunButtons() {
-      document.querySelectorAll(".js-remove-run").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const runId = btn.getAttribute("data-run-id");
-          if (runId) {
-            openRemoveDialog(runId);
-          }
-        });
-      });
-    }
-
-    function bindStopRunButtons() {
-      document.querySelectorAll(".js-stop-run").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const runId = btn.getAttribute("data-run-id");
-          if (!runId) {
-            return;
-          }
-          fetch(`${basePath}/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" })
-            .then(() => fetch(`${basePath}/runs/snapshot`))
-            .then((response) => response.json())
-            .then((runs) => {
-              if (Array.isArray(runs)) {
-                renderRuns(runs);
-              }
-            })
-            .catch(() => {});
-        });
-      });
-    }
-
-    bindRemoveRunButtons();
-    bindStopRunButtons();
-
-    [closeRemoveRun, cancelRemoveRun].forEach((btn) =>
-      btn.addEventListener("click", closeRemoveDialog),
-    );
-
-    removeDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      closeRemoveDialog();
-    });
-
-    confirmRemoveRun.addEventListener("click", () => {
-      if (!removeRunId) {
-        return;
-      }
-      removeRunError.classList.add("d-none");
-      removeRunError.textContent = "";
-      fetch(`${basePath}/runs/${removeRunId}/delete`, { method: "POST" })
-        .then(async (response) => {
-          if (response.ok) {
-            closeRemoveDialog();
-            removeRunFromList(removeRunId);
-            fetch(`${basePath}/runs/snapshot`)
-              .then((snapshot) => snapshot.json())
-              .then((runs) => {
-                if (Array.isArray(runs)) {
-                  renderRuns(runs);
-                }
-              })
-              .catch(() => {});
-            return;
-          }
-          const message = await response.text();
-          removeRunError.textContent = message || "Failed to remove run.";
-          removeRunError.classList.remove("d-none");
-        })
-        .catch((err) => {
-          removeRunError.textContent = `Failed to remove run: ${err}`;
-          removeRunError.classList.remove("d-none");
-        });
-    });
-
-    createRunForm.addEventListener("submit", (event) => {
-      event.preventDefault();
+    function openModal() {
+      updateModalDetails();
       createRunError.classList.add("d-none");
       createRunError.textContent = "";
-      createRunSubmit.disabled = true;
+      createRunForm.reset();
+      modal.showModal();
+      srcEndpointSelect.focus();
+    }
+
+    function closeModal() {
+      modal.close();
+    }
+
+    openModalBtn?.addEventListener("click", openModal);
+    closeModalBtn?.addEventListener("click", closeModal);
+    cancelModalBtn?.addEventListener("click", closeModal);
+    srcEndpointSelect?.addEventListener("change", updateModalDetails);
+    dstEndpointSelect?.addEventListener("change", updateModalDetails);
+    templateSelect?.addEventListener("change", updateModalDetails);
+
+    createRunForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      createRunError.classList.add("d-none");
       createRunSpinner.classList.remove("d-none");
-      createRunLabel.textContent = "Creating...";
-      const payload = new URLSearchParams(new FormData(createRunForm));
-      fetch(createRunForm.action, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: payload.toString(),
-        redirect: "follow",
-      })
-        .then(async (response) => {
-          if (response.ok) {
-            if (response.redirected) {
-              window.location.assign(response.url);
-              return;
-            }
-            window.location.assign(response.url);
-          } else {
-            const message = await response.text();
-            createRunError.textContent = message || "Failed to create run.";
-            createRunError.classList.remove("d-none");
-            createRunSubmit.disabled = false;
-            createRunSpinner.classList.add("d-none");
-            createRunLabel.textContent = "Create";
-          }
-        })
-        .catch((err) => {
-          createRunError.textContent = `Failed to create run: ${err}`;
-          createRunError.classList.remove("d-none");
-          createRunSubmit.disabled = false;
-          createRunSpinner.classList.add("d-none");
-          createRunLabel.textContent = "Create";
+      createRunSpinnerLabel.classList.remove("d-none");
+      submitCreateRun.disabled = true;
+      const formData = new FormData(createRunForm);
+      const payload = new URLSearchParams();
+      for (const [key, value] of formData.entries()) {
+        payload.append(key, value.toString());
+      }
+      try {
+        const response = await fetch(`${basePath}/runs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: payload.toString(),
         });
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Failed to create run");
+        }
+        if (response.redirected) {
+          window.location.href = response.url;
+          return;
+        }
+        closeModal();
+      } catch (err) {
+        createRunError.textContent = err instanceof Error ? err.message : "Failed to create run";
+        createRunError.classList.remove("d-none");
+      } finally {
+        createRunSpinner.classList.add("d-none");
+        createRunSpinnerLabel.classList.add("d-none");
+        submitCreateRun.disabled = false;
+      }
+    });
+
+    function renderSparkline(el, data, color) {
+      if (!el) return;
+      const chart = new ApexCharts(el, {
+        chart: {
+          type: "line",
+          height: 68,
+          sparkline: { enabled: true },
+          animations: { enabled: false },
+        },
+        stroke: { width: 2 },
+        colors: [color],
+        series: [{ data }],
+        tooltip: { enabled: false },
+        grid: { show: false },
+      });
+      chart.render();
+      el._apexChart = chart;
+    }
+
+    function updateSparkline(el, data) {
+      if (el && el._apexChart) {
+        el._apexChart.updateSeries([{ data }], true);
+      }
+    }
+
+    function updateDashboardMetrics(samples) {
+      if (!samples.length) return;
+      const latest = samples[samples.length - 1];
+      dashboardCpuValue.textContent = `${latest.host_cpu.toFixed(1)}%`;
+      dashboardMemValue.textContent = `${Math.round(latest.total_mem_kb / 1024)} MB`;
+      const cpuSeries = samples.map((s) => parseFloat(s.host_cpu.toFixed(1)));
+      const memSeries = samples.map((s) => Math.round(s.total_mem_kb / 1024));
+      const cpuChartEl = document.getElementById("dashboardCpuSpark");
+      const memChartEl = document.getElementById("dashboardMemSpark");
+      if (!cpuChartEl._apexChart) {
+        renderSparkline(cpuChartEl, cpuSeries, "#4dabf7");
+      } else {
+        updateSparkline(cpuChartEl, cpuSeries);
+      }
+      if (!memChartEl._apexChart) {
+        renderSparkline(memChartEl, memSeries, "#69db7c");
+      } else {
+        updateSparkline(memChartEl, memSeries);
+      }
+    }
+
+    updateDashboardMetrics(metricsSamples);
+    fetch(`${basePath}/status/snapshot`)
+      .then((res) => res.ok ? res.json() : [])
+      .then((data) => {
+        if (Array.isArray(data)) {
+          updateDashboardMetrics(data);
+        }
+      })
+      .catch(() => {});
+
+    let metricsPoll = null;
+    function startMetricsPoll() {
+      if (metricsPoll) return;
+      metricsPoll = setInterval(() => {
+        fetch(`${basePath}/status/snapshot`)
+          .then((res) => res.ok ? res.json() : [])
+          .then((data) => {
+            if (Array.isArray(data) && data.length > 0) {
+              metricsSamples.splice(0, metricsSamples.length, ...data);
+              updateDashboardMetrics(metricsSamples);
+            }
+          })
+          .catch(() => {});
+      }, 5000);
+    }
+
+    function stopMetricsPoll() {
+      if (metricsPoll) {
+        clearInterval(metricsPoll);
+        metricsPoll = null;
+      }
+    }
+
+    const metricsStream = new EventSource(`${basePath}/status/stream`);
+    metricsStream.onopen = () => {
+      stopMetricsPoll();
+    };
+    metricsStream.onmessage = (event) => {
+      try {
+        const sample = JSON.parse(event.data);
+        metricsSamples.push(sample);
+        if (metricsSamples.length > 120) {
+          metricsSamples.shift();
+        }
+        updateDashboardMetrics(metricsSamples);
+      } catch (_) {}
+    };
+    metricsStream.onerror = () => {
+      startMetricsPoll();
+    };
+
+    function statusBadge(status) {
+      switch (status) {
+        case "running":
+          return `<span class="badge bg-yellow text-dark">running</span>`;
+        case "queued":
+          return `<span class="badge bg-blue text-white">queued</span>`;
+        case "succeeded":
+          return `<span class="badge bg-green text-dark">succeeded</span>`;
+        case "failed":
+          return `<span class="badge bg-red text-white">failed</span>`;
+        case "stopped":
+          return `<span class="badge bg-secondary text-white">stopped</span>`;
+        default:
+          return `<span class="badge bg-secondary text-white">${status}</span>`;
+      }
+    }
+
+    function renderRuns(runs) {
+      if (!runsListEl) return;
+      runsListEl.innerHTML = runs.map((run) => {
+        const dryRunBadge = run.dry_run ? `<span class="badge bg-azure text-white ms-2">dry run</span>` : "";
+        const stopButton = run.jobs_running > 0
+          ? `<button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="${run.id}">Stop all jobs</button>`
+          : "";
+        return `
+          <div class="col-12">
+            <div class="card position-relative js-run-card ${run.jobs_running > 0 ? "run-active" : ""}" data-run-id="${run.id}">
+              <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between">
+                  <div class="h3 m-0">
+                    ${run.src_name} → ${run.dst_name}
+                    <span class="text-secondary fw-normal small ms-2">(${run.id})</span>
+                    ${dryRunBadge}
+                  </div>
+                  <div class="text-end">
+                    <div class="text-secondary">${run.created_at}</div>
+                    <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="${run.id}">Remove</button>
+                    ${stopButton}
+                  </div>
+                </div>
+                <div class="text-secondary small">
+                  ${run.template_name}
+                  · copy_suffix=${run.copy_suffix ?? "none"}
+                  · alias_suffix=${run.alias_suffix ?? "none"}
+                </div>
+                <div class="mt-3 d-flex flex-wrap gap-2">
+                  <span class="badge bg-secondary text-white">Total ${run.jobs_total}</span>
+                  <span class="badge bg-yellow text-dark">Running ${run.jobs_running}</span>
+                  <span class="badge bg-blue text-white">Queued ${run.jobs_queued}</span>
+                  <span class="badge bg-green text-dark">Succeeded ${run.jobs_succeeded}</span>
+                  <span class="badge bg-red text-white">Failed ${run.jobs_failed}</span>
+                </div>
+              </div>
+            </div>
+          </div>`;
+      }).join("");
+      if (noRunsCard) {
+        if (runs.length === 0) {
+          noRunsCard.classList.remove("d-none");
+        } else {
+          noRunsCard.classList.add("d-none");
+        }
+      }
+      attachRunHandlers();
+    }
+
+    function updateTotals(runs) {
+      const running = runs.reduce((sum, run) => sum + run.jobs_running, 0);
+      const queued = runs.reduce((sum, run) => sum + run.jobs_queued, 0);
+      if (runTotalsEl) {
+        runTotalsEl.innerHTML = `
+          <span class="badge bg-green text-dark run-total-badge">Running ${running}</span>
+          <span class="badge bg-blue text-white run-total-badge">Queued ${queued}</span>`;
+      }
+    }
+
+    function attachRunHandlers() {
+      document.querySelectorAll(".js-run-card").forEach((card) => {
+        if (runCardClicks.has(card)) return;
+        runCardClicks.add(card);
+        card.addEventListener("click", (event) => {
+          const target = event.target;
+          if (target.closest(".js-remove-run") || target.closest(".js-stop-run")) {
+            return;
+          }
+          const runId = card.dataset.runId;
+          if (runId) {
+            window.location.href = `${basePath}/runs/${runId}`;
+          }
+        });
+      });
+    }
+
+    const removeModal = document.getElementById("removeRunModal");
+    const removeRunId = document.getElementById("removeRunId");
+    const confirmRemoveRun = document.getElementById("confirmRemoveRun");
+    const cancelRemoveRun = document.getElementById("cancelRemoveRun");
+    const removeRunClose = document.getElementById("removeRunClose");
+
+    function openRemoveModal(runId) {
+      removeRunId.textContent = runId;
+      removeModal.dataset.runId = runId;
+      removeModal.showModal();
+    }
+
+    function closeRemoveModal() {
+      removeModal.close();
+      removeModal.dataset.runId = "";
+    }
+
+    confirmRemoveRun?.addEventListener("click", async () => {
+      const runId = removeModal.dataset.runId;
+      if (!runId) return;
+      confirmRemoveRun.disabled = true;
+      try {
+        await fetch(`${basePath}/runs/${runId}/delete`, { method: "POST" });
+      } finally {
+        confirmRemoveRun.disabled = false;
+        closeRemoveModal();
+      }
+    });
+
+    cancelRemoveRun?.addEventListener("click", closeRemoveModal);
+    removeRunClose?.addEventListener("click", closeRemoveModal);
+
+    document.addEventListener("click", async (event) => {
+      const removeButton = event.target.closest(".js-remove-run");
+      if (removeButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const runId = removeButton.dataset.runId;
+        if (!runId) return;
+        openRemoveModal(runId);
+        return;
+      }
+      const stopButton = event.target.closest(".js-stop-run");
+      if (stopButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const runId = stopButton.dataset.runId;
+        if (!runId) return;
+        await fetch(`${basePath}/runs/${runId}/stop`, { method: "POST" });
+      }
+    });
+
+    const runsSource = new EventSource(`${basePath}/runs/stream`);
+    runsSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (Array.isArray(data)) {
+          updateTotals(data);
+          renderRuns(data);
+        }
+      } catch (_) {}
+    };
+
+    function updateConcurrency(value) {
+      fetch(`${basePath}/settings/max-concurrent-jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ max_concurrent_jobs: value }),
+      }).catch(() => {});
+    }
+
+    document.getElementById("decreaseConcurrency")?.addEventListener("click", () => {
+      const current = parseInt(concurrencyValueEl.dataset.maxConcurrency || "0", 10);
+      if (current <= 1) return;
+      const next = current - 1;
+      concurrencyValueEl.dataset.maxConcurrency = `${next}`;
+      concurrencyValueEl.textContent = `${next}`;
+      updateConcurrency(next);
+    });
+    document.getElementById("increaseConcurrency")?.addEventListener("click", () => {
+      const current = parseInt(concurrencyValueEl.dataset.maxConcurrency || "0", 10);
+      const next = current + 1;
+      concurrencyValueEl.dataset.maxConcurrency = `${next}`;
+      concurrencyValueEl.textContent = `${next}`;
+      updateConcurrency(next);
     });
   </script>
-</html>
+{% endblock %}

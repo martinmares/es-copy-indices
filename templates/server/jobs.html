@@ -1,0 +1,235 @@
+{% extends "server/layout.html" %}
+
+{% block title %}Jobs · ES Copy Runner{% endblock %}
+
+{% block styles %}
+  <style>
+    .job-table td {
+      vertical-align: middle;
+    }
+  </style>
+{% endblock %}
+
+{% block header %}
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <div class="page-pretitle">Jobs</div>
+        <h2 class="page-title">All jobs</h2>
+        <div class="text-secondary">Filter and manage jobs across all runs.</div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="row g-3 align-items-end">
+        <div class="col-12 col-lg-4">
+          <label class="form-label">Filter jobs</label>
+          <input class="form-control" id="jobsFilter" type="text" placeholder="Search run, stage, job name">
+        </div>
+        <div class="col-12 col-lg-3">
+          <label class="form-label">Run</label>
+          <select class="form-select" id="runFilter">
+            <option value="">All runs</option>
+            {% for run in runs %}
+              <option value="{{ run.id }}">{{ run.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 col-lg-5">
+          <label class="form-label">Status</label>
+          <div class="d-flex flex-wrap gap-2">
+            <label class="form-check">
+              <input class="form-check-input status-filter" type="checkbox" value="pending">
+              <span class="form-check-label">pending</span>
+            </label>
+            <label class="form-check">
+              <input class="form-check-input status-filter" type="checkbox" value="running">
+              <span class="form-check-label">running</span>
+            </label>
+            <label class="form-check">
+              <input class="form-check-input status-filter" type="checkbox" value="queued">
+              <span class="form-check-label">queued</span>
+            </label>
+            <label class="form-check">
+              <input class="form-check-input status-filter" type="checkbox" value="succeeded">
+              <span class="form-check-label">succeeded</span>
+            </label>
+            <label class="form-check">
+              <input class="form-check-input status-filter" type="checkbox" value="failed">
+              <span class="form-check-label">failed</span>
+            </label>
+            <label class="form-check">
+              <input class="form-check-input status-filter" type="checkbox" value="stopped">
+              <span class="form-check-label">stopped</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-vcenter card-table job-table">
+        <thead>
+          <tr>
+            <th>Run</th>
+            <th>Stage</th>
+            <th>Job name</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>ETA</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="jobsTableBody"></tbody>
+      </table>
+    </div>
+    <div class="card-body text-secondary d-none" id="jobsEmpty">No jobs match the current filter.</div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+    const runsData = {{ runs_json | safe }};
+    let jobsData = [];
+    const jobsTableBody = document.getElementById("jobsTableBody");
+    const jobsEmpty = document.getElementById("jobsEmpty");
+    const jobsFilter = document.getElementById("jobsFilter");
+    const runFilter = document.getElementById("runFilter");
+    const statusCheckboxes = Array.from(document.querySelectorAll(".status-filter"));
+    const runColors = ["blue", "azure", "indigo", "purple", "teal", "green", "orange", "yellow", "red"];
+
+    function runColor(runId) {
+      let hash = 0;
+      for (let i = 0; i < runId.length; i += 1) {
+        hash = ((hash << 5) - hash) + runId.charCodeAt(i);
+        hash |= 0;
+      }
+      const idx = Math.abs(hash) % runColors.length;
+      return runColors[idx];
+    }
+
+    function statusBadge(status) {
+      switch (status) {
+        case "running":
+          return `<span class="badge bg-yellow text-dark">running</span>`;
+        case "queued":
+          return `<span class="badge bg-blue text-white">queued</span>`;
+        case "succeeded":
+          return `<span class="badge bg-green text-dark">succeeded</span>`;
+        case "failed":
+          return `<span class="badge bg-red text-white">failed</span>`;
+        case "stopped":
+          return `<span class="badge bg-secondary text-white">stopped</span>`;
+        default:
+          return `<span class="badge bg-secondary text-white">${status}</span>`;
+      }
+    }
+
+    function progressCell(job) {
+      if (job.progress_width === null || job.progress_width === undefined) {
+        return `<span class="text-secondary small">-</span>`;
+      }
+      return `
+        <div class="progress">
+          <div class="progress-bar bg-blue" style="width:${job.progress_width}%"></div>
+        </div>
+        <div class="text-secondary small mt-1">${job.progress_label || "n/a"}</div>
+      `;
+    }
+
+    function renderJobs() {
+      const filterText = jobsFilter.value.trim().toLowerCase();
+      const selectedRun = runFilter.value;
+      const selectedStatuses = statusCheckboxes.filter((cb) => cb.checked).map((cb) => cb.value);
+      const filtered = jobsData.filter((job) => {
+        if (selectedRun && job.run_id !== selectedRun) {
+          return false;
+        }
+        if (selectedStatuses.length > 0 && !selectedStatuses.includes(job.status)) {
+          return false;
+        }
+        if (!filterText) return true;
+        const haystack = `${job.run_label} ${job.run_id} ${job.stage_name} ${job.job_name}`.toLowerCase();
+        return haystack.includes(filterText);
+      });
+      jobsTableBody.innerHTML = filtered.map((job) => {
+        const color = runColor(job.run_id);
+        const startBtn = job.can_start
+          ? `<button class="btn btn-outline-primary btn-sm js-job-action" data-url="${job.start_url}" data-method="POST">Start</button>`
+          : "";
+        const stopBtn = job.can_stop
+          ? `<button class="btn btn-outline-danger btn-sm js-job-action" data-url="${job.stop_url}" data-method="POST">Stop</button>`
+          : "";
+        return `
+          <tr>
+            <td>
+              <span class="badge bg-${color}-lt text-${color}">${job.run_label}</span>
+            </td>
+            <td>${job.stage_name}</td>
+            <td>${job.job_name}</td>
+            <td>${statusBadge(job.status)}</td>
+            <td>${progressCell(job)}</td>
+            <td class="text-secondary small">${job.eta_label || "-"}</td>
+            <td class="text-end">
+              <div class="btn-list justify-content-end">
+                ${startBtn}
+                ${stopBtn}
+                <a class="btn btn-outline-secondary btn-sm" href="${job.logs_url}">View Logs</a>
+              </div>
+            </td>
+          </tr>`;
+      }).join("");
+      if (filtered.length === 0) {
+        jobsEmpty.classList.remove("d-none");
+      } else {
+        jobsEmpty.classList.add("d-none");
+      }
+    }
+
+    function refreshJobs(data) {
+      jobsData = data;
+      renderJobs();
+    }
+
+    jobsFilter?.addEventListener("input", renderJobs);
+    jobsFilter?.addEventListener("keyup", renderJobs);
+    jobsFilter?.addEventListener("search", renderJobs);
+    runFilter?.addEventListener("change", renderJobs);
+    statusCheckboxes.forEach((cb) => cb.addEventListener("change", renderJobs));
+
+    document.addEventListener("click", async (event) => {
+      const btn = event.target.closest(".js-job-action");
+      if (!btn) return;
+      event.preventDefault();
+      const url = btn.dataset.url;
+      const method = btn.dataset.method || "POST";
+      btn.disabled = true;
+      try {
+        await fetch(url, { method });
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    fetch(`${basePath}/jobs/snapshot`)
+      .then((res) => res.ok ? res.json() : [])
+      .then((data) => Array.isArray(data) && refreshJobs(data));
+
+    const source = new EventSource(`${basePath}/jobs/stream`);
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (Array.isArray(data)) {
+          refreshJobs(data);
+        }
+      } catch (_) {}
+    };
+  </script>
+{% endblock %}
