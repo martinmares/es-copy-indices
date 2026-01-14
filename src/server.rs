@@ -828,18 +828,8 @@ async fn create_run(
         None => return (StatusCode::BAD_REQUEST, "Unknown template").into_response(),
     };
     let dry_run = form.dry_run.is_some();
-    let copy_suffix_override = form
-        .index_copy_suffix
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
-    let alias_suffix_override = form
-        .alias_suffix
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
+    let copy_suffix_override = form.index_copy_suffix.map(|value| value.trim().to_string());
+    let alias_suffix_override = form.alias_suffix.map(|value| value.trim().to_string());
 
     match create_run_state(
         &state,
@@ -2310,8 +2300,16 @@ async fn create_run_state(
         .map_err(|e| e.to_string())?;
 
     let stages = plan_stages(template, state, src_endpoint).await?;
-    let copy_suffix = copy_suffix_override.or_else(|| state.copy_suffix.clone());
-    let alias_suffix = alias_suffix_override.or_else(|| state.alias_suffix.clone());
+    let copy_suffix = if let Some(raw) = copy_suffix_override {
+        if raw.is_empty() { None } else { Some(raw) }
+    } else {
+        state.copy_suffix.clone()
+    };
+    let alias_suffix = if let Some(raw) = alias_suffix_override {
+        if raw.is_empty() { None } else { Some(raw) }
+    } else {
+        state.alias_suffix.clone()
+    };
 
     let mut stage_states = Vec::new();
     let mut job_states = HashMap::new();
