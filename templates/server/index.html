@@ -195,11 +195,11 @@
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">Index copy suffix</label>
-                  <input class="form-control" type="text" name="index_copy_suffix" id="indexCopySuffix" value="{{ copy_suffix.as_deref().unwrap_or(\"\") }}">
+                  <input class="form-control" type="text" name="index_copy_suffix" id="indexCopySuffix" value="{{ copy_suffix.as_deref().unwrap_or("") }}">
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">Alias suffix</label>
-                  <input class="form-control" type="text" name="alias_suffix" id="aliasSuffix" value="{{ alias_suffix.as_deref().unwrap_or(\"\") }}">
+                  <input class="form-control" type="text" name="alias_suffix" id="aliasSuffix" value="{{ alias_suffix.as_deref().unwrap_or("") }}">
                 </div>
                 <div class="col-12">
                   <label class="form-check">
