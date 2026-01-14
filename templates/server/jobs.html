@@ -156,7 +156,7 @@
           return false;
         }
         if (!filterText) return true;
-        const haystack = `${job.run_label} ${job.run_id} ${job.stage_name} ${job.job_name}`.toLowerCase();
+        const haystack = `${job.run_label} ${job.run_env_label} ${job.run_id} ${job.stage_name} ${job.job_name}`.toLowerCase();
         return haystack.includes(filterText);
       });
       jobsTableBody.innerHTML = filtered.map((job) => {
@@ -170,7 +170,11 @@
         return `
           <tr>
             <td>
-              <span class="badge bg-${color}-lt text-${color}">${job.run_label}</span>
+              <span class="badge bg-${color}-lt text-${color}">${job.run_id}</span>
+              <div class="text-muted small mt-1 d-flex align-items-center gap-1">
+                <i class="ti ti-arrow-forward"></i>
+                ${job.run_env_label}
+              </div>
             </td>
             <td>${job.stage_name}</td>
             <td>${job.job_name}</td>

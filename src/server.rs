@@ -603,6 +603,7 @@ struct JobView {
 struct JobListEntry {
     run_id: String,
     run_label: String,
+    run_env_label: String,
     stage_name: String,
     job_name: String,
     status: JobStatus,
@@ -2291,6 +2292,10 @@ async fn build_jobs_list(state: &Arc<AppState>) -> Vec<JobListEntry> {
             "{} - {} → {}",
             run.id, run.src_endpoint.name, run.dst_endpoint.name
         );
+        let run_env_label = format!(
+            "{} → {}",
+            run.src_endpoint.name, run.dst_endpoint.name
+        );
         let mut job_list: Vec<&JobState> = run.jobs.values().collect();
         job_list.sort_by(|a, b| a.name.cmp(&b.name));
         for job in job_list {
@@ -2317,6 +2322,7 @@ async fn build_jobs_list(state: &Arc<AppState>) -> Vec<JobListEntry> {
             entries.push(JobListEntry {
                 run_id: run.id.clone(),
                 run_label: run_label.clone(),
+                run_env_label: run_env_label.clone(),
                 stage_name: job.stage_name.clone(),
                 job_name: job.name.clone(),
                 status: job.status.clone(),

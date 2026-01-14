@@ -252,25 +252,24 @@
     let samples = [];
 
     function renderCharts() {
-      const labels = samples.map((sample) => new Date(sample.ts * 1000).toLocaleTimeString());
       const cpuSeries = [
-        { name: "Server", data: samples.map((sample) => sample.proc_cpu) },
-        { name: "Children", data: samples.map((sample) => sample.children_cpu) },
-        { name: "Total", data: samples.map((sample) => sample.total_cpu) },
+        { name: "Server", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.proc_cpu })) },
+        { name: "Children", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.children_cpu })) },
+        { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.total_cpu })) },
       ];
       const cpuTotalSeries = [
-        { name: "Host", data: samples.map((sample) => sample.host_cpu) },
-        { name: "Total", data: samples.map((sample) => sample.total_cpu) },
+        { name: "Host", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.host_cpu })) },
+        { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.total_cpu })) },
       ];
       const memSeries = [
-        { name: "Server", data: samples.map((sample) => Math.round(sample.proc_mem_kb / 1024)) },
-        { name: "Children", data: samples.map((sample) => Math.round(sample.children_mem_kb / 1024)) },
-        { name: "Total", data: samples.map((sample) => Math.round(sample.total_mem_kb / 1024)) },
+        { name: "Server", data: samples.map((sample) => ({ x: sample.ts * 1000, y: Math.round(sample.proc_mem_kb / 1024) })) },
+        { name: "Children", data: samples.map((sample) => ({ x: sample.ts * 1000, y: Math.round(sample.children_mem_kb / 1024) })) },
+        { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: Math.round(sample.total_mem_kb / 1024) })) },
       ];
       const loadSeries = [
-        { name: "Load 1", data: samples.map((sample) => sample.load1) },
-        { name: "Load 5", data: samples.map((sample) => sample.load5) },
-        { name: "Load 15", data: samples.map((sample) => sample.load15) },
+        { name: "Load 1", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load1 })) },
+        { name: "Load 5", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load5 })) },
+        { name: "Load 15", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load15 })) },
       ];
       charts.cpu ??= new ApexCharts(document.getElementById("cpuChart"), buildLineChart(cpuSeries));
       charts.cpuTotal ??= new ApexCharts(document.getElementById("cpuTotalChart"), buildLineChart(cpuTotalSeries));
@@ -280,13 +279,9 @@
       charts.cpuTotal.render();
       charts.mem.render();
       charts.load.render();
-      charts.cpu.updateOptions({ xaxis: { categories: labels } }, false, true);
       charts.cpu.updateSeries(cpuSeries, true);
-      charts.cpuTotal.updateOptions({ xaxis: { categories: labels } }, false, true);
       charts.cpuTotal.updateSeries(cpuTotalSeries, true);
-      charts.mem.updateOptions({ xaxis: { categories: labels } }, false, true);
       charts.mem.updateSeries(memSeries, true);
-      charts.load.updateOptions({ xaxis: { categories: labels } }, false, true);
       charts.load.updateSeries(loadSeries, true);
     }
 
@@ -335,6 +330,19 @@
         stroke: { width: 2, curve: "smooth" },
         dataLabels: { enabled: false },
         series,
+        xaxis: {
+          type: "datetime",
+          tickAmount: 6,
+          labels: {
+            datetimeUTC: false,
+            format: "HH:mm",
+            rotate: 0,
+            hideOverlappingLabels: true,
+          },
+        },
+        yaxis: {
+          decimalsInFloat: 1,
+        },
         grid: { borderColor: "rgba(255, 255, 255, 0.08)" },
       };
     }
