@@ -140,8 +140,8 @@
                   </div>
                   <div class="text-secondary small">
                     {{ run.template_name }}
-                    · copy_suffix={% if run.copy_suffix.is_some() %}{{ run.copy_suffix.unwrap() }}{% else %}none{% endif %}
-                    · alias_suffix={% if run.alias_suffix.is_some() %}{{ run.alias_suffix.unwrap() }}{% else %}none{% endif %}
+                    · copy_suffix={% if run.copy_suffix.is_some() %}{{ run.copy_suffix.as_deref().unwrap_or("") }}{% else %}none{% endif %}
+                    · alias_suffix={% if run.alias_suffix.is_some() %}{{ run.alias_suffix.as_deref().unwrap_or("") }}{% else %}none{% endif %}
                   </div>
                       <div class="mt-3 d-flex flex-wrap gap-2">
                         <span class="badge bg-secondary text-white">Total {{ run.jobs_total }}</span>
