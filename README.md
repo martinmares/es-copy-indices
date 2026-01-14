@@ -126,6 +126,9 @@ Template replica defaults:
   - source endpoint
   - destination endpoint
   - template
+- Optional per-run overrides:
+  - `index_copy_suffix` (empty disables the suffix)
+  - `alias_suffix` (empty disables the suffix)
 - Optional Dry run skips `es-copy-indices` execution and marks jobs succeeded (for testing).
 - If source == destination, a warning is shown (allowed).
 - Run details show `SRC → DST + template` and the template replica default.

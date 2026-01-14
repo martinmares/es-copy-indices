@@ -119,6 +119,10 @@ struct RunPersist {
     dst_endpoint: EndpointSnapshot,
     #[serde(default)]
     dry_run: bool,
+    #[serde(default)]
+    copy_suffix: Option<String>,
+    #[serde(default)]
+    alias_suffix: Option<String>,
     stages: Vec<StagePersist>,
     jobs: Vec<JobPersist>,
 }
@@ -170,6 +174,8 @@ struct RunState {
     src_endpoint: EndpointSnapshot,
     dst_endpoint: EndpointSnapshot,
     dry_run: bool,
+    copy_suffix: Option<String>,
+    alias_suffix: Option<String>,
     stages: Vec<StageState>,
     jobs: HashMap<String, JobState>,
 }
@@ -449,6 +455,8 @@ struct IndexTemplate {
     max_concurrent_jobs: Option<usize>,
     running_total: usize,
     queued_total: usize,
+    copy_suffix: Option<String>,
+    alias_suffix: Option<String>,
 }
 
 #[derive(Template)]
@@ -513,6 +521,8 @@ struct RunSummary {
     dst_name: String,
     template_name: String,
     dry_run: bool,
+    copy_suffix: Option<String>,
+    alias_suffix: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -524,6 +534,8 @@ struct RunView {
     dst_endpoint: EndpointSnapshot,
     template: TemplateSnapshot,
     dry_run: bool,
+    copy_suffix: Option<String>,
+    alias_suffix: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -755,6 +767,8 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         max_concurrent_jobs,
         running_total,
         queued_total,
+        copy_suffix: state.copy_suffix.clone(),
+        alias_suffix: state.alias_suffix.clone(),
     };
     Html(render_template(&template)).into_response()
 }
@@ -787,6 +801,8 @@ struct CreateRunForm {
     dst_endpoint_id: String,
     template_id: String,
     dry_run: Option<String>,
+    index_copy_suffix: Option<String>,
+    alias_suffix: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -812,8 +828,30 @@ async fn create_run(
         None => return (StatusCode::BAD_REQUEST, "Unknown template").into_response(),
     };
     let dry_run = form.dry_run.is_some();
+    let copy_suffix_override = form
+        .index_copy_suffix
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let alias_suffix_override = form
+        .alias_suffix
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
 
-    match create_run_state(&state, &template, &src_endpoint, &dst_endpoint, dry_run).await {
+    match create_run_state(
+        &state,
+        &template,
+        &src_endpoint,
+        &dst_endpoint,
+        dry_run,
+        copy_suffix_override,
+        alias_suffix_override,
+    )
+    .await
+    {
         Ok(run_id) => Redirect::to(&with_base(&state, &format!("/runs/{}", run_id)))
             .into_response(),
         Err(err) => (
@@ -2149,6 +2187,8 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
                     .if_empty_then("unknown"),
                 template_name: run.template.name.clone().if_empty_then("unnamed"),
                 dry_run: run.dry_run,
+                copy_suffix: run.copy_suffix.clone(),
+                alias_suffix: run.alias_suffix.clone(),
             });
         }
     }
@@ -2224,6 +2264,8 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
         dst_endpoint: run.dst_endpoint.clone(),
         template: run.template.clone(),
         dry_run: run.dry_run,
+        copy_suffix: run.copy_suffix.clone(),
+        alias_suffix: run.alias_suffix.clone(),
     })
 }
 
@@ -2253,6 +2295,8 @@ async fn create_run_state(
     src_endpoint: &EndpointConfig,
     dst_endpoint: &EndpointConfig,
     dry_run: bool,
+    copy_suffix_override: Option<String>,
+    alias_suffix_override: Option<String>,
 ) -> Result<String, String> {
     let run_id = unique_run_id(&state.runs_dir);
     let run_dir = state.runs_dir.join(&run_id);
@@ -2266,6 +2310,8 @@ async fn create_run_state(
         .map_err(|e| e.to_string())?;
 
     let stages = plan_stages(template, state, src_endpoint).await?;
+    let copy_suffix = copy_suffix_override.or_else(|| state.copy_suffix.clone());
+    let alias_suffix = alias_suffix_override.or_else(|| state.alias_suffix.clone());
 
     let mut stage_states = Vec::new();
     let mut job_states = HashMap::new();
@@ -2280,7 +2326,14 @@ async fn create_run_state(
             let stderr_path = logs_dir.join(format!("{}.stderr.log", job_id));
             let config_path = configs_dir.join(format!("{}.toml", job_id));
 
-            let output_config = build_output_config(state, &job, src_endpoint, dst_endpoint)?;
+            let output_config = build_output_config(
+                state,
+                &job,
+                src_endpoint,
+                dst_endpoint,
+                copy_suffix.as_deref(),
+                alias_suffix.as_deref(),
+            )?;
             let split_field = job.index.split.as_ref().map(|s| s.field_name.clone());
             let split_query = output_config
                 .indices
@@ -2341,6 +2394,8 @@ async fn create_run_state(
         src_endpoint: endpoint_snapshot(src_endpoint),
         dst_endpoint: endpoint_snapshot(dst_endpoint),
         dry_run,
+        copy_suffix: copy_suffix.clone(),
+        alias_suffix: alias_suffix.clone(),
         stages: stage_states,
         jobs: job_states,
     };
@@ -2505,6 +2560,8 @@ async fn load_runs(state: &AppState) {
                     src_endpoint: persist.src_endpoint,
                     dst_endpoint: persist.dst_endpoint,
                     dry_run: persist.dry_run,
+                    copy_suffix: persist.copy_suffix,
+                    alias_suffix: persist.alias_suffix,
                     stages,
                     jobs: job_map,
                 };
@@ -2599,6 +2656,8 @@ fn run_snapshot(run: &RunState) -> RunPersist {
         src_endpoint: run.src_endpoint.clone(),
         dst_endpoint: run.dst_endpoint.clone(),
         dry_run: run.dry_run,
+        copy_suffix: run.copy_suffix.clone(),
+        alias_suffix: run.alias_suffix.clone(),
         stages,
         jobs,
     }
@@ -3158,6 +3217,8 @@ fn build_output_config(
     job: &JobPlan,
     src_endpoint: &EndpointConfig,
     dst_endpoint: &EndpointConfig,
+    copy_suffix: Option<&str>,
+    alias_suffix: Option<&str>,
 ) -> Result<OutputConfig, String> {
     let timestamp = state
         .timestamp
@@ -3182,12 +3243,12 @@ fn build_output_config(
         &dst_endpoint.prefix,
         &job.index.name,
         &timestamp,
-        state.copy_suffix.as_deref(),
+        copy_suffix,
     );
     let alias_name = build_alias_name(
         &dst_endpoint.prefix,
         &job.index.name,
-        state.alias_suffix.as_deref(),
+        alias_suffix,
     );
 
     let mut custom_mapping = job
