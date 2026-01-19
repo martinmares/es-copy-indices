@@ -92,6 +92,9 @@
         {% if run.dry_run %}
           <span class="badge bg-azure text-white">dry run</span>
         {% endif %}
+        {% if run.wizard.is_some() %}
+          <span class="badge bg-indigo text-white">wizard</span>
+        {% endif %}
       </div>
       <div class="text-secondary mt-1">template {{ run.template.name }}</div>
       <div class="text-secondary small">

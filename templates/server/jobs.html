@@ -170,7 +170,9 @@
         return `
           <tr>
             <td>
-              <span class="badge bg-${color}-lt text-${color}">${job.run_id}</span>
+              <a href="${basePath}/runs/${job.run_id}" class="badge bg-${color}-lt text-${color} text-decoration-none">
+                ${job.run_id}
+              </a>
               <div class="text-muted small mt-1 d-flex align-items-center gap-1">
                 <i class="ti ti-arrow-forward"></i>
                 ${job.run_env_label}

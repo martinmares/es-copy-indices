@@ -60,6 +60,105 @@
     .sparkline {
       height: 68px;
     }
+    .wizard-cta {
+      position: relative;
+      overflow: hidden;
+      border: none;
+      color: #f8fbff;
+      background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 45%, #22d3ee 100%);
+      box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
+    }
+    .wizard-cta::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        120deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.35) 45%,
+        transparent 60%
+      );
+      transform: translateX(-120%);
+      animation: wizardShimmer 6s ease-in-out infinite;
+    }
+    .classic-cta {
+      position: relative;
+      overflow: hidden;
+      border: none;
+      color: #fffaf0;
+      background: linear-gradient(135deg, #7c2d12 0%, #ea580c 50%, #f97316 100%);
+      box-shadow: 0 8px 18px rgba(249, 115, 22, 0.25);
+    }
+    .classic-cta::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        120deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.35) 45%,
+        transparent 60%
+      );
+      transform: translateX(-120%);
+      animation: classicShimmer 7s ease-in-out infinite;
+    }
+    @keyframes classicShimmer {
+      0% {
+        transform: translateX(-120%);
+      }
+      14% {
+        transform: translateX(120%);
+      }
+      100% {
+        transform: translateX(120%);
+      }
+    }
+    @keyframes wizardShimmer {
+      0% {
+        transform: translateX(-120%);
+      }
+      12% {
+        transform: translateX(120%);
+      }
+      100% {
+        transform: translateX(120%);
+      }
+    }
+    .wizard-modal {
+      --tblr-modal-width: 1400px;
+      width: 96vw !important;
+      max-width: 1400px !important;
+      padding: 0;
+      border: 0;
+    }
+    .wizard-modal .modal-dialog {
+      max-width: 1400px !important;
+      width: 100% !important;
+      margin: 1.5rem auto !important;
+    }
+    .wizard-modal .modal-content {
+      width: 100% !important;
+      max-height: 90vh;
+    }
+    .wizard-modal .modal-body {
+      max-height: 70vh;
+      overflow: auto;
+    }
+    .wizard-source-name {
+      white-space: nowrap;
+    }
+    .wizard-bulk-modal {
+      --tblr-modal-width: 840px;
+      width: min(92vw, 840px) !important;
+      max-width: 840px !important;
+      padding: 0;
+      border: 0;
+    }
+    .wizard-bulk-modal .modal-dialog {
+      max-width: 840px !important;
+      width: 100% !important;
+      margin: 1.5rem auto !important;
+    }
   </style>
 {% endblock %}
 
@@ -72,7 +171,10 @@
         <div class="text-secondary">Manual stage/job control with live queue visibility.</div>
       </div>
       <div class="col-auto">
-        <button class="btn btn-primary" id="openCreateRun" type="button">Create New Run</button>
+        <div class="btn-list">
+          <button class="btn classic-cta" id="openClassicRun" type="button">Create New Run</button>
+          <button class="btn wizard-cta" id="openWizardRun" type="button">Wizard mode</button>
+        </div>
       </div>
     </div>
   </div>
@@ -151,6 +253,9 @@
                 {% if run.dry_run %}
                   <span class="badge bg-azure text-white ms-2">dry run</span>
                 {% endif %}
+                {% if run.wizard %}
+                  <span class="badge bg-indigo text-white ms-2">wizard</span>
+                {% endif %}
               </div>
               <div class="text-end">
                 <div class="text-secondary">{{ run.created_at }}</div>
@@ -188,13 +293,13 @@
         <form action="{{ base_path }}/runs" method="post" id="createRunForm">
           <div class="modal-header">
             <h3 class="modal-title">Create New Run</h3>
-            <button class="btn-close" type="button" id="closeCreateRun"></button>
+            <button class="btn-close" type="button" id="closeClassicRun"></button>
           </div>
           <div class="modal-body">
             <div class="row g-3">
               <div class="col-md-6">
                 <label class="form-label">Source endpoint</label>
-                <select class="form-select" name="src_endpoint_id" id="srcEndpointSelect" required autofocus>
+                <select class="form-select" name="src_endpoint_id" id="classicSrcEndpointSelect" required autofocus>
                   {% for endpoint in endpoints %}
                     <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
                   {% endfor %}
@@ -202,7 +307,7 @@
               </div>
               <div class="col-md-6">
                 <label class="form-label">Destination endpoint</label>
-                <select class="form-select" name="dst_endpoint_id" id="dstEndpointSelect" required>
+                <select class="form-select" name="dst_endpoint_id" id="classicDstEndpointSelect" required>
                   {% for endpoint in endpoints %}
                     <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
                   {% endfor %}
@@ -210,7 +315,7 @@
               </div>
               <div class="col-12">
                 <label class="form-label">Template</label>
-                <select class="form-select" name="template_id" id="templateSelect" required>
+                <select class="form-select" name="template_id" id="classicTemplateSelect" required>
                   {% for template in templates %}
                     <option value="{{ template.id }}">{{ template.name }}</option>
                   {% endfor %}
@@ -218,54 +323,557 @@
               </div>
               <div class="col-md-6">
                 <label class="form-label">Index copy suffix</label>
-                <input class="form-control" type="text" name="index_copy_suffix" id="indexCopySuffix" value="{{ copy_suffix.as_deref().unwrap_or("") }}">
+                <input class="form-control" type="text" name="index_copy_suffix" id="classicIndexCopySuffix" value="{{ copy_suffix.as_deref().unwrap_or("") }}">
               </div>
               <div class="col-md-6">
                 <label class="form-label">Alias suffix</label>
-                <input class="form-control" type="text" name="alias_suffix" id="aliasSuffix" value="{{ alias_suffix.as_deref().unwrap_or("") }}">
+                <input class="form-control" type="text" name="alias_suffix" id="classicAliasSuffix" value="{{ alias_suffix.as_deref().unwrap_or("") }}">
               </div>
               <div class="col-12">
                 <label class="form-check">
-                  <input class="form-check-input" type="checkbox" name="dry_run" id="dryRunToggle" value="1">
+                  <input class="form-check-input" type="checkbox" name="dry_run" id="classicDryRunToggle" value="1">
                   <span class="form-check-label">Dry run (skip es-copy-indices, mark jobs succeeded)</span>
                 </label>
               </div>
             </div>
-            <div class="alert alert-warning mt-3 d-none" id="sameEndpointWarning">
+            <div class="alert alert-warning mt-3 d-none" id="classicSameEndpointWarning">
               Source and destination are the same endpoint. This will create a timestamped copy in the same cluster.
             </div>
-            <div class="alert alert-danger mt-3 d-none" id="createRunError"></div>
+            <div class="alert alert-danger mt-3 d-none" id="classicRunError"></div>
             <div class="card mt-3">
               <div class="card-body">
                 <div class="text-secondary">Selection details</div>
                 <div class="mt-2">
                   <div class="fw-semibold">Source</div>
-                  <div class="text-secondary small" id="srcDetails">-</div>
+                  <div class="text-secondary small" id="classicSrcDetails">-</div>
                 </div>
                 <div class="mt-2">
                   <div class="fw-semibold">Destination</div>
-                  <div class="text-secondary small" id="dstDetails">-</div>
+                  <div class="text-secondary small" id="classicDstDetails">-</div>
                 </div>
                 <div class="mt-2">
                   <div class="fw-semibold">Template</div>
-                  <div class="text-secondary small" id="templateDetails">-</div>
+                  <div class="text-secondary small" id="classicTemplateDetails">-</div>
                 </div>
               </div>
             </div>
           </div>
           <div class="modal-footer d-flex justify-content-between align-items-center">
             <div class="d-flex align-items-center gap-2">
-              <div class="spinner-border spinner-border-sm text-primary d-none" role="status" id="createRunSpinner">
+              <div class="spinner-border spinner-border-sm text-primary d-none" role="status" id="classicRunSpinner">
                 <span class="visually-hidden">Loading...</span>
               </div>
-              <span class="text-secondary small d-none" id="createRunSpinnerLabel">Creating...</span>
+              <span class="text-secondary small d-none" id="classicRunSpinnerLabel">Creating...</span>
             </div>
             <div class="btn-list">
-              <button class="btn btn-outline-secondary" type="button" id="cancelCreateRun">Cancel</button>
-              <button class="btn btn-primary" type="submit" id="submitCreateRun">Create</button>
+              <button class="btn btn-outline-secondary" type="button" id="cancelClassicRun">Cancel</button>
+              <button class="btn btn-primary" type="submit" id="classicSubmitRun">Create</button>
             </div>
           </div>
         </form>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="modal wizard-modal" id="wizardRunModal">
+    <div class="modal-dialog modal-xxl">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Create New Run (Wizard)</h3>
+          <button class="btn-close" type="button" id="closeCreateRun"></button>
+        </div>
+        <div class="modal-body">
+          <div class="steps steps-counter mb-4" id="wizardStepHeader">
+            <a class="step-item active" data-step="1">Setup</a>
+            <a class="step-item" data-step="2">Select sources</a>
+            <a class="step-item" data-step="3">Review &amp; create</a>
+          </div>
+
+          <div class="wizard-step" data-step="1">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">Source endpoint</label>
+                <select class="form-select" id="srcEndpointSelect" required autofocus>
+                  {% for endpoint in endpoints %}
+                    <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Destination endpoint</label>
+                <select class="form-select" id="dstEndpointSelect" required>
+                  {% for endpoint in endpoints %}
+                    <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-12">
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" id="dryRunToggle" value="1">
+                  <span class="form-check-label">Dry run (skip es-copy-indices, mark jobs succeeded)</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="alert alert-warning mt-3 d-none" id="sameEndpointWarning">
+              Source and destination are the same endpoint. This will create a timestamped copy in the same cluster.
+            </div>
+
+            <div class="card mt-3">
+              <div class="card-header">
+                <h3 class="card-title">Defaults for selected indices</h3>
+                <div class="card-subtitle">These apply to all added indices unless overridden per item.</div>
+              </div>
+              <div class="card-body">
+                <div class="row g-3">
+                  <div class="col-md-3">
+                    <label class="form-label">Buffer size</label>
+                    <input class="form-control" type="number" min="1" id="defaultBufferSize" value="500">
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Number of shards</label>
+                    <input class="form-control" type="number" min="1" placeholder="inherit (1)" id="defaultShards">
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Number of replicas</label>
+                    <input class="form-control" type="number" min="0" placeholder="inherit (dst)" id="defaultReplicas">
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Alias remove if exists</label>
+                    <select class="form-select" id="defaultAliasRemove">
+                      <option value="true">true</option>
+                      <option value="false" selected>false</option>
+                    </select>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-check">
+                      <input class="form-check-input" type="checkbox" id="defaultCopyContent" checked>
+                      <span class="form-check-label">Copy content</span>
+                    </label>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-check">
+                      <input class="form-check-input" type="checkbox" id="defaultCopyMapping" checked>
+                      <span class="form-check-label">Copy mapping</span>
+                    </label>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-check">
+                      <input class="form-check-input" type="checkbox" id="defaultDeleteIfExists">
+                      <span class="form-check-label">Delete if exists</span>
+                    </label>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-check">
+                      <input class="form-check-input" type="checkbox" id="defaultAliasEnabled" checked>
+                      <span class="form-check-label">Create alias</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="wizard-step d-none" data-step="2">
+            <div class="card mb-3">
+              <div class="card-header">
+                <h3 class="card-title">Rename rules</h3>
+                <div class="card-subtitle">Applied when adding indices from the source list.</div>
+              </div>
+              <div class="card-body">
+                <div class="row g-3">
+                  <div class="col-12">
+                    <div class="text-secondary small">Index rename</div>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Regex pattern</label>
+                    <input class="form-control" type="text" id="renamePattern" placeholder="e.g. ^zis-">
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Replace</label>
+                    <input class="form-control" type="text" id="renameReplace" placeholder="e.g. tsm-">
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Prefix</label>
+                    <input class="form-control" type="text" id="renamePrefix">
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Suffix</label>
+                    <input class="form-control" type="text" id="renameSuffix">
+                  </div>
+                  <div class="col-12 mt-3">
+                    <div class="text-secondary small">Alias rename</div>
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-check">
+                      <input class="form-check-input" type="checkbox" id="aliasEnabled" checked>
+                      <span class="form-check-label">Create alias</span>
+                    </label>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Regex pattern</label>
+                    <input class="form-control" type="text" id="aliasPattern">
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Replace</label>
+                    <input class="form-control" type="text" id="aliasReplace">
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">Prefix</label>
+                    <input class="form-control" type="text" id="aliasPrefix">
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">Suffix</label>
+                    <input class="form-control" type="text" id="aliasSuffixRule">
+                  </div>
+                </div>
+                <div class="text-secondary small mt-2">Prefix/suffix is applied after the regex replacement.</div>
+              </div>
+            </div>
+
+            <div class="row g-3 align-items-end">
+              <div class="col-md-8">
+                <label class="form-label">Filter indices/aliases (wildcards * ?)</label>
+                <input class="form-control" type="text" id="wizardFilterInput" placeholder="e.g. *audit*">
+              </div>
+              <div class="col-md-2">
+                <button class="btn btn-primary w-100" type="button" id="wizardSearchBtn">
+                  Search
+                </button>
+              </div>
+              <div class="col-md-2">
+                <div class="d-flex align-items-center gap-2">
+                  <div class="spinner-border spinner-border-sm text-primary d-none" role="status" id="wizardSearchSpinner">
+                    <span class="visually-hidden">Loading...</span>
+                  </div>
+                  <span class="text-secondary small d-none" id="wizardSearchLabel">Searching...</span>
+                </div>
+              </div>
+              <div class="col-12">
+                <div class="d-flex flex-wrap gap-3">
+                  <label class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" id="wizardFilterIndices">
+                    <span class="form-check-label">Indexes</span>
+                  </label>
+                  <label class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" id="wizardFilterAliases">
+                    <span class="form-check-label">Aliases</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="alert alert-danger mt-3 d-none" id="wizardSearchError"></div>
+
+            <div class="card mt-3">
+              <div class="card-header">
+                <h3 class="card-title">Available indices and aliases</h3>
+                <div class="card-subtitle">Select entries and add them to the run.</div>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-vcenter card-table" id="wizardSourcesTable">
+                  <thead>
+                    <tr>
+                      <th class="w-1"><input class="form-check-input" type="checkbox" id="wizardSelectAll"></th>
+                      <th>Name</th>
+                      <th>Type</th>
+                      <th>Docs</th>
+                      <th>Size</th>
+                      <th>Alias indices</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center mt-3">
+              <div class="text-secondary small" id="wizardSelectionCount">0 selected</div>
+              <button class="btn btn-outline-primary" type="button" id="wizardAddSelected">Add selected</button>
+            </div>
+
+            <div class="card mt-3">
+              <div class="card-header">
+                <h3 class="card-title">Selected items</h3>
+                <div class="card-subtitle">Preview of indices/aliases already added.</div>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-vcenter" id="wizardSelectedTableStep2">
+                  <thead>
+                    <tr>
+                      <th>Source</th>
+                      <th>Destination base</th>
+                      <th>Alias base</th>
+                      <th>Overrides</th>
+                      <th class="text-end">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="wizard-step d-none" data-step="3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div>
+                <h3 class="card-title mb-0">Selected indices</h3>
+                <div class="text-secondary small">Review, edit, or remove before creating the run.</div>
+              </div>
+              <div class="text-secondary small" id="wizardSelectedCount">0 items</div>
+            </div>
+
+            <div class="table-responsive">
+              <table class="table table-vcenter" id="wizardSelectedTable">
+                <thead>
+                  <tr>
+                    <th>Source</th>
+                    <th>Destination base</th>
+                    <th>Alias base</th>
+                    <th>Overrides</th>
+                    <th class="text-end">Actions</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="alert alert-danger mt-3 d-none" id="createRunError"></div>
+        </div>
+        <div class="modal-footer d-flex justify-content-between align-items-center">
+          <div class="d-flex align-items-center gap-2">
+            <div class="spinner-border spinner-border-sm text-primary d-none" role="status" id="createRunSpinner">
+              <span class="visually-hidden">Loading...</span>
+            </div>
+            <span class="text-secondary small d-none" id="createRunSpinnerLabel">Creating...</span>
+          </div>
+          <div class="btn-list">
+            <button class="btn btn-outline-secondary" type="button" id="wizardBack">Back</button>
+            <button class="btn btn-outline-secondary" type="button" id="wizardCancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="wizardNext">Next</button>
+            <button class="btn btn-success d-none" type="button" id="wizardCreate">Create</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="modal wizard-bulk-modal" id="wizardBulkModal">
+    <div class="modal-dialog modal-md">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Add selected indices</h3>
+          <button class="btn-close" type="button" id="wizardBulkClose"></button>
+        </div>
+        <div class="modal-body">
+          <div class="text-secondary small">Applies rename rules and optional overrides to the selected items.</div>
+          <div class="row g-3 mt-2">
+            <div class="col-md-3">
+              <label class="form-label">Regex pattern</label>
+              <input class="form-control" type="text" id="bulkRenamePattern">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Replace</label>
+              <input class="form-control" type="text" id="bulkRenameReplace">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Prefix</label>
+              <input class="form-control" type="text" id="bulkRenamePrefix">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Suffix</label>
+              <input class="form-control" type="text" id="bulkRenameSuffix">
+            </div>
+            <div class="col-12 mt-3">
+              <label class="form-check">
+                <input class="form-check-input" type="checkbox" id="bulkAliasEnabled">
+                <span class="form-check-label">Create alias for these indices</span>
+              </label>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Alias regex</label>
+              <input class="form-control" type="text" id="bulkAliasPattern">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Alias replace</label>
+              <input class="form-control" type="text" id="bulkAliasReplace">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Alias prefix</label>
+              <input class="form-control" type="text" id="bulkAliasPrefix">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Alias suffix</label>
+              <input class="form-control" type="text" id="bulkAliasSuffix">
+            </div>
+          </div>
+
+          <div class="card mt-3">
+            <div class="card-header">
+              <h3 class="card-title">Overrides (optional)</h3>
+            </div>
+            <div class="card-body">
+              <div class="row g-3">
+                <div class="col-md-3">
+                  <label class="form-label">Buffer size</label>
+                  <input class="form-control" type="number" min="1" placeholder="inherit" id="bulkOverrideBuffer">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Number of shards</label>
+                  <input class="form-control" type="number" min="1" placeholder="inherit" id="bulkOverrideShards">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Number of replicas</label>
+                  <input class="form-control" type="number" min="0" placeholder="inherit" id="bulkOverrideReplicas">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Alias remove if exists</label>
+                  <select class="form-select" id="bulkOverrideAliasRemove">
+                    <option value="inherit">inherit</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Copy content</label>
+                  <select class="form-select" id="bulkOverrideCopyContent">
+                    <option value="inherit">inherit</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Copy mapping</label>
+                  <select class="form-select" id="bulkOverrideCopyMapping">
+                    <option value="inherit">inherit</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Delete if exists</label>
+                  <select class="form-select" id="bulkOverrideDelete">
+                    <option value="inherit">inherit</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Alias enabled</label>
+                  <select class="form-select" id="bulkOverrideAliasEnabled">
+                    <option value="inherit">inherit</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="alert alert-danger mt-3 d-none" id="bulkAddError"></div>
+
+          <div class="table-responsive mt-3">
+            <table class="table table-sm" id="bulkPreviewTable">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Destination</th>
+                  <th>Alias</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline-secondary" type="button" id="bulkCancel">Cancel</button>
+          <button class="btn btn-primary" type="button" id="bulkConfirm">Add to run</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="wizardEditModal">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Edit selected index</h3>
+          <button class="btn-close" type="button" id="wizardEditClose"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Source name</label>
+              <input class="form-control" type="text" id="editSourceName" disabled>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Destination base</label>
+              <input class="form-control" type="text" id="editDestName">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Alias base</label>
+              <input class="form-control" type="text" id="editAliasName">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Alias enabled</label>
+              <select class="form-select" id="editAliasEnabled">
+                <option value="inherit">inherit</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Alias remove</label>
+              <select class="form-select" id="editAliasRemove">
+                <option value="inherit">inherit</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Buffer size</label>
+              <input class="form-control" type="number" min="1" placeholder="inherit" id="editBufferSize">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Shards</label>
+              <input class="form-control" type="number" min="1" placeholder="inherit" id="editShards">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Replicas</label>
+              <input class="form-control" type="number" min="0" placeholder="inherit" id="editReplicas">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Copy content</label>
+              <select class="form-select" id="editCopyContent">
+                <option value="inherit">inherit</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Copy mapping</label>
+              <select class="form-select" id="editCopyMapping">
+                <option value="inherit">inherit</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Delete if exists</label>
+              <select class="form-select" id="editDelete">
+                <option value="inherit">inherit</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline-secondary" type="button" id="wizardEditCancel">Cancel</button>
+          <button class="btn btn-primary" type="button" id="wizardEditSave">Save</button>
+        </div>
       </div>
     </div>
   </dialog>
@@ -300,24 +908,116 @@
     const runTotalsEl = document.getElementById("runTotals");
     const runsListEl = document.getElementById("runsList");
     const noRunsCard = document.getElementById("noRunsCard");
-    const modal = document.getElementById("createRunModal");
-    const openModalBtn = document.getElementById("openCreateRun");
-    const closeModalBtn = document.getElementById("closeCreateRun");
-    const cancelModalBtn = document.getElementById("cancelCreateRun");
-    const createRunForm = document.getElementById("createRunForm");
+    const classicModal = document.getElementById("createRunModal");
+    const wizardModal = document.getElementById("wizardRunModal");
+    const openClassicBtn = document.getElementById("openClassicRun");
+    const openWizardBtn = document.getElementById("openWizardRun");
+    const closeClassicBtn = document.getElementById("closeClassicRun");
+    const cancelClassicBtn = document.getElementById("cancelClassicRun");
+    const classicRunForm = document.getElementById("createRunForm");
+    const classicRunError = document.getElementById("classicRunError");
+    const classicSameEndpointWarning = document.getElementById("classicSameEndpointWarning");
+    const classicSrcEndpointSelect = document.getElementById("classicSrcEndpointSelect");
+    const classicDstEndpointSelect = document.getElementById("classicDstEndpointSelect");
+    const classicTemplateSelect = document.getElementById("classicTemplateSelect");
+    const classicSrcDetails = document.getElementById("classicSrcDetails");
+    const classicDstDetails = document.getElementById("classicDstDetails");
+    const classicTemplateDetails = document.getElementById("classicTemplateDetails");
+    const classicRunSpinner = document.getElementById("classicRunSpinner");
+    const classicRunSpinnerLabel = document.getElementById("classicRunSpinnerLabel");
+    const classicSubmitRun = document.getElementById("classicSubmitRun");
     const createRunError = document.getElementById("createRunError");
     const sameEndpointWarning = document.getElementById("sameEndpointWarning");
     const srcEndpointSelect = document.getElementById("srcEndpointSelect");
     const dstEndpointSelect = document.getElementById("dstEndpointSelect");
-    const templateSelect = document.getElementById("templateSelect");
-    const srcDetails = document.getElementById("srcDetails");
-    const dstDetails = document.getElementById("dstDetails");
-    const templateDetails = document.getElementById("templateDetails");
+    const cancelModalBtn = document.getElementById("wizardCancel");
+    const dryRunToggle = document.getElementById("dryRunToggle");
     const createRunSpinner = document.getElementById("createRunSpinner");
     const createRunSpinnerLabel = document.getElementById("createRunSpinnerLabel");
-    const submitCreateRun = document.getElementById("submitCreateRun");
+    const wizardBack = document.getElementById("wizardBack");
+    const wizardNext = document.getElementById("wizardNext");
+    const wizardCreate = document.getElementById("wizardCreate");
+    const wizardStepHeader = document.getElementById("wizardStepHeader");
+    const wizardSteps = Array.from(document.querySelectorAll(".wizard-step"));
     const dashboardCpuValue = document.getElementById("dashboardCpuValue");
     const dashboardMemValue = document.getElementById("dashboardMemValue");
+    const defaultBufferSize = document.getElementById("defaultBufferSize");
+    const defaultShards = document.getElementById("defaultShards");
+    const defaultReplicas = document.getElementById("defaultReplicas");
+    const defaultCopyContent = document.getElementById("defaultCopyContent");
+    const defaultCopyMapping = document.getElementById("defaultCopyMapping");
+    const defaultDeleteIfExists = document.getElementById("defaultDeleteIfExists");
+    const defaultAliasEnabled = document.getElementById("defaultAliasEnabled");
+    const defaultAliasRemove = document.getElementById("defaultAliasRemove");
+    const renamePattern = document.getElementById("renamePattern");
+    const renameReplace = document.getElementById("renameReplace");
+    const renamePrefix = document.getElementById("renamePrefix");
+    const renameSuffix = document.getElementById("renameSuffix");
+    const aliasEnabled = document.getElementById("aliasEnabled");
+    const aliasPattern = document.getElementById("aliasPattern");
+    const aliasReplace = document.getElementById("aliasReplace");
+    const aliasPrefix = document.getElementById("aliasPrefix");
+    const aliasSuffixRule = document.getElementById("aliasSuffixRule");
+    const wizardFilterInput = document.getElementById("wizardFilterInput");
+    const wizardSearchBtn = document.getElementById("wizardSearchBtn");
+    const wizardSearchSpinner = document.getElementById("wizardSearchSpinner");
+    const wizardSearchLabel = document.getElementById("wizardSearchLabel");
+    const wizardSearchError = document.getElementById("wizardSearchError");
+    const wizardFilterIndices = document.getElementById("wizardFilterIndices");
+    const wizardFilterAliases = document.getElementById("wizardFilterAliases");
+    const wizardSourcesTable = document.getElementById("wizardSourcesTable");
+    const wizardSelectAll = document.getElementById("wizardSelectAll");
+    const wizardSelectionCount = document.getElementById("wizardSelectionCount");
+    const wizardAddSelected = document.getElementById("wizardAddSelected");
+    const wizardSelectedTable = document.getElementById("wizardSelectedTable");
+    const wizardSelectedTableStep2 = document.getElementById("wizardSelectedTableStep2");
+    const wizardSelectedCount = document.getElementById("wizardSelectedCount");
+    const bulkModal = document.getElementById("wizardBulkModal");
+    const bulkClose = document.getElementById("wizardBulkClose");
+    const bulkCancel = document.getElementById("bulkCancel");
+    const bulkConfirm = document.getElementById("bulkConfirm");
+    const bulkRenamePattern = document.getElementById("bulkRenamePattern");
+    const bulkRenameReplace = document.getElementById("bulkRenameReplace");
+    const bulkRenamePrefix = document.getElementById("bulkRenamePrefix");
+    const bulkRenameSuffix = document.getElementById("bulkRenameSuffix");
+    const bulkAliasEnabled = document.getElementById("bulkAliasEnabled");
+    const bulkAliasPattern = document.getElementById("bulkAliasPattern");
+    const bulkAliasReplace = document.getElementById("bulkAliasReplace");
+    const bulkAliasPrefix = document.getElementById("bulkAliasPrefix");
+    const bulkAliasSuffix = document.getElementById("bulkAliasSuffix");
+    const bulkOverrideBuffer = document.getElementById("bulkOverrideBuffer");
+    const bulkOverrideShards = document.getElementById("bulkOverrideShards");
+    const bulkOverrideReplicas = document.getElementById("bulkOverrideReplicas");
+    const bulkOverrideAliasRemove = document.getElementById("bulkOverrideAliasRemove");
+    const bulkOverrideCopyContent = document.getElementById("bulkOverrideCopyContent");
+    const bulkOverrideCopyMapping = document.getElementById("bulkOverrideCopyMapping");
+    const bulkOverrideDelete = document.getElementById("bulkOverrideDelete");
+    const bulkOverrideAliasEnabled = document.getElementById("bulkOverrideAliasEnabled");
+    const bulkAddError = document.getElementById("bulkAddError");
+    const bulkPreviewTable = document.getElementById("bulkPreviewTable");
+    const editModal = document.getElementById("wizardEditModal");
+    const editClose = document.getElementById("wizardEditClose");
+    const editCancel = document.getElementById("wizardEditCancel");
+    const editSave = document.getElementById("wizardEditSave");
+    const editSourceName = document.getElementById("editSourceName");
+    const editDestName = document.getElementById("editDestName");
+    const editAliasName = document.getElementById("editAliasName");
+    const editAliasEnabled = document.getElementById("editAliasEnabled");
+    const editAliasRemove = document.getElementById("editAliasRemove");
+    const editBufferSize = document.getElementById("editBufferSize");
+    const editShards = document.getElementById("editShards");
+    const editReplicas = document.getElementById("editReplicas");
+    const editCopyContent = document.getElementById("editCopyContent");
+    const editCopyMapping = document.getElementById("editCopyMapping");
+    const editDelete = document.getElementById("editDelete");
+
+    const wizardState = {
+      sources: [],
+      items: [],
+      currentStep: 1,
+      bulkSources: [],
+      editIndex: null,
+    };
 
     function formatEndpointDetail(endpoint) {
       if (!endpoint) return "-";
@@ -332,47 +1032,252 @@
       return `${template.name} · indices=${template.indices_count} · replicas=${replicas}`;
     }
 
+    function updateClassicDetails() {
+      const src = endpoints.find((item) => item.id === classicSrcEndpointSelect.value);
+      const dst = endpoints.find((item) => item.id === classicDstEndpointSelect.value);
+      const template = templates.find((item) => item.id === classicTemplateSelect.value);
+      classicSrcDetails.textContent = formatEndpointDetail(src);
+      classicDstDetails.textContent = formatEndpointDetail(dst);
+      classicTemplateDetails.textContent = formatTemplateDetail(template);
+      if (src && dst && src.id === dst.id) {
+        classicSameEndpointWarning.classList.remove("d-none");
+      } else {
+        classicSameEndpointWarning.classList.add("d-none");
+      }
+    }
+
+    function formatTemplateDetail(template) {
+      if (!template) return "-";
+      const replicas = template.number_of_replicas === null || template.number_of_replicas === undefined
+        ? "inherit"
+        : template.number_of_replicas;
+      return `${template.name} · indices=${template.indices_count} · replicas=${replicas}`;
+    }
+
+    function updateClassicDetails() {
+      const src = endpoints.find((item) => item.id === classicSrcEndpointSelect.value);
+      const dst = endpoints.find((item) => item.id === classicDstEndpointSelect.value);
+      const template = templates.find((item) => item.id === classicTemplateSelect.value);
+      classicSrcDetails.textContent = formatEndpointDetail(src);
+      classicDstDetails.textContent = formatEndpointDetail(dst);
+      classicTemplateDetails.textContent = formatTemplateDetail(template);
+      if (src && dst && src.id === dst.id) {
+        classicSameEndpointWarning.classList.remove("d-none");
+      } else {
+        classicSameEndpointWarning.classList.add("d-none");
+      }
+    }
+
     function updateModalDetails() {
       const src = endpoints.find((item) => item.id === srcEndpointSelect.value);
       const dst = endpoints.find((item) => item.id === dstEndpointSelect.value);
-      const template = templates.find((item) => item.id === templateSelect.value);
-      srcDetails.textContent = formatEndpointDetail(src);
-      dstDetails.textContent = formatEndpointDetail(dst);
-      templateDetails.textContent = formatTemplateDetail(template);
       if (src && dst && src.id === dst.id) {
         sameEndpointWarning.classList.remove("d-none");
       } else {
         sameEndpointWarning.classList.add("d-none");
       }
+      if (dst && defaultReplicas && defaultReplicas.value.trim() === "") {
+        defaultReplicas.placeholder = `inherit (${dst.number_of_replicas})`;
+      }
+    }
+
+    function applyAliasToggle(enabled) {
+      const disabled = !enabled;
+      [aliasPattern, aliasReplace, aliasPrefix, aliasSuffixRule].forEach((el) => {
+        if (!el) return;
+        el.disabled = disabled;
+      });
+    }
+
+    function parseOptionalNumber(value) {
+      if (value === null || value === undefined) return null;
+      const trimmed = value.toString().trim();
+      if (!trimmed) return null;
+      const parsed = Number.parseInt(trimmed, 10);
+      if (Number.isNaN(parsed)) return null;
+      return parsed;
+    }
+
+    function getDefaultsPayload() {
+      const bufferSize = parseOptionalNumber(defaultBufferSize.value) ?? 0;
+      return {
+        buffer_size: bufferSize,
+        copy_content: defaultCopyContent.checked,
+        copy_mapping: defaultCopyMapping.checked,
+        delete_if_exists: defaultDeleteIfExists.checked,
+        number_of_replicas: parseOptionalNumber(defaultReplicas.value),
+        number_of_shards: parseOptionalNumber(defaultShards.value),
+        alias_enabled: defaultAliasEnabled.checked,
+        alias_remove_if_exists: defaultAliasRemove.value === "true",
+      };
+    }
+
+    function getRenameRulePayload() {
+      return {
+        pattern: renamePattern.value.trim(),
+        replace: renameReplace.value,
+        prefix: renamePrefix.value,
+        suffix: renameSuffix.value,
+      };
+    }
+
+    function getAliasRulePayload() {
+      return {
+        enabled: aliasEnabled.checked,
+        pattern: aliasPattern.value.trim(),
+        replace: aliasReplace.value,
+        prefix: aliasPrefix.value,
+        suffix: aliasSuffixRule.value,
+      };
+    }
+
+    function applyRenameBase(name, rule) {
+      const base = name.toString();
+      if (!rule.pattern) {
+        return { value: `${rule.prefix}${base}` };
+      }
+      try {
+        const regex = new RegExp(rule.pattern);
+        const replaced = base.replace(regex, rule.replace);
+        return { value: `${rule.prefix}${replaced}` };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : "Invalid regex" };
+      }
+    }
+
+    function applyRename(name, rule) {
+      const base = name.toString();
+      if (!rule.pattern) {
+        const suffix = normalizeSuffix(rule.suffix);
+        return { value: `${rule.prefix}${base}${suffix}` };
+      }
+      try {
+        const regex = new RegExp(rule.pattern);
+        const replaced = base.replace(regex, rule.replace);
+        const suffix = normalizeSuffix(rule.suffix);
+        return { value: `${rule.prefix}${replaced}${suffix}` };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : "Invalid regex" };
+      }
+    }
+
+    function normalizeSuffix(value) {
+      const suffix = (value ?? "").trim();
+      if (!suffix) return "";
+      if (suffix.startsWith("-")) return suffix;
+      return `-${suffix}`;
+    }
+
+    function setStep(step) {
+      wizardState.currentStep = step;
+      wizardSteps.forEach((el) => {
+        const current = Number(el.dataset.step);
+        if (current === step) {
+          el.classList.remove("d-none");
+        } else {
+          el.classList.add("d-none");
+        }
+      });
+      wizardStepHeader.querySelectorAll(".step-item").forEach((el) => {
+        const stepValue = Number(el.dataset.step);
+        if (stepValue === step) {
+          el.classList.add("active");
+        } else if (stepValue < step) {
+          el.classList.add("done");
+          el.classList.remove("active");
+        } else {
+          el.classList.remove("active");
+          el.classList.remove("done");
+        }
+      });
+      wizardBack.classList.toggle("d-none", step === 1);
+      wizardNext.classList.toggle("d-none", step === 3);
+      wizardCreate.classList.toggle("d-none", step !== 3);
+    }
+
+    function openClassicModal() {
+      updateClassicDetails();
+      classicRunError.classList.add("d-none");
+      classicRunError.textContent = "";
+      classicRunForm.reset();
+      classicModal.showModal();
+      classicSrcEndpointSelect.focus();
     }
 
     function openModal() {
-      updateModalDetails();
       createRunError.classList.add("d-none");
       createRunError.textContent = "";
-      createRunForm.reset();
-      modal.showModal();
+      wizardState.sources = [];
+      wizardState.items = [];
+      wizardState.bulkSources = [];
+      wizardState.editIndex = null;
+      srcEndpointSelect.selectedIndex = 0;
+      dstEndpointSelect.selectedIndex = Math.min(1, dstEndpointSelect.options.length - 1);
+      defaultBufferSize.value = "500";
+      defaultShards.value = "";
+      defaultReplicas.value = "";
+      defaultCopyContent.checked = true;
+      defaultCopyMapping.checked = true;
+      defaultDeleteIfExists.checked = false;
+      defaultAliasEnabled.checked = true;
+      defaultAliasRemove.value = "false";
+      renamePattern.value = "";
+      renameReplace.value = "";
+      renamePrefix.value = "";
+      renameSuffix.value = "";
+      aliasEnabled.checked = true;
+      aliasPattern.value = "";
+      aliasReplace.value = "";
+      aliasPrefix.value = "";
+      aliasSuffixRule.value = "";
+      applyAliasToggle(aliasEnabled.checked);
+      wizardFilterInput.value = "";
+      if (wizardFilterIndices) wizardFilterIndices.checked = false;
+      if (wizardFilterAliases) wizardFilterAliases.checked = false;
+      wizardSearchError.classList.add("d-none");
+      wizardSearchError.textContent = "";
+      wizardSelectionCount.textContent = "0 selected";
+      wizardSelectedCount.textContent = "0 items";
+      if (wizardSourcesTable?.querySelector("tbody")) {
+        wizardSourcesTable.querySelector("tbody").innerHTML = "";
+      }
+      if (wizardSelectedTable?.querySelector("tbody")) {
+        wizardSelectedTable.querySelector("tbody").innerHTML = "";
+      }
+      updateModalDetails();
+      setStep(1);
+      wizardModal.showModal();
       srcEndpointSelect.focus();
     }
 
-    function closeModal() {
-      modal.close();
+    function closeClassicModal() {
+      classicModal.close();
     }
 
-    openModalBtn?.addEventListener("click", openModal);
-    closeModalBtn?.addEventListener("click", closeModal);
+    function closeModal() {
+      wizardModal.close();
+    }
+
+    openClassicBtn?.addEventListener("click", openClassicModal);
+    openWizardBtn?.addEventListener("click", openModal);
+    closeClassicBtn?.addEventListener("click", closeClassicModal);
+    cancelClassicBtn?.addEventListener("click", closeClassicModal);
+    document.getElementById("closeCreateRun")?.addEventListener("click", closeModal);
     cancelModalBtn?.addEventListener("click", closeModal);
     srcEndpointSelect?.addEventListener("change", updateModalDetails);
     dstEndpointSelect?.addEventListener("change", updateModalDetails);
-    templateSelect?.addEventListener("change", updateModalDetails);
+    classicSrcEndpointSelect?.addEventListener("change", updateClassicDetails);
+    classicDstEndpointSelect?.addEventListener("change", updateClassicDetails);
+    classicTemplateSelect?.addEventListener("change", updateClassicDetails);
+    aliasEnabled?.addEventListener("change", () => applyAliasToggle(aliasEnabled.checked));
 
-    createRunForm?.addEventListener("submit", async (event) => {
+    classicRunForm?.addEventListener("submit", async (event) => {
       event.preventDefault();
-      createRunError.classList.add("d-none");
-      createRunSpinner.classList.remove("d-none");
-      createRunSpinnerLabel.classList.remove("d-none");
-      submitCreateRun.disabled = true;
-      const formData = new FormData(createRunForm);
+      classicRunError.classList.add("d-none");
+      classicRunSpinner.classList.remove("d-none");
+      classicRunSpinnerLabel.classList.remove("d-none");
+      classicSubmitRun.disabled = true;
+      const formData = new FormData(classicRunForm);
       const payload = new URLSearchParams();
       for (const [key, value] of formData.entries()) {
         payload.append(key, value.toString());
@@ -391,6 +1296,487 @@
           window.location.href = response.url;
           return;
         }
+        closeClassicModal();
+      } catch (err) {
+        classicRunError.textContent = err instanceof Error ? err.message : "Failed to create run";
+        classicRunError.classList.remove("d-none");
+      } finally {
+        classicRunSpinner.classList.add("d-none");
+        classicRunSpinnerLabel.classList.add("d-none");
+        classicSubmitRun.disabled = false;
+      }
+    });
+
+    wizardBack?.addEventListener("click", () => {
+      if (wizardState.currentStep > 1) {
+        setStep(wizardState.currentStep - 1);
+      }
+    });
+    wizardNext?.addEventListener("click", () => {
+      if (wizardState.currentStep === 1) {
+        const defaults = getDefaultsPayload();
+        if (!defaults.buffer_size || defaults.buffer_size <= 0) {
+          createRunError.textContent = "Buffer size must be greater than 0.";
+          createRunError.classList.remove("d-none");
+          return;
+        }
+      }
+      createRunError.classList.add("d-none");
+      if (wizardState.currentStep < 3) {
+        setStep(wizardState.currentStep + 1);
+      }
+    });
+
+    async function fetchSources() {
+      wizardSearchError.classList.add("d-none");
+      wizardSearchError.textContent = "";
+      wizardSearchSpinner.classList.remove("d-none");
+      wizardSearchLabel.classList.remove("d-none");
+      wizardSearchBtn.disabled = true;
+      let pattern = wizardFilterInput.value.trim() || "*";
+      if (pattern !== "*" && !pattern.includes("*") && !pattern.includes("?")) {
+        pattern = `*${pattern}*`;
+      }
+      try {
+        const url = new URL(`${basePath}/wizard/sources`, window.location.origin);
+        url.searchParams.set("src_endpoint_id", srcEndpointSelect.value);
+        url.searchParams.set("pattern", pattern);
+        const response = await fetch(url.toString());
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Failed to load sources");
+        }
+        const items = await response.json();
+        wizardState.sources = Array.isArray(items) ? items : [];
+        renderSources();
+      } catch (err) {
+        wizardSearchError.textContent = err instanceof Error ? err.message : "Failed to load sources";
+        wizardSearchError.classList.remove("d-none");
+      } finally {
+        wizardSearchSpinner.classList.add("d-none");
+        wizardSearchLabel.classList.add("d-none");
+        wizardSearchBtn.disabled = false;
+      }
+    }
+
+    function renderSources() {
+      const tbody = wizardSourcesTable.querySelector("tbody");
+      const filterIndices = wizardFilterIndices?.checked ?? false;
+      const filterAliases = wizardFilterAliases?.checked ?? false;
+      const filterKinds = (filterIndices || filterAliases)
+        ? new Set([
+          ...(filterIndices ? ["index"] : []),
+          ...(filterAliases ? ["alias"] : []),
+        ])
+        : null;
+      const items = filterKinds
+        ? wizardState.sources
+          .map((item, originalIndex) => ({ item, originalIndex }))
+          .filter((entry) => filterKinds.has(entry.item.kind))
+        : wizardState.sources.map((item, originalIndex) => ({ item, originalIndex }));
+      tbody.innerHTML = items.map(({ item, originalIndex }) => {
+        const indices = item.indices && item.indices.length
+          ? item.indices.join(", ")
+          : "-";
+        const badgeClass = item.kind === "alias"
+          ? "bg-blue text-white"
+          : "bg-green text-dark";
+        return `
+          <tr data-index="${originalIndex}">
+            <td><input class="form-check-input wizard-source-check" type="checkbox"></td>
+            <td class="wizard-source-name">${item.name}</td>
+            <td><span class="badge ${badgeClass}">${item.kind}</span></td>
+            <td>${item.docs ?? "-"}</td>
+            <td>${item.size ?? "-"}</td>
+            <td class="text-secondary small">${indices}</td>
+          </tr>`;
+      }).join("");
+      wizardSelectAll.checked = false;
+      wizardSelectionCount.textContent = "0 selected";
+    }
+
+    function updateSelectionCount() {
+      const selected = wizardSourcesTable.querySelectorAll(".wizard-source-check:checked").length;
+      wizardSelectionCount.textContent = `${selected} selected`;
+    }
+
+    wizardSelectAll?.addEventListener("change", () => {
+      const checked = wizardSelectAll.checked;
+      wizardSourcesTable.querySelectorAll(".wizard-source-check").forEach((el) => {
+        el.checked = checked;
+      });
+      updateSelectionCount();
+    });
+    wizardSourcesTable?.addEventListener("change", (event) => {
+      if (event.target.classList.contains("wizard-source-check")) {
+        updateSelectionCount();
+      }
+    });
+    wizardSearchBtn?.addEventListener("click", fetchSources);
+    wizardFilterIndices?.addEventListener("change", renderSources);
+    wizardFilterAliases?.addEventListener("change", renderSources);
+    wizardFilterInput?.addEventListener("keypress", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        fetchSources();
+      }
+    });
+
+    function buildOverridesFromBulk() {
+      const overrides = {};
+      const buffer = parseOptionalNumber(bulkOverrideBuffer.value);
+      const shards = parseOptionalNumber(bulkOverrideShards.value);
+      const replicas = parseOptionalNumber(bulkOverrideReplicas.value);
+      if (buffer !== null) overrides.buffer_size = buffer;
+      if (shards !== null) overrides.number_of_shards = shards;
+      if (replicas !== null) overrides.number_of_replicas = replicas;
+      if (bulkOverrideAliasRemove.value !== "inherit") {
+        overrides.alias_remove_if_exists = bulkOverrideAliasRemove.value === "true";
+      }
+      if (bulkOverrideCopyContent.value !== "inherit") {
+        overrides.copy_content = bulkOverrideCopyContent.value === "true";
+      }
+      if (bulkOverrideCopyMapping.value !== "inherit") {
+        overrides.copy_mapping = bulkOverrideCopyMapping.value === "true";
+      }
+      if (bulkOverrideDelete.value !== "inherit") {
+        overrides.delete_if_exists = bulkOverrideDelete.value === "true";
+      }
+      if (bulkOverrideAliasEnabled.value !== "inherit") {
+        overrides.alias_enabled = bulkOverrideAliasEnabled.value === "true";
+      }
+      return Object.keys(overrides).length ? overrides : null;
+    }
+
+    function buildBulkRule() {
+      return {
+        rename: {
+          pattern: bulkRenamePattern.value.trim(),
+          replace: bulkRenameReplace.value,
+          prefix: bulkRenamePrefix.value,
+          suffix: bulkRenameSuffix.value,
+        },
+        alias: {
+          enabled: bulkAliasEnabled.checked,
+          pattern: bulkAliasPattern.value.trim(),
+          replace: bulkAliasReplace.value,
+          prefix: bulkAliasPrefix.value,
+          suffix: bulkAliasSuffix.value,
+        },
+      };
+    }
+
+    function renderBulkPreview() {
+      const tbody = bulkPreviewTable.querySelector("tbody");
+      const rule = buildBulkRule();
+      const overrides = buildOverridesFromBulk();
+      const errors = [];
+      tbody.innerHTML = wizardState.bulkSources.map((source) => {
+        const dest = applyRename(source.name, rule.rename);
+        if (dest.error) {
+          errors.push(dest.error);
+          return `<tr><td>${source.name}</td><td class="text-danger">${dest.error}</td><td>-</td></tr>`;
+        }
+        let aliasValue = "-";
+        if (rule.alias.enabled) {
+          const aliasResult = applyRename(source.name, rule.alias);
+          if (aliasResult.error) {
+            errors.push(aliasResult.error);
+            aliasValue = aliasResult.error;
+          } else if (!rule.alias.pattern && !rule.alias.prefix && !rule.alias.suffix && !rule.alias.replace) {
+            const aliasBase = applyRenameBase(source.name, rule.rename);
+            if (aliasBase.error) {
+              errors.push(aliasBase.error);
+              aliasValue = aliasBase.error;
+            } else {
+              aliasValue = aliasBase.value;
+            }
+          } else {
+            aliasValue = aliasResult.value;
+          }
+        }
+        return `<tr><td>${source.name}</td><td>${dest.value}</td><td>${aliasValue}</td></tr>`;
+      }).join("");
+      if (errors.length) {
+        bulkAddError.textContent = `Invalid regex: ${errors[0]}`;
+        bulkAddError.classList.remove("d-none");
+        bulkConfirm.disabled = true;
+      } else {
+        bulkAddError.classList.add("d-none");
+        bulkAddError.textContent = "";
+        bulkConfirm.disabled = false;
+      }
+      if (overrides) {
+        bulkAddError.classList.add("d-none");
+      }
+    }
+
+    function openBulkModal(selectedSources) {
+      wizardState.bulkSources = selectedSources;
+      bulkRenamePattern.value = renamePattern.value;
+      bulkRenameReplace.value = renameReplace.value;
+      bulkRenamePrefix.value = renamePrefix.value;
+      bulkRenameSuffix.value = renameSuffix.value;
+      bulkAliasEnabled.checked = aliasEnabled.checked;
+      bulkAliasPattern.value = aliasPattern.value;
+      bulkAliasReplace.value = aliasReplace.value;
+      bulkAliasPrefix.value = aliasPrefix.value;
+      bulkAliasSuffix.value = aliasSuffixRule.value;
+      applyBulkAliasToggle(bulkAliasEnabled.checked);
+      bulkOverrideBuffer.value = "";
+      bulkOverrideShards.value = "";
+      bulkOverrideReplicas.value = "";
+      bulkOverrideAliasRemove.value = "inherit";
+      bulkOverrideCopyContent.value = "inherit";
+      bulkOverrideCopyMapping.value = "inherit";
+      bulkOverrideDelete.value = "inherit";
+      bulkOverrideAliasEnabled.value = "inherit";
+      renderBulkPreview();
+      bulkModal.showModal();
+    }
+
+    function closeBulkModal() {
+      bulkModal.close();
+    }
+
+    wizardAddSelected?.addEventListener("click", () => {
+      const selected = [];
+      wizardSourcesTable.querySelectorAll("tbody tr").forEach((row) => {
+        const checkbox = row.querySelector(".wizard-source-check");
+        if (checkbox && checkbox.checked) {
+          const sourceIndex = Number(row.dataset.index);
+          const source = wizardState.sources[sourceIndex];
+          if (source) selected.push(source);
+        }
+      });
+      if (!selected.length) {
+        wizardSearchError.textContent = "Select at least one index or alias.";
+        wizardSearchError.classList.remove("d-none");
+        return;
+      }
+      wizardSearchError.classList.add("d-none");
+      openBulkModal(selected);
+    });
+
+    function applyBulkAliasToggle(enabled) {
+      const disabled = !enabled;
+      [bulkAliasPattern, bulkAliasReplace, bulkAliasPrefix, bulkAliasSuffix].forEach((el) => {
+        if (!el) return;
+        el.disabled = disabled;
+      });
+    }
+
+    [bulkRenamePattern, bulkRenameReplace, bulkRenamePrefix, bulkRenameSuffix,
+     bulkAliasPattern, bulkAliasReplace, bulkAliasPrefix, bulkAliasSuffix,
+     bulkOverrideBuffer, bulkOverrideShards, bulkOverrideReplicas, bulkOverrideAliasRemove,
+     bulkOverrideCopyContent, bulkOverrideCopyMapping, bulkOverrideDelete, bulkOverrideAliasEnabled]
+      .forEach((el) => el?.addEventListener("input", renderBulkPreview));
+    bulkAliasEnabled?.addEventListener("change", () => {
+      applyBulkAliasToggle(bulkAliasEnabled.checked);
+      renderBulkPreview();
+    });
+    bulkClose?.addEventListener("click", closeBulkModal);
+    bulkCancel?.addEventListener("click", closeBulkModal);
+
+    bulkConfirm?.addEventListener("click", () => {
+      const rule = buildBulkRule();
+      const overrides = buildOverridesFromBulk();
+      renamePattern.value = rule.rename.pattern;
+      renameReplace.value = rule.rename.replace;
+      renamePrefix.value = rule.rename.prefix;
+      renameSuffix.value = rule.rename.suffix;
+      aliasEnabled.checked = rule.alias.enabled;
+      aliasPattern.value = rule.alias.pattern;
+      aliasReplace.value = rule.alias.replace;
+      aliasPrefix.value = rule.alias.prefix;
+      aliasSuffixRule.value = rule.alias.suffix;
+      applyAliasToggle(aliasEnabled.checked);
+
+      const duplicates = [];
+      wizardState.bulkSources.forEach((source) => {
+        const dest = applyRename(source.name, rule.rename);
+        if (dest.error) return;
+        let aliasName = null;
+        if (rule.alias.enabled) {
+          const aliasResult = applyRename(source.name, rule.alias);
+          if (aliasResult.error) return;
+          if (!rule.alias.pattern && !rule.alias.prefix && !rule.alias.suffix && !rule.alias.replace) {
+            const aliasBase = applyRenameBase(source.name, rule.rename);
+            if (aliasBase.error) return;
+            aliasName = aliasBase.value;
+          } else {
+            aliasName = aliasResult.value;
+          }
+        }
+        if (wizardState.items.some((item) => item.source_name === source.name)) {
+          duplicates.push(source.name);
+          return;
+        }
+        wizardState.items.push({
+          source_name: source.name,
+          dest_base_name: dest.value,
+          alias_base_name: aliasName,
+          overrides: overrides,
+        });
+      });
+      if (duplicates.length) {
+        bulkAddError.textContent = `Already added: ${duplicates.join(", ")}`;
+        bulkAddError.classList.remove("d-none");
+        return;
+      }
+      bulkAddError.classList.add("d-none");
+      renderSelectedItems();
+      closeBulkModal();
+    });
+
+    function overridesSummary(overrides) {
+      if (!overrides) return "inherit";
+      const parts = [];
+      if (overrides.buffer_size !== undefined) parts.push(`buffer=${overrides.buffer_size}`);
+      if (overrides.number_of_shards !== undefined) parts.push(`shards=${overrides.number_of_shards}`);
+      if (overrides.number_of_replicas !== undefined) parts.push(`replicas=${overrides.number_of_replicas}`);
+      if (overrides.copy_content !== undefined) parts.push(`content=${overrides.copy_content}`);
+      if (overrides.copy_mapping !== undefined) parts.push(`mapping=${overrides.copy_mapping}`);
+      if (overrides.delete_if_exists !== undefined) parts.push(`delete=${overrides.delete_if_exists}`);
+      if (overrides.alias_enabled !== undefined) parts.push(`alias=${overrides.alias_enabled}`);
+      if (overrides.alias_remove_if_exists !== undefined) parts.push(`alias_rm=${overrides.alias_remove_if_exists}`);
+      return parts.length ? parts.join(", ") : "inherit";
+    }
+
+    function renderSelectedItems() {
+      const html = wizardState.items.map((item, index) => {
+        const aliasDisplay = item.alias_base_name ? item.alias_base_name : "none";
+        return `
+          <tr data-index="${index}">
+            <td>${item.source_name}</td>
+            <td>${item.dest_base_name}</td>
+            <td>${aliasDisplay}</td>
+            <td class="text-secondary small">${overridesSummary(item.overrides)}</td>
+            <td class="text-end">
+              <button class="btn btn-outline-secondary btn-sm me-2 js-edit-item">Edit</button>
+              <button class="btn btn-outline-danger btn-sm js-remove-item">Remove</button>
+            </td>
+          </tr>`;
+      }).join("");
+      if (wizardSelectedTable) {
+        wizardSelectedTable.querySelector("tbody").innerHTML = html;
+      }
+      if (wizardSelectedTableStep2) {
+        wizardSelectedTableStep2.querySelector("tbody").innerHTML = html;
+      }
+      wizardSelectedCount.textContent = `${wizardState.items.length} items`;
+    }
+
+    wizardSelectedTable?.addEventListener("click", (event) => {
+      const editBtn = event.target.closest(".js-edit-item");
+      const removeBtn = event.target.closest(".js-remove-item");
+      const row = event.target.closest("tr");
+      if (!row) return;
+      const index = Number(row.dataset.index);
+      if (Number.isNaN(index)) return;
+      if (removeBtn) {
+        wizardState.items.splice(index, 1);
+        renderSelectedItems();
+        return;
+      }
+      if (editBtn) {
+        const item = wizardState.items[index];
+        wizardState.editIndex = index;
+        editSourceName.value = item.source_name;
+        editDestName.value = item.dest_base_name;
+        editAliasName.value = item.alias_base_name ?? "";
+        editAliasEnabled.value = item.overrides?.alias_enabled !== undefined
+          ? String(item.overrides.alias_enabled)
+          : "inherit";
+        editAliasRemove.value = item.overrides?.alias_remove_if_exists !== undefined
+          ? String(item.overrides.alias_remove_if_exists)
+          : "inherit";
+        editBufferSize.value = item.overrides?.buffer_size ?? "";
+        editShards.value = item.overrides?.number_of_shards ?? "";
+        editReplicas.value = item.overrides?.number_of_replicas ?? "";
+        editCopyContent.value = item.overrides?.copy_content !== undefined
+          ? String(item.overrides.copy_content)
+          : "inherit";
+        editCopyMapping.value = item.overrides?.copy_mapping !== undefined
+          ? String(item.overrides.copy_mapping)
+          : "inherit";
+        editDelete.value = item.overrides?.delete_if_exists !== undefined
+          ? String(item.overrides.delete_if_exists)
+          : "inherit";
+        editModal.showModal();
+      }
+    });
+
+    function closeEditModal() {
+      editModal.close();
+      wizardState.editIndex = null;
+    }
+    editClose?.addEventListener("click", closeEditModal);
+    editCancel?.addEventListener("click", closeEditModal);
+    editSave?.addEventListener("click", () => {
+      if (wizardState.editIndex === null) return;
+      const item = wizardState.items[wizardState.editIndex];
+      item.dest_base_name = editDestName.value.trim() || item.dest_base_name;
+      item.alias_base_name = editAliasName.value.trim() || null;
+      const overrides = {};
+      const buffer = parseOptionalNumber(editBufferSize.value);
+      const shards = parseOptionalNumber(editShards.value);
+      const replicas = parseOptionalNumber(editReplicas.value);
+      if (buffer !== null) overrides.buffer_size = buffer;
+      if (shards !== null) overrides.number_of_shards = shards;
+      if (replicas !== null) overrides.number_of_replicas = replicas;
+      if (editAliasEnabled.value !== "inherit") overrides.alias_enabled = editAliasEnabled.value === "true";
+      if (editAliasRemove.value !== "inherit") overrides.alias_remove_if_exists = editAliasRemove.value === "true";
+      if (editCopyContent.value !== "inherit") overrides.copy_content = editCopyContent.value === "true";
+      if (editCopyMapping.value !== "inherit") overrides.copy_mapping = editCopyMapping.value === "true";
+      if (editDelete.value !== "inherit") overrides.delete_if_exists = editDelete.value === "true";
+      item.overrides = Object.keys(overrides).length ? overrides : null;
+      renderSelectedItems();
+      closeEditModal();
+    });
+
+    wizardCreate?.addEventListener("click", async () => {
+      if (!wizardState.items.length) {
+        createRunError.textContent = "Select at least one index or alias.";
+        createRunError.classList.remove("d-none");
+        return;
+      }
+      const defaults = getDefaultsPayload();
+      if (!defaults.buffer_size || defaults.buffer_size <= 0) {
+        createRunError.textContent = "Buffer size must be greater than 0.";
+        createRunError.classList.remove("d-none");
+        return;
+      }
+      createRunError.classList.add("d-none");
+      createRunSpinner.classList.remove("d-none");
+      createRunSpinnerLabel.classList.remove("d-none");
+      wizardCreate.disabled = true;
+
+      const payload = {
+        src_endpoint_id: srcEndpointSelect.value,
+        dst_endpoint_id: dstEndpointSelect.value,
+        dry_run: dryRunToggle.checked,
+        index_copy_suffix: null,
+        alias_suffix: null,
+        defaults: defaults,
+        rename: getRenameRulePayload(),
+        alias: getAliasRulePayload(),
+        items: wizardState.items,
+      };
+      try {
+        const response = await fetch(`${basePath}/runs/wizard`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Failed to create run");
+        }
+        if (response.redirected) {
+          window.location.href = response.url;
+          return;
+        }
         closeModal();
       } catch (err) {
         createRunError.textContent = err instanceof Error ? err.message : "Failed to create run";
@@ -398,7 +1784,7 @@
       } finally {
         createRunSpinner.classList.add("d-none");
         createRunSpinnerLabel.classList.add("d-none");
-        submitCreateRun.disabled = false;
+        wizardCreate.disabled = false;
       }
     });
 
@@ -520,6 +1906,7 @@
       if (!runsListEl) return;
       runsListEl.innerHTML = runs.map((run) => {
         const dryRunBadge = run.dry_run ? `<span class="badge bg-azure text-white ms-2">dry run</span>` : "";
+        const wizardBadge = run.wizard ? `<span class="badge bg-indigo text-white ms-2">wizard</span>` : "";
         const stopButton = run.jobs_running > 0
           ? `<button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="${run.id}">Stop all jobs</button>`
           : "";
@@ -532,6 +1919,7 @@
                     ${run.src_name} → ${run.dst_name}
                     <span class="text-secondary fw-normal small ms-2">(${run.id})</span>
                     ${dryRunBadge}
+                    ${wizardBadge}
                   </div>
                   <div class="text-end">
                     <div class="text-secondary">${run.created_at}</div>

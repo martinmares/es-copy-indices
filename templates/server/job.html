@@ -232,7 +232,11 @@
         .replaceAll(highlightStart, '<span class="log-highlight">')
         .replaceAll(highlightEnd, "</span>");
       container.innerHTML = html;
+      requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight;
+      });
     }
+    const MAX_TAIL_LINES = 200;
     const stdoutEl = document.getElementById("stdout");
     const stderrEl = document.getElementById("stderr");
     let stdoutLines = stdoutEl.textContent.split("\n");
@@ -250,20 +254,53 @@
       navigator.clipboard.writeText(stderrLines.join("\n"));
     });
     const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
-    const stream = new EventSource(`${basePath}/runs/{{ run_id }}/jobs/{{ job.id }}/stream`);
+    const stdoutStream = new EventSource(`${basePath}/runs/{{ run_id }}/jobs/{{ job.id }}/stream?stream=stdout`);
+    const stderrStream = new EventSource(`${basePath}/runs/{{ run_id }}/jobs/{{ job.id }}/stream?stream=stderr`);
+    const statusStream = new EventSource(`${basePath}/runs/{{ run_id }}/jobs/{{ job.id }}/status`);
     const jobStatusBadge = document.getElementById("jobStatusBadge");
     const jobProgressMeta = document.getElementById("jobProgressMeta");
-    stream.onmessage = (event) => {
+    function appendLine(target, line) {
+      if (target === "stdout") {
+        stdoutLines.push(line);
+        if (stdoutLines.length > MAX_TAIL_LINES) {
+          stdoutLines = stdoutLines.slice(-MAX_TAIL_LINES);
+        }
+        renderLog(stdoutEl, stdoutLines, stdoutFilter.value.trim());
+      } else {
+        stderrLines.push(line);
+        if (stderrLines.length > MAX_TAIL_LINES) {
+          stderrLines = stderrLines.slice(-MAX_TAIL_LINES);
+        }
+        renderLog(stderrEl, stderrLines, stderrFilter.value.trim());
+      }
+    }
+    stdoutStream.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.stdout_tail) {
           stdoutLines = data.stdout_tail;
           renderLog(stdoutEl, stdoutLines, stdoutFilter.value.trim());
         }
+        if (data.line) {
+          appendLine("stdout", data.line);
+        }
+      } catch (_) {}
+    };
+    stderrStream.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
         if (data.stderr_tail) {
           stderrLines = data.stderr_tail;
           renderLog(stderrEl, stderrLines, stderrFilter.value.trim());
         }
+        if (data.line) {
+          appendLine("stderr", data.line);
+        }
+      } catch (_) {}
+    };
+    statusStream.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
         if (data.status && jobStatusBadge) {
           const classMap = {
             pending: "bg-secondary text-white",

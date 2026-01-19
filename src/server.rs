@@ -123,6 +123,8 @@ struct RunPersist {
     copy_suffix: Option<String>,
     #[serde(default)]
     alias_suffix: Option<String>,
+    #[serde(default)]
+    wizard: Option<WizardSnapshot>,
     stages: Vec<StagePersist>,
     jobs: Vec<JobPersist>,
 }
@@ -166,6 +168,82 @@ struct JobPersist {
     split_doc_count: Option<u64>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct WizardSnapshot {
+    defaults: WizardDefaults,
+    rename: WizardRenameRule,
+    alias: WizardAliasRule,
+    items: Vec<WizardItemSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct WizardDefaults {
+    buffer_size: u64,
+    copy_content: bool,
+    copy_mapping: bool,
+    delete_if_exists: bool,
+    number_of_replicas: Option<u64>,
+    number_of_shards: Option<u64>,
+    alias_enabled: bool,
+    alias_remove_if_exists: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct WizardRenameRule {
+    #[serde(default)]
+    pattern: String,
+    #[serde(default)]
+    replace: String,
+    #[serde(default)]
+    prefix: String,
+    #[serde(default)]
+    suffix: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct WizardAliasRule {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    pattern: String,
+    #[serde(default)]
+    replace: String,
+    #[serde(default)]
+    prefix: String,
+    #[serde(default)]
+    suffix: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct WizardOverrides {
+    #[serde(default)]
+    buffer_size: Option<u64>,
+    #[serde(default)]
+    copy_content: Option<bool>,
+    #[serde(default)]
+    copy_mapping: Option<bool>,
+    #[serde(default)]
+    delete_if_exists: Option<bool>,
+    #[serde(default)]
+    number_of_replicas: Option<u64>,
+    #[serde(default)]
+    number_of_shards: Option<u64>,
+    #[serde(default)]
+    alias_enabled: Option<bool>,
+    #[serde(default)]
+    alias_remove_if_exists: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct WizardItemSnapshot {
+    source_name: String,
+    dest_base_name: String,
+    #[serde(default)]
+    alias_base_name: Option<String>,
+    #[serde(default)]
+    overrides: Option<WizardOverrides>,
+}
+
 #[derive(Clone, Debug)]
 struct RunState {
     id: String,
@@ -176,6 +254,7 @@ struct RunState {
     dry_run: bool,
     copy_suffix: Option<String>,
     alias_suffix: Option<String>,
+    wizard: Option<WizardSnapshot>,
     stages: Vec<StageState>,
     jobs: HashMap<String, JobState>,
 }
@@ -319,13 +398,45 @@ struct TemplateFile {
     indices: Vec<InputIndex>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_false() -> bool {
+    false
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct InputIndex {
     name: String,
     buffer_size: u64,
+    #[serde(default = "default_true")]
+    copy_content: bool,
+    #[serde(default = "default_true")]
+    copy_mapping: bool,
+    #[serde(default = "default_false")]
+    delete_if_exists: bool,
     routing_field: Option<String>,
     number_of_shards: Option<u64>,
     number_of_replicas: Option<u64>,
+    #[serde(default)]
+    dest_name: Option<String>,
+    #[serde(default)]
+    alias_name: Option<String>,
+    #[serde(default = "default_false")]
+    use_dest_name_as_is: bool,
+    #[serde(default = "default_false")]
+    use_alias_name_as_is: bool,
+    #[serde(default = "default_true")]
+    alias_enabled: bool,
+    #[serde(default)]
+    alias_remove_if_exists: Option<bool>,
+    #[serde(default = "default_true")]
+    use_src_prefix: bool,
+    #[serde(default = "default_true")]
+    use_dst_prefix: bool,
+    #[serde(default = "default_true")]
+    use_from_suffix: bool,
     split: Option<SplitConfig>,
     custom: Option<InputCustom>,
 }
@@ -542,6 +653,7 @@ struct RunSummary {
     dry_run: bool,
     copy_suffix: Option<String>,
     alias_suffix: Option<String>,
+    wizard: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -555,6 +667,7 @@ struct RunView {
     dry_run: bool,
     copy_suffix: Option<String>,
     alias_suffix: Option<String>,
+    wizard: Option<WizardSnapshot>,
 }
 
 #[derive(Clone, Serialize)]
@@ -745,6 +858,8 @@ pub async fn run() {
         .route("/", get(index))
         .route("/dashboard", get(index))
         .route("/runs", get(index).post(create_run))
+        .route("/runs/wizard", post(create_run_wizard))
+        .route("/wizard/sources", get(wizard_sources))
         .route("/jobs", get(jobs_view))
         .route("/config", get(config_view))
         .route("/status", get(status_view))
@@ -850,6 +965,35 @@ struct CreateRunForm {
 }
 
 #[derive(Deserialize)]
+struct WizardRunRequest {
+    src_endpoint_id: String,
+    dst_endpoint_id: String,
+    #[serde(default)]
+    dry_run: bool,
+    index_copy_suffix: Option<String>,
+    alias_suffix: Option<String>,
+    defaults: WizardDefaults,
+    rename: WizardRenameRule,
+    alias: WizardAliasRule,
+    items: Vec<WizardItemSnapshot>,
+}
+
+#[derive(Deserialize)]
+struct WizardSourcesQuery {
+    src_endpoint_id: String,
+    pattern: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WizardSourceItem {
+    name: String,
+    kind: String,
+    docs: Option<u64>,
+    size: Option<String>,
+    indices: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct MaxConcurrentForm {
     delta: Option<i32>,
     value: Option<usize>,
@@ -894,6 +1038,328 @@ async fn create_run(
         )
             .into_response(),
     }
+}
+
+async fn create_run_wizard(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<WizardRunRequest>,
+) -> impl IntoResponse {
+    let src_endpoint = match endpoint_by_id(&state, &payload.src_endpoint_id) {
+        Some(endpoint) => endpoint.clone(),
+        None => return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response(),
+    };
+    let dst_endpoint = match endpoint_by_id(&state, &payload.dst_endpoint_id) {
+        Some(endpoint) => endpoint.clone(),
+        None => return (StatusCode::BAD_REQUEST, "Unknown destination endpoint").into_response(),
+    };
+    if payload.items.is_empty() {
+        return (StatusCode::BAD_REQUEST, "No indices selected").into_response();
+    }
+
+    let copy_suffix_override = None;
+    let alias_suffix_override = None;
+    let defaults = payload.defaults.clone();
+
+    let mut jobs = Vec::new();
+    for item in &payload.items {
+        if item.source_name.trim().is_empty() || item.dest_base_name.trim().is_empty() {
+            return (StatusCode::BAD_REQUEST, "Missing index name").into_response();
+        }
+        let overrides = item.overrides.clone().unwrap_or_default();
+        let buffer_size = overrides.buffer_size.unwrap_or(defaults.buffer_size);
+        if buffer_size == 0 {
+            return (StatusCode::BAD_REQUEST, "buffer_size must be > 0").into_response();
+        }
+        let copy_content = overrides.copy_content.unwrap_or(defaults.copy_content);
+        let copy_mapping = overrides.copy_mapping.unwrap_or(defaults.copy_mapping);
+        let delete_if_exists = overrides.delete_if_exists.unwrap_or(defaults.delete_if_exists);
+        let number_of_replicas = overrides
+            .number_of_replicas
+            .or(defaults.number_of_replicas);
+        let number_of_shards = overrides
+            .number_of_shards
+            .or(defaults.number_of_shards);
+        let alias_enabled = overrides
+            .alias_enabled
+            .unwrap_or(defaults.alias_enabled && payload.alias.enabled);
+        let alias_remove_if_exists = overrides
+            .alias_remove_if_exists
+            .unwrap_or(defaults.alias_remove_if_exists);
+        let alias_base = if alias_enabled {
+            item.alias_base_name
+                .clone()
+                .or_else(|| Some(item.dest_base_name.clone()))
+        } else {
+            None
+        };
+
+        let index = InputIndex {
+            name: item.source_name.clone(),
+            buffer_size,
+            copy_content,
+            copy_mapping,
+            delete_if_exists,
+            routing_field: None,
+            number_of_shards,
+            number_of_replicas,
+            dest_name: Some(item.dest_base_name.clone()),
+            alias_name: alias_base,
+            use_dest_name_as_is: true,
+            use_alias_name_as_is: alias_enabled,
+            alias_enabled,
+            alias_remove_if_exists: Some(alias_remove_if_exists),
+            use_src_prefix: false,
+            use_dst_prefix: false,
+            use_from_suffix: false,
+            split: None,
+            custom: None,
+        };
+        jobs.push(JobPlan {
+            name: format!("{}-{}", DEFAULT_STAGE_NAME, item.source_name),
+            index,
+            date_from: None,
+            date_to: None,
+            leftover: false,
+            split_doc_count: None,
+        });
+    }
+
+    let stages = vec![StagePlan {
+        name: DEFAULT_STAGE_NAME.to_string(),
+        jobs,
+    }];
+    let template_snapshot = TemplateSnapshot {
+        id: "wizard".to_string(),
+        name: "Wizard selection".to_string(),
+        path: "".to_string(),
+        number_of_replicas: defaults.number_of_replicas,
+    };
+    let wizard_snapshot = WizardSnapshot {
+        defaults: defaults.clone(),
+        rename: payload.rename.clone(),
+        alias: payload.alias.clone(),
+        items: payload.items.clone(),
+    };
+
+    match create_run_state_from_stages(
+        &state,
+        stages,
+        template_snapshot,
+        &src_endpoint,
+        &dst_endpoint,
+        payload.dry_run,
+        copy_suffix_override,
+        alias_suffix_override,
+        Some(wizard_snapshot),
+    )
+    .await
+    {
+        Ok(run_id) => Redirect::to(&with_base(&state, &format!("/runs/{}", run_id)))
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create run: {}", err),
+        )
+            .into_response(),
+    }
+}
+
+async fn wizard_sources(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<WizardSourcesQuery>,
+) -> impl IntoResponse {
+    let src_endpoint = match endpoint_by_id(&state, &query.src_endpoint_id) {
+        Some(endpoint) => endpoint.clone(),
+        None => return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response(),
+    };
+    let pattern = query.pattern.unwrap_or_else(|| "*".to_string());
+    let pattern = if pattern.trim().is_empty() {
+        "*".to_string()
+    } else {
+        pattern.trim().to_string()
+    };
+
+    let indices = match fetch_cat_indices(&state, &src_endpoint, &pattern).await {
+        Ok(items) => items,
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, err).into_response();
+        }
+    };
+    let aliases = match fetch_cat_aliases(&state, &src_endpoint, &pattern).await {
+        Ok(items) => items,
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, err).into_response();
+        }
+    };
+
+    let mut items = Vec::new();
+    items.extend(indices);
+    items.extend(aliases);
+    Json(items).into_response()
+}
+
+#[derive(Deserialize)]
+struct CatIndexRow {
+    index: String,
+    #[serde(rename = "docs.count")]
+    docs_count: Option<String>,
+    #[serde(rename = "store.size")]
+    store_size: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CatAliasRow {
+    alias: String,
+    index: String,
+}
+
+async fn fetch_cat_indices(
+    state: &Arc<AppState>,
+    endpoint: &EndpointConfig,
+    pattern: &str,
+) -> Result<Vec<WizardSourceItem>, String> {
+    let url = format!("{}/_cat/indices", endpoint.url);
+    let mut request = state
+        .client
+        .get(&url)
+        .query(&[
+            ("format", "json"),
+            ("h", "index,docs.count,store.size"),
+            ("index", pattern),
+        ]);
+    if let Some(auth) = &endpoint.auth {
+        request = request.basic_auth(auth.username.clone(), auth.password.clone());
+    }
+    let response = request
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to list indices: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to list indices: {}",
+            response.status()
+        ));
+    }
+    let rows = response
+        .json::<Vec<CatIndexRow>>()
+        .await
+        .map_err(|e| format!("Failed to parse indices response: {e}"))?;
+    let items = rows
+        .into_iter()
+        .map(|row| WizardSourceItem {
+            name: row.index,
+            kind: "index".to_string(),
+            docs: row
+                .docs_count
+                .and_then(|value| value.replace(',', "").parse::<u64>().ok()),
+            size: row.store_size,
+            indices: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    Ok(items)
+}
+
+async fn fetch_cat_aliases(
+    state: &Arc<AppState>,
+    endpoint: &EndpointConfig,
+    pattern: &str,
+) -> Result<Vec<WizardSourceItem>, String> {
+    let url = format!("{}/_cat/aliases", endpoint.url);
+    let mut request = state
+        .client
+        .get(&url)
+        .query(&[("format", "json"), ("h", "alias,index"), ("name", pattern)]);
+    if let Some(auth) = &endpoint.auth {
+        request = request.basic_auth(auth.username.clone(), auth.password.clone());
+    }
+    let response = request
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to list aliases: {e}"))?;
+    let rows = if response.status().is_success() {
+        response
+            .json::<Vec<CatAliasRow>>()
+            .await
+            .map_err(|e| format!("Failed to parse aliases response: {e}"))?
+    } else if response.status() == StatusCode::BAD_REQUEST && pattern != "*" {
+        // Some ES versions reject the name filter for _cat/aliases; fallback to client-side filtering.
+        let mut fallback = state
+            .client
+            .get(&url)
+            .query(&[("format", "json"), ("h", "alias,index")]);
+        if let Some(auth) = &endpoint.auth {
+            fallback = fallback.basic_auth(auth.username.clone(), auth.password.clone());
+        }
+        let fallback_response = fallback
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to list aliases: {e}"))?;
+        if !fallback_response.status().is_success() {
+            return Err(format!(
+                "Failed to list aliases: {}",
+                fallback_response.status()
+            ));
+        }
+        let all_rows = fallback_response
+            .json::<Vec<CatAliasRow>>()
+            .await
+            .map_err(|e| format!("Failed to parse aliases response: {e}"))?;
+        all_rows
+            .into_iter()
+            .filter(|row| wildcard_match(&row.alias, pattern))
+            .collect()
+    } else {
+        return Err(format!(
+            "Failed to list aliases: {}",
+            response.status()
+        ));
+    };
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        map.entry(row.alias).or_default().push(row.index);
+    }
+    let mut items = Vec::new();
+    for (alias, indices) in map {
+        items.push(WizardSourceItem {
+            name: alias,
+            kind: "alias".to_string(),
+            docs: None,
+            size: None,
+            indices,
+        });
+    }
+    Ok(items)
+}
+
+fn wildcard_match(value: &str, pattern: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    let pattern = pattern.to_ascii_lowercase();
+    wildcard_match_bytes(value.as_bytes(), pattern.as_bytes())
+}
+
+fn wildcard_match_bytes(value: &[u8], pattern: &[u8]) -> bool {
+    let mut dp = vec![false; pattern.len() + 1];
+    dp[0] = true;
+    for (i, &p) in pattern.iter().enumerate() {
+        if p == b'*' {
+            dp[i + 1] = dp[i];
+        }
+    }
+    for &c in value {
+        let mut next = vec![false; pattern.len() + 1];
+        for (i, &p) in pattern.iter().enumerate() {
+            match p {
+                b'?' => next[i + 1] = dp[i],
+                b'*' => next[i + 1] = next[i] || dp[i + 1],
+                _ => next[i + 1] = dp[i] && p == c,
+            }
+        }
+        dp = next;
+    }
+    dp[pattern.len()]
 }
 
 async fn update_max_concurrent_jobs(
@@ -2261,6 +2727,7 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
                 dry_run: run.dry_run,
                 copy_suffix: run.copy_suffix.clone(),
                 alias_suffix: run.alias_suffix.clone(),
+                wizard: run.wizard.is_some(),
             });
         }
     }
@@ -2406,6 +2873,7 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
         dry_run: run.dry_run,
         copy_suffix: run.copy_suffix.clone(),
         alias_suffix: run.alias_suffix.clone(),
+        wizard: run.wizard.clone(),
     })
 }
 
@@ -2438,6 +2906,32 @@ async fn create_run_state(
     copy_suffix_override: Option<String>,
     alias_suffix_override: Option<String>,
 ) -> Result<String, String> {
+    let stages = plan_stages(template, state, src_endpoint).await?;
+    create_run_state_from_stages(
+        state,
+        stages,
+        template_snapshot(template),
+        src_endpoint,
+        dst_endpoint,
+        dry_run,
+        copy_suffix_override,
+        alias_suffix_override,
+        None,
+    )
+    .await
+}
+
+async fn create_run_state_from_stages(
+    state: &Arc<AppState>,
+    stages: Vec<StagePlan>,
+    template_snapshot: TemplateSnapshot,
+    src_endpoint: &EndpointConfig,
+    dst_endpoint: &EndpointConfig,
+    dry_run: bool,
+    copy_suffix_override: Option<String>,
+    alias_suffix_override: Option<String>,
+    wizard: Option<WizardSnapshot>,
+) -> Result<String, String> {
     let run_id = unique_run_id(&state.runs_dir);
     let run_dir = state.runs_dir.join(&run_id);
     let configs_dir = run_dir.join("configs");
@@ -2449,7 +2943,6 @@ async fn create_run_state(
         .await
         .map_err(|e| e.to_string())?;
 
-    let stages = plan_stages(template, state, src_endpoint).await?;
     let copy_suffix = if let Some(raw) = copy_suffix_override {
         if raw.is_empty() { None } else { Some(raw) }
     } else {
@@ -2538,12 +3031,13 @@ async fn create_run_state(
     let run_state = RunState {
         id: run_id.clone(),
         created_at,
-        template: template_snapshot(template),
+        template: template_snapshot,
         src_endpoint: endpoint_snapshot(src_endpoint),
         dst_endpoint: endpoint_snapshot(dst_endpoint),
         dry_run,
         copy_suffix: copy_suffix.clone(),
         alias_suffix: alias_suffix.clone(),
+        wizard,
         stages: stage_states,
         jobs: job_states,
     };
@@ -2710,6 +3204,7 @@ async fn load_runs(state: &AppState) {
                     dry_run: persist.dry_run,
                     copy_suffix: persist.copy_suffix,
                     alias_suffix: persist.alias_suffix,
+                    wizard: persist.wizard,
                     stages,
                     jobs: job_map,
                 };
@@ -2806,6 +3301,7 @@ fn run_snapshot(run: &RunState) -> RunPersist {
         dry_run: run.dry_run,
         copy_suffix: run.copy_suffix.clone(),
         alias_suffix: run.alias_suffix.clone(),
+        wizard: run.wizard.clone(),
         stages,
         jobs,
     }
@@ -3393,22 +3889,42 @@ fn build_output_config(
         .number_of_replicas
         .unwrap_or(dst_endpoint.number_of_replicas);
 
-    let index_name = build_index_name(
-        &src_endpoint.prefix,
-        &job.index.name,
-        state.from_suffix.as_deref(),
-    );
-    let name_of_copy = build_name_of_copy(
-        &dst_endpoint.prefix,
-        &job.index.name,
-        &timestamp,
-        copy_suffix,
-    );
-    let alias_name = build_alias_name(
-        &dst_endpoint.prefix,
-        &job.index.name,
-        alias_suffix,
-    );
+    let src_prefix = if job.index.use_src_prefix {
+        src_endpoint.prefix.as_str()
+    } else {
+        ""
+    };
+    let dst_prefix = if job.index.use_dst_prefix {
+        dst_endpoint.prefix.as_str()
+    } else {
+        ""
+    };
+    let from_suffix = if job.index.use_from_suffix {
+        state.from_suffix.as_deref()
+    } else {
+        None
+    };
+    let index_name = build_index_name(src_prefix, &job.index.name, from_suffix);
+    let dest_base_name = job
+        .index
+        .dest_name
+        .as_deref()
+        .unwrap_or(&job.index.name);
+    let name_of_copy = if job.index.use_dest_name_as_is {
+        dest_base_name.to_string()
+    } else {
+        build_name_of_copy(dst_prefix, dest_base_name, &timestamp, copy_suffix)
+    };
+    let alias_base_name = job
+        .index
+        .alias_name
+        .as_deref()
+        .unwrap_or(dest_base_name);
+    let alias_name = if job.index.use_alias_name_as_is {
+        alias_base_name.to_string()
+    } else {
+        build_alias_name(dst_prefix, alias_base_name, alias_suffix)
+    };
 
     let mut custom_mapping = job
         .index
@@ -3446,7 +3962,11 @@ fn build_output_config(
     }
 
     let has_custom = custom_mapping.is_some() || custom_query.is_some();
-    let copy_mapping = !custom_mapping.is_some();
+    let copy_mapping = if custom_mapping.is_some() {
+        false
+    } else {
+        job.index.copy_mapping
+    };
 
     let routing_field = job.index.routing_field.clone();
     let pre_create_doc_source = routing_field.as_ref().map(|_| {
@@ -3479,11 +3999,15 @@ fn build_output_config(
         },
     ];
 
+    let alias_remove_if_exists = job
+        .index
+        .alias_remove_if_exists
+        .unwrap_or(state.alias_remove_if_exists);
     let index = OutputIndex {
         buffer_size: job.index.buffer_size,
-        copy_content: true,
+        copy_content: job.index.copy_content,
         copy_mapping,
-        delete_if_exists: false,
+        delete_if_exists: job.index.delete_if_exists,
         from: "es-source".to_string(),
         keep_alive: src_endpoint.keep_alive.clone(),
         name: index_name,
@@ -3493,10 +4017,14 @@ fn build_output_config(
         to: "es-destination".to_string(),
         routing_field,
         pre_create_doc_source,
-        alias: Some(OutputAlias {
-            name: alias_name,
-            remove_if_exists: state.alias_remove_if_exists,
-        }),
+        alias: if job.index.alias_enabled {
+            Some(OutputAlias {
+                name: alias_name,
+                remove_if_exists: alias_remove_if_exists,
+            })
+        } else {
+            None
+        },
         custom: if has_custom {
             Some(OutputCustom {
                 query: custom_query,
