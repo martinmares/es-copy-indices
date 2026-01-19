@@ -1,0 +1,16 @@
+{
+  "mappings": {
+    "properties": {
+      "join": {
+        "eager_global_ordinals": true,
+        "relations": {
+          "parent": "child"
+        },
+        "type": "join"
+      },
+      "message": {
+        "type": "text"
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "mappings": {
+    "properties": {
+      "message": {
+        "type": "text"
+      },
+      "timestamp": {
+        "type": "date"
+      }
+    }
+  }
+}

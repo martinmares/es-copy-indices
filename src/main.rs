@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod audit_builder;
+mod backup;
 mod conf;
 mod es_client;
 mod models;
@@ -16,8 +17,64 @@ use tracing_subscriber;
 use tracing_subscriber::EnvFilter;
 // use env_logger::Env;
 // use log::{error, info, warn};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use chrono::Utc;
 use twelf::Layer;
+use crate::backup::{BackupChunkWriter, BackupDoc, BackupIndexCatalog, BackupIndexEntry, BackupMetadata};
+
+fn resolve_backup_dir(config_path: &Path, dir: &str) -> PathBuf {
+    let dir_path = PathBuf::from(dir);
+    if dir_path.is_absolute() {
+        dir_path
+    } else {
+        config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(dir)
+    }
+}
+
+fn validate_endpoint_for_backup(endpoint: &conf::Endpoint) -> Result<(), String> {
+    if endpoint.has_backup_dir() {
+        if !endpoint.get_url().is_empty() {
+            return Err(format!(
+                "endpoint '{}' has backup_dir and url set; remove url for backup endpoints",
+                endpoint.get_name()
+            ));
+        }
+        if endpoint.is_basic_auth() {
+            return Err(format!(
+                "endpoint '{}' has backup_dir and basic_auth set; remove auth for backup endpoints",
+                endpoint.get_name()
+            ));
+        }
+    } else if endpoint.get_url().is_empty() {
+        return Err(format!(
+            "endpoint '{}' missing url (required for ES endpoints)",
+            endpoint.get_name()
+        ));
+    }
+    Ok(())
+}
+
+fn get_endpoint<'a>(endpoints: &'a Vec<conf::Endpoint>, name: &String) -> Option<&'a conf::Endpoint> {
+    endpoints.iter().find(|endpoint| endpoint.get_name() == name)
+}
+
+fn apply_settings_overrides(settings_value: &mut serde_json::Value, index: &conf::Index) {
+    if let Some(settings_val) = settings_value.get_mut("settings") {
+        if let Some(index_val) = settings_val.get_mut("index") {
+            index_val.as_object_mut().unwrap().insert(
+                "number_of_shards".to_string(),
+                index.get_number_of_shards().into(),
+            );
+            index_val.as_object_mut().unwrap().insert(
+                "number_of_replicas".to_string(),
+                index.get_number_of_replicas().into(),
+            );
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -62,6 +119,13 @@ async fn main() {
         }
     }
 
+    for endpoint in config.get_endpoints() {
+        if let Err(message) = validate_endpoint_for_backup(endpoint) {
+            error!("Invalid endpoint configuration: {}", message);
+            panic!("Invalid endpoint configuration!");
+        }
+    }
+
     for index in config.get_indices() {
         let mut indices_names: Vec<String> = vec![];
         // if index.is_multiple() {
@@ -75,17 +139,40 @@ async fn main() {
         let from = index.get_from();
         let to = index.get_to();
 
-        // Initialize SOURCE client
-        let mut source_es_client = utils::create_es_client(config.get_endpoints(), from)
-            .await
-            .expect("Create source elastic client failed!");
-        source_es_client.print_server_info(from);
+        let from_endpoint = get_endpoint(config.get_endpoints(), from)
+            .unwrap_or_else(|| panic!("Missing endpoint '{}'", from));
+        let to_endpoint = get_endpoint(config.get_endpoints(), to)
+            .unwrap_or_else(|| panic!("Missing endpoint '{}'", to));
 
-        // Initialize DESTINATION client
-        let mut destination_es_client = utils::create_es_client(config.get_endpoints(), to)
-            .await
-            .expect("Create destination elastic client failed!");
-        destination_es_client.print_server_info(to);
+        let from_backup = from_endpoint.has_backup_dir();
+        let to_backup = to_endpoint.has_backup_dir();
+
+        if from_backup && to_backup {
+            panic!(
+                "Both source and destination endpoints have backup_dir for index '{}'",
+                index.get_name()
+            );
+        }
+
+        let mut source_es_client = if !from_backup {
+            let mut client = utils::create_es_client(config.get_endpoints(), from)
+                .await
+                .expect("Create source elastic client failed!");
+            client.print_server_info(from);
+            Some(client)
+        } else {
+            None
+        };
+
+        let mut destination_es_client = if !to_backup {
+            let mut client = utils::create_es_client(config.get_endpoints(), to)
+                .await
+                .expect("Create destination elastic client failed!");
+            client.print_server_info(to);
+            Some(client)
+        } else {
+            None
+        };
 
         let mut index_name_of_copy = match index.get_name_of_copy() {
             Some(name) => name,
@@ -93,7 +180,14 @@ async fn main() {
         };
 
         if index.is_multiple() {
-            indices_names = source_es_client.get_indices_names(&index.get_name()).await;
+            if from_backup {
+                panic!("Multiple index backup patterns are not supported from backup_dir");
+            }
+            indices_names = source_es_client
+                .as_mut()
+                .unwrap()
+                .get_indices_names(&index.get_name())
+                .await;
             info!(
                 "Copying multiple indices ... {:?} ...",
                 indices_names.iter().take(5).collect::<Vec<_>>()
@@ -108,6 +202,278 @@ async fn main() {
                 index_name_of_copy = index_name;
             }
 
+            if to_backup {
+                let backup_dir = resolve_backup_dir(
+                    config_path.as_path(),
+                    to_endpoint.get_backup_dir().as_ref().unwrap(),
+                );
+                let index_dir = backup_dir.join(index_name);
+                let data_dir = index_dir.join("data");
+                if let Err(err) = backup::ensure_dir(&data_dir) {
+                    panic!("Failed to create backup directories: {:?}", err);
+                }
+
+                let backup_catalog_path = backup_dir.join("indices.json");
+                let mut catalog = BackupIndexCatalog::default();
+                if backup_catalog_path.exists() {
+                    catalog = backup::load_catalog(&backup_catalog_path);
+                }
+
+                let mapping = source_es_client
+                    .as_mut()
+                    .unwrap()
+                    .fetch_mappings(index_name)
+                    .await
+                    .expect("Failed to fetch mappings");
+                let (settings, original_shards, original_replicas) = source_es_client
+                    .as_mut()
+                    .unwrap()
+                    .fetch_settings(index_name)
+                    .await
+                    .expect("Failed to fetch settings");
+
+                let mut metadata = BackupMetadata {
+                    created_at: Utc::now().to_rfc3339(),
+                    from_endpoint: from.to_string(),
+                    to_endpoint: to.to_string(),
+                    index_name: index_name.to_string(),
+                    name_of_copy: index.get_name_of_copy().clone(),
+                    alias_name: index.get_alias_name(),
+                    alias_remove_if_exists: index.is_alias_remove_if_exists(),
+                    routing_field: index.get_routing_field().clone(),
+                    pre_create_doc_ids: index.is_pre_create_doc_ids(),
+                    pre_create_doc_source: index.get_pre_create_doc_source().to_string(),
+                    scroll_mode: index.get_scroll_mode().clone(),
+                    buffer_size: index.get_buffer_size(),
+                    copy_mapping: index.is_copy_mapping(),
+                    copy_content: index.is_copy_content(),
+                    delete_if_exists: index.is_delete_if_exists(),
+                    custom: index.get_custom().clone(),
+                    original_number_of_shards: original_shards,
+                    original_number_of_replicas: original_replicas,
+                    docs_total: None,
+                };
+
+                if let Err(err) = backup::write_json_file(&index_dir.join("mappings.json"), &mapping) {
+                    panic!("Failed to write mappings.json: {:?}", err);
+                }
+                if let Err(err) = backup::write_json_file(&index_dir.join("settings.json"), &settings) {
+                    panic!("Failed to write settings.json: {:?}", err);
+                }
+
+                if index.is_copy_content() {
+                    let max_bytes = index.get_buffer_size().saturating_mul(1024 * 1024);
+                    let mut writer = BackupChunkWriter::new(data_dir.clone(), max_bytes.max(1));
+                    source_es_client
+                        .as_mut()
+                        .unwrap()
+                        .scroll_start(index, index_name)
+                        .await;
+                    while source_es_client.as_mut().unwrap().has_docs() {
+                        if let Some(docs) = source_es_client.as_mut().unwrap().get_docs() {
+                            for doc in docs {
+                                let source_value: serde_json::Value =
+                                    serde_json::from_str(doc.get_source()).unwrap_or_default();
+                                let backup_doc = BackupDoc {
+                                    id: doc.get_id().to_string(),
+                                    doc_type: doc.get_doc_type().to_string(),
+                                    source: source_value,
+                                };
+                                if let Err(err) = writer.write_doc(&backup_doc) {
+                                    panic!("Failed to write backup chunk: {:?}", err);
+                                }
+                            }
+                        }
+                        source_es_client
+                            .as_mut()
+                            .unwrap()
+                            .scroll_next(index)
+                            .await;
+                    }
+                    metadata.docs_total = Some(source_es_client.as_mut().unwrap().get_total_size());
+                    source_es_client.as_mut().unwrap().scroll_stop().await;
+                    if let Err(err) = writer.finish() {
+                        panic!("Failed to finish backup chunk: {:?}", err);
+                    }
+                }
+
+                if let Err(err) =
+                    backup::write_json_file(&index_dir.join("metadata.json"), &metadata)
+                {
+                    panic!("Failed to write metadata.json: {:?}", err);
+                }
+
+                catalog.indices.push(BackupIndexEntry {
+                    name: index_name.to_string(),
+                    dir: index_name.to_string(),
+                    created_at: Utc::now().to_rfc3339(),
+                    docs_total: metadata.docs_total,
+                });
+                if let Err(err) = backup::save_catalog(&backup_catalog_path, &catalog) {
+                    warn!("Failed to update indices.json: {:?}", err);
+                }
+
+                info!("Backup completed for {}", index_name);
+                continue;
+            }
+
+            if from_backup {
+                let backup_dir = resolve_backup_dir(
+                    config_path.as_path(),
+                    from_endpoint.get_backup_dir().as_ref().unwrap(),
+                );
+                let index_dir = backup_dir.join(index_name);
+                let data_dir = index_dir.join("data");
+
+                let mapping: serde_json::Value =
+                    backup::read_json_file(&index_dir.join("mappings.json"))
+                        .expect("Failed to read mappings.json");
+                let mut settings: serde_json::Value =
+                    backup::read_json_file(&index_dir.join("settings.json"))
+                        .expect("Failed to read settings.json");
+
+                apply_settings_overrides(&mut settings, index);
+
+                let mappings_value = mapping
+                    .get("mappings")
+                    .cloned()
+                    .unwrap_or_else(|| mapping.clone());
+                let settings_value = settings
+                    .get("settings")
+                    .cloned()
+                    .unwrap_or_else(|| settings.clone());
+
+                let dest_name = match index.get_name_of_copy() {
+                    Some(name) => name,
+                    None => index.get_name(),
+                };
+
+                if index.is_copy_mapping() {
+                    let resp = destination_es_client
+                        .as_mut()
+                        .unwrap()
+                        .create_index_with_mapping_settings(
+                            dest_name,
+                            &settings_value,
+                            &mappings_value,
+                        )
+                        .await;
+                    if let Some(value) = resp {
+                        info!("Index mappings and settings (response: {})", value);
+                    }
+                } else if index.is_custom_mapping() {
+                    let _ = destination_es_client
+                        .as_mut()
+                        .unwrap()
+                        .apply_custom_mappings(index, &dest_name.to_string())
+                        .await;
+                }
+
+                if index.is_copy_content() {
+                    let files = backup::list_data_files(&data_dir)
+                        .expect("Failed to list backup data files");
+                    for file in files {
+                        let docs = backup::read_backup_docs(&file)
+                            .expect("Failed to read backup data file");
+                        let is_routing_field = index.is_routing_field();
+                        let routing_field = index.get_routing_field().clone();
+                        let mut bulk_body_pre_create = String::new();
+                        let mut bulk_body = String::new();
+                        let server_major_version = destination_es_client
+                            .as_ref()
+                            .unwrap()
+                            .get_server_major_version();
+
+                        let mut pre_create_doc_ids = backup::extract_routing_ids(&docs, &routing_field);
+                        for doc in docs {
+                            let mut add_routing_to_bulk: Option<String> = None;
+                            if is_routing_field {
+                                if let Some(pointer) = &routing_field {
+                                    if let Some(value) = doc.source.pointer(pointer) {
+                                        if let Some(id) = value.as_str() {
+                                            add_routing_to_bulk = Some(id.to_string());
+                                            if index.is_pre_create_doc_ids() {
+                                                pre_create_doc_ids.insert(id.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let id = doc.id;
+                            let doc_type = doc.doc_type;
+                            if server_major_version <= 7 {
+                                if let Some(id_routing) = add_routing_to_bulk {
+                                    bulk_body.push_str(&format!(
+                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\", \"routing\": \"{}\" }} }}",
+                                        "index", dest_name, doc_type, id, id_routing));
+                                } else {
+                                    bulk_body.push_str(&format!(
+                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                        "index", dest_name, doc_type, id));
+                                }
+                            } else {
+                                if let Some(id_routing) = add_routing_to_bulk {
+                                    bulk_body.push_str(&format!(
+                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\", \"routing\": \"{}\" }} }}",
+                                        "index", dest_name, id, id_routing
+                                    ));
+                                } else {
+                                    bulk_body.push_str(&format!(
+                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                        "index", dest_name, id
+                                    ));
+                                }
+                            }
+                            bulk_body.push_str("\n");
+                            bulk_body.push_str(&serde_json::to_string(&doc.source).unwrap());
+                            bulk_body.push_str("\n");
+                        }
+
+                        if is_routing_field && !pre_create_doc_ids.is_empty() && index.is_pre_create_doc_ids() {
+                            for id_parent in pre_create_doc_ids {
+                                if server_major_version <= 7 {
+                                    bulk_body_pre_create.push_str(&format!(
+                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                        "create", dest_name, "_doc", id_parent));
+                                } else {
+                                    bulk_body_pre_create.push_str(&format!(
+                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                        "create", dest_name, id_parent
+                                    ));
+                                }
+                                bulk_body_pre_create.push_str("\n");
+                                bulk_body_pre_create
+                                    .push_str(index.get_pre_create_doc_source());
+                                bulk_body_pre_create.push_str("\n");
+                            }
+                        }
+
+                        if !bulk_body_pre_create.is_empty() {
+                            let _ = destination_es_client
+                                .as_mut()
+                                .unwrap()
+                                .post_bulk(dest_name, &bulk_body_pre_create)
+                                .await;
+                        }
+
+                        let _ = destination_es_client
+                            .as_mut()
+                            .unwrap()
+                            .post_bulk(dest_name, &bulk_body)
+                            .await;
+                    }
+                }
+
+                destination_es_client
+                    .as_mut()
+                    .unwrap()
+                    .create_alias(index)
+                    .await;
+
+                info!("Restore completed for {}", index_name);
+                continue;
+            }
+
             if !index.is_multiple() {
                 if index.is_copy_mapping() {
                     info!(
@@ -115,8 +481,10 @@ async fn main() {
                         index_name, from, to
                     );
                     source_es_client
+                        .as_mut()
+                        .unwrap()
                         .copy_mappings_to(
-                            &mut destination_es_client,
+                            destination_es_client.as_mut().unwrap(),
                             &index,
                             index_name,
                             index_name_of_copy,
@@ -128,8 +496,10 @@ async fn main() {
                         index_name, from, to
                     );
                     source_es_client
+                        .as_mut()
+                        .unwrap()
                         .copy_custom_mappings_to(
-                            &mut destination_es_client,
+                            destination_es_client.as_mut().unwrap(),
                             &index,
                             index_name_of_copy,
                         )
@@ -149,13 +519,17 @@ async fn main() {
                     audit_builder = Some(AuditBuilder::new(audit_file).await);
                 }
 
-                source_es_client.scroll_start(index, index_name).await;
+                source_es_client
+                    .as_mut()
+                    .unwrap()
+                    .scroll_start(index, index_name)
+                    .await;
 
                 memory_stats!();
 
-                while source_es_client.has_docs() {
-                    let total = source_es_client.get_total_size();
-                    let counter = source_es_client.get_docs_counter();
+                while source_es_client.as_mut().unwrap().has_docs() {
+                    let total = source_es_client.as_mut().unwrap().get_total_size();
+                    let counter = source_es_client.as_mut().unwrap().get_docs_counter();
 
                     info!(
                         "Iterate {} - docs {}/{} ({:.2} %)",
@@ -167,8 +541,10 @@ async fn main() {
 
                     // pre create parent->child docs and post bulk insert docs
                     source_es_client
+                        .as_mut()
+                        .unwrap()
                         .copy_content_to(
-                            &mut destination_es_client,
+                            destination_es_client.as_mut().unwrap(),
                             &index,
                             index_name_of_copy,
                             &mut audit_builder,
@@ -176,11 +552,15 @@ async fn main() {
                         .await;
 
                     // next docs?
-                    source_es_client.scroll_next(index).await;
+                    source_es_client
+                        .as_mut()
+                        .unwrap()
+                        .scroll_next(index)
+                        .await;
 
                     memory_stats!();
                 }
-                source_es_client.scroll_stop().await;
+                source_es_client.as_mut().unwrap().scroll_stop().await;
             } else {
                 warn!(
                     "Copying index content for {} is disabled by config!",
@@ -188,7 +568,11 @@ async fn main() {
                 );
             }
 
-            destination_es_client.create_alias(index).await;
+            destination_es_client
+                .as_mut()
+                .unwrap()
+                .create_alias(index)
+                .await;
 
             memory_stats!();
 

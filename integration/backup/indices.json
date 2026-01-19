@@ -1,0 +1,16 @@
+{
+  "indices": [
+    {
+      "name": "test-index",
+      "dir": "test-index",
+      "created_at": "2026-01-19T23:48:37.476601+00:00",
+      "docs_total": 3
+    },
+    {
+      "name": "pc-index",
+      "dir": "pc-index",
+      "created_at": "2026-01-19T23:48:37.774276+00:00",
+      "docs_total": 2
+    }
+  ]
+}

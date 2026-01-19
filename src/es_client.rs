@@ -66,6 +66,13 @@ impl EsClient {
         }
     }
 
+    pub fn get_server_major_version(&self) -> u64 {
+        self.server_info
+            .as_ref()
+            .map(|info| info.get_version_major())
+            .unwrap_or(0)
+    }
+
     async fn call_get(
         &mut self,
         path: &str,
@@ -169,6 +176,100 @@ impl EsClient {
         }
 
         // todo!("Implement empty response!")
+    }
+
+    pub async fn post_bulk(
+        &mut self,
+        index_name: &str,
+        body: &String,
+    ) -> (u16, Option<String>, Option<String>) {
+        self.call_post(
+            &format!("/{}/_bulk", index_name),
+            &vec![],
+            &vec![("Content-Type".to_string(), "application/json".to_string())],
+            body,
+        )
+        .await
+    }
+
+    pub async fn create_index_with_mapping_settings(
+        &mut self,
+        index_name: &str,
+        settings: &Value,
+        mappings: &Value,
+    ) -> Option<String> {
+        self.call_put(
+            &format!("/{}", index_name),
+            &vec![],
+            &vec![("Content-Type".to_string(), "application/json".to_string())],
+            &format!(
+                "{{ \"settings\": {}, \"mappings\": {} }}",
+                settings.to_string(),
+                mappings.to_string()
+            ),
+        )
+        .await
+    }
+
+    pub async fn fetch_mappings(&mut self, index_name: &str) -> Option<Value> {
+        let resp = self
+            .call_get(&format!("/{}/_mapping", index_name), &vec![], &vec![])
+            .await?;
+        let json_value: serde_json::Value = serde_json::from_str(&resp).ok()?;
+        let obj = json_value.as_object()?;
+        if obj.keys().len() != 1 {
+            return None;
+        }
+        let key = obj.keys().next()?;
+        obj.get(key).cloned()
+    }
+
+    pub async fn fetch_settings(
+        &mut self,
+        index_name: &str,
+    ) -> Option<(Value, Option<u64>, Option<u64>)> {
+        let resp = self
+            .call_get(&format!("/{}/_settings", index_name), &vec![], &vec![])
+            .await?;
+        let json_value: serde_json::Value = serde_json::from_str(&resp).ok()?;
+        let obj = json_value.as_object()?;
+        if obj.keys().len() != 1 {
+            return None;
+        }
+        let key = obj.keys().next()?;
+        let mut value = obj.get(key)?.clone();
+        let mut original_shards: Option<u64> = None;
+        let mut original_replicas: Option<u64> = None;
+        if let Some(settings_val) = value.get_mut("settings") {
+            if let Some(index_val) = settings_val.get_mut("index") {
+                if let Some(value) = index_val.get("number_of_shards").and_then(|v| v.as_str()) {
+                    original_shards = value.parse::<u64>().ok();
+                } else if let Some(value) = index_val.get("number_of_shards").and_then(|v| v.as_u64()) {
+                    original_shards = Some(value);
+                }
+                if let Some(value) = index_val.get("number_of_replicas").and_then(|v| v.as_str()) {
+                    original_replicas = value.parse::<u64>().ok();
+                } else if let Some(value) = index_val.get("number_of_replicas").and_then(|v| v.as_u64()) {
+                    original_replicas = Some(value);
+                }
+
+                let names = vec![
+                    "uuid",
+                    "provided_name",
+                    "creation_date",
+                    "version",
+                    "number_of_shards",
+                    "number_of_replicas",
+                    "mapper",
+                ];
+                for name in names {
+                    if let Some(_) = index_val.get_mut(name) {
+                        index_val.as_object_mut().unwrap().remove(name);
+                    }
+                }
+            }
+        }
+        Some((value, original_shards, original_replicas))
     }
 
     async fn call_put(
@@ -1203,6 +1304,32 @@ impl EsClient {
         } else {
             panic!("No custom mappings found!");
         }
+    }
+
+    #[time("debug")]
+    pub async fn apply_custom_mappings(
+        &mut self,
+        index: &Index,
+        index_name_of_copy: &String,
+    ) -> Option<String> {
+        let custom_mapping = match index.get_custom_mapping() {
+            Some(value) => utils::string_to_json(value).await,
+            _ => None,
+        };
+
+        if let Some(custom_mapping_value) = custom_mapping {
+            let custom_mapping = custom_mapping_value.to_string();
+            info!("Custom mappings and settings found {}", &custom_mapping);
+            return self
+                .call_put(
+                    &format!("/{}", index_name_of_copy),
+                    &vec![],
+                    &vec![("Content-Type".to_string(), "application/json".to_string())],
+                    &custom_mapping,
+                )
+                .await;
+        }
+        None
     }
 
     #[time("debug")]

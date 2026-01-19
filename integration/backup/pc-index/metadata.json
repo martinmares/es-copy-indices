@@ -1,0 +1,21 @@
+{
+  "created_at": "2026-01-19T23:48:37.758514+00:00",
+  "from_endpoint": "es-source",
+  "to_endpoint": "backup",
+  "index_name": "pc-index",
+  "name_of_copy": null,
+  "alias_name": "pc-index-alias",
+  "alias_remove_if_exists": false,
+  "routing_field": "/join/parent",
+  "pre_create_doc_ids": true,
+  "pre_create_doc_source": "{ \"join\": { \"name\": \"parent\" } }",
+  "scroll_mode": "scroll_api",
+  "buffer_size": 1,
+  "copy_mapping": true,
+  "copy_content": true,
+  "delete_if_exists": false,
+  "custom": null,
+  "original_number_of_shards": 1,
+  "original_number_of_replicas": 0,
+  "docs_total": 2
+}

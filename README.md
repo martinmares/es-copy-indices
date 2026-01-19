@@ -19,10 +19,98 @@ CLI utility for copying Elasticsearch indices between clusters, including mappin
 cargo build --release
 ```
 
+## Integration Test (Docker)
+This repo includes a minimal docker-compose based integration test for ES 7.x.
+
+```bash
+./integration/run.sh
+```
+
+It will:
+1) start two local ES nodes (source/destination),
+2) seed a test index,
+3) run a copy,
+4) run backup to disk,
+5) restore into a new index,
+6) verify doc counts (including a routing parent/child test), then shut everything down.
+
 ## Usage
 ```bash
 RUST_LOG=info ./target/release/es-copy-indices -c ./conf/main.toml
 ```
+
+## Backup/Restore Mode (CLI)
+`es-copy-indices` can back up indices to disk or restore them back to Elasticsearch without running a proxy. The mode is detected by `backup_dir` on the endpoint:
+
+- **Backup**: destination endpoint has `backup_dir`.
+- **Restore**: source endpoint has `backup_dir`.
+- Both endpoints with `backup_dir` is invalid.
+
+Backup endpoints must omit `url` and `auth`. TLS settings are ignored for backup endpoints.
+
+### Backup layout
+```
+<backup_root>/
+  indices.json
+  <index_name>/
+    metadata.json
+    mappings.json
+    settings.json
+    data/
+      000000-YYYYMMDD-HHMMSS-ffffff.jsonl.zst
+      000001-YYYYMMDD-HHMMSS-ffffff.jsonl.zst
+```
+
+Each `data/*.jsonl.zst` contains NDJSON documents (one JSON per line), compressed with zstd.  
+`metadata.json` includes routing settings, alias settings, and other useful fields for audit/restore.
+
+### Backup example
+```toml
+[[endpoints]]
+name = "es-source"
+url = "https://source-es:9200"
+root_certificates = "./certs"
+
+[[endpoints]]
+name = "backup"
+backup_dir = "./backups"
+
+[[indices]]
+from = "es-source"
+to = "backup"
+name = "my-index-*"
+multiple = true
+buffer_size = 50 # MB per backup chunk
+copy_mapping = true
+copy_content = true
+```
+
+### Restore example
+```toml
+[[endpoints]]
+name = "backup"
+backup_dir = "./backups"
+
+[[endpoints]]
+name = "es-destination"
+url = "https://dest-es:9200"
+root_certificates = "./certs"
+
+[[indices]]
+from = "backup"
+to = "es-destination"
+name = "my-index-2025-09"
+name_of_copy = "my-index-2025-09-restore"
+number_of_shards = 1
+number_of_replicas = 0
+copy_mapping = true
+copy_content = true
+```
+
+Notes:
+- In backup/restore mode, `buffer_size` is treated as **MB per backup chunk** (not a document count).
+- `name_of_copy` is ignored during backup (the backup directory uses the source index name).
+- Restore uses `number_of_shards`/`number_of_replicas` from the config, not the backup settings.
 
 ## Server Mode (`es-copy-indices-server`)
 The server wraps `es-copy-indices` with a web UI for running many jobs in parallel, splitting large indices by date, and tracking logs/progress. It reads endpoints from a main config file and index templates from a directory.
@@ -296,7 +384,8 @@ enabled = true
 
 ### endpoints
 - `name` (string, required): Identifier used by indices (`from`/`to`).
-- `url` (string, required): Elasticsearch base URL.
+- `url` (string, required unless `backup_dir` is set): Elasticsearch base URL.
+- `backup_dir` (string, optional): Local backup root directory (enables backup/restore mode).
 - `timeout` (number, optional, default 90): HTTP timeout in seconds.
 - `basic_auth` (object, optional):
   - `username` (string, required)
@@ -310,7 +399,7 @@ enabled = true
 - `to` (string, required): Endpoint name of the destination cluster.
 - `name_of_copy` (string, optional): Destination index name.
 - `multiple` (bool, optional, default false): Treat `name` as a wildcard pattern and copy all matches.
-- `buffer_size` (number, required): Batch size per request.
+- `buffer_size` (number, required): Batch size per request (backup/restore treats this as MB per backup chunk).
 - `keep_alive` (string, optional, default `5m`): Scroll or PIT keep-alive.
 - `copy_mapping` (bool, required): Copy mappings and settings.
 - `copy_content` (bool, required): Copy documents.

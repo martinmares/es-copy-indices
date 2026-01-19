@@ -1,0 +1,28 @@
+services:
+  es-source:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.21
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9201:9200"
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:9200"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  es-destination:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.21
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9202:9200"
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:9200"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

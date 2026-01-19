@@ -1,0 +1,22 @@
+[[endpoints]]
+name = "es-source"
+url = "http://localhost:9201"
+
+[[endpoints]]
+name = "backup"
+backup_dir = "./backup"
+
+[[indices]]
+name = "test-index"
+from = "es-source"
+to = "backup"
+buffer_size = 1
+keep_alive = "1m"
+copy_mapping = true
+copy_content = true
+number_of_shards = 1
+number_of_replicas = 0
+
+[indices.alias]
+name = "test-index-alias"
+remove_if_exists = false

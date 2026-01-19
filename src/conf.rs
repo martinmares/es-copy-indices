@@ -13,6 +13,7 @@ pub struct Config {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Endpoint {
     name: String,
+    #[serde(default)]
     url: String,
     #[serde(default)]
     basic_auth: Option<BasicAuth>,
@@ -22,6 +23,8 @@ pub struct Endpoint {
     insecure: bool,
     #[serde(default = "default_timeout")]
     timeout: u64,
+    #[serde(default)]
+    backup_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -175,6 +178,12 @@ impl Endpoint {
     }
     pub fn get_insecure(&self) -> bool {
         self.insecure
+    }
+    pub fn get_backup_dir(&self) -> &Option<String> {
+        &self.backup_dir
+    }
+    pub fn has_backup_dir(&self) -> bool {
+        self.backup_dir.is_some()
     }
     pub fn is_basic_auth(&self) -> bool {
         let mut result = false;

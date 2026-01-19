@@ -1,0 +1,23 @@
+[[endpoints]]
+name = "es-source"
+url = "http://localhost:9201"
+
+[[endpoints]]
+name = "es-destination"
+url = "http://localhost:9202"
+
+[[indices]]
+name = "test-index"
+from = "es-source"
+to = "es-destination"
+buffer_size = 1000
+keep_alive = "1m"
+copy_mapping = true
+copy_content = true
+number_of_shards = 1
+number_of_replicas = 0
+name_of_copy = "test-index-copy"
+
+[indices.alias]
+name = "test-index-copy-alias"
+remove_if_exists = false
