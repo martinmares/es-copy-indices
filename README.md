@@ -48,6 +48,8 @@ RUST_LOG=info ./target/release/es-copy-indices -c ./conf/main.toml
 
 Backup endpoints must omit `url` and `auth`. TLS settings are ignored for backup endpoints.
 
+When running **backup**, the tool creates a unique subdirectory under `backup_dir` (timestamp + pid) and writes all index backups there. When running **restore**, point `backup_dir` to the specific backup subdirectory you want to restore.
+
 ### Backup layout
 ```
 <backup_root>/
@@ -62,7 +64,7 @@ Backup endpoints must omit `url` and `auth`. TLS settings are ignored for backup
 ```
 
 Each `data/*.jsonl.zst` contains NDJSON documents (one JSON per line), compressed with zstd.  
-`metadata.json` includes routing settings, alias settings, and other useful fields for audit/restore.
+`metadata.json` includes routing settings, alias settings, and other useful fields for audit/restore. When `backup_quantile_field` is set, it also stores a compact digest (as a JSON array) for approximate percentile calculations during restore.
 
 ### Backup example
 ```toml
@@ -112,6 +114,8 @@ Notes:
 - Restore re-chunks the backup data to match the **destination** `buffer_size` (it may differ from the backup chunk size).
 - `name_of_copy` is ignored during backup (the backup directory uses the source index name).
 - Restore uses `number_of_shards`/`number_of_replicas` from the config, not the backup settings.
+- `backup_quantile_field` (optional) records a compact digest in `metadata.json` for approximate percentiles. The field can be a JSON Pointer (e.g. `/joinField/parent`) or a dotted path (e.g. `@timestamp` or `payload.timestamp`).
+- When an index has `split`, backup runs create multiple split jobs, but all chunks are written into the same index backup directory (so the backup stays a single index).
 
 ## Server Mode (`es-copy-indices-server`)
 The server wraps `es-copy-indices` with a web UI for running many jobs in parallel, splitting large indices by date, and tracking logs/progress. It reads endpoints from a main config file and index templates from a directory.
@@ -406,6 +410,7 @@ enabled = true
 - `copy_content` (bool, required): Copy documents.
 - `scroll_mode` (string, optional, default `scroll_api`): `scroll_api`, `scrolling_search`, or `auto`.
 - `routing_field` (string, optional): JSON Pointer to routing id (RFC 6901).
+- `backup_quantile_field` (string, optional): Field to build a compact quantile digest during backup (JSON Pointer or dotted path).
 - `pre_create_doc_ids` (bool, optional, default true): Pre-create routed parent docs.
 - `pre_create_doc_source` (string, optional, default `{}`): Source JSON for pre-created docs.
 - `number_of_shards` (number, optional, default 1): Override shard count in destination settings.

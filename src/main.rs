@@ -20,8 +20,8 @@ use tracing_subscriber::EnvFilter;
 use std::path::{Path, PathBuf};
 use chrono::Utc;
 use twelf::Layer;
-use crate::backup::{BackupChunkWriter, BackupDoc, BackupIndexCatalog, BackupIndexEntry, BackupMetadata};
-use std::collections::HashSet;
+use crate::backup::{BackupChunkWriter, BackupDoc, BackupIndexEntry, BackupMetadata};
+use std::collections::{HashMap, HashSet};
 
 async fn flush_restore_batch(
     docs: &mut Vec<BackupDoc>,
@@ -207,6 +207,13 @@ async fn main() {
         }
     }
 
+    let backup_run_tag = format!(
+        "{}-{:06}",
+        Utc::now().format("%Y%m%d-%H%M%S-%6f"),
+        std::process::id()
+    );
+    let mut backup_run_roots: HashMap<String, PathBuf> = HashMap::new();
+
     for index in config.get_indices() {
         let mut indices_names: Vec<String> = vec![];
         // if index.is_multiple() {
@@ -284,10 +291,17 @@ async fn main() {
             }
 
             if to_backup {
-                let backup_dir = resolve_backup_dir(
-                    config_path.as_path(),
-                    to_endpoint.get_backup_dir().as_ref().unwrap(),
-                );
+                let backup_dir = if let Some(existing) = backup_run_roots.get(to) {
+                    existing.clone()
+                } else {
+                    let base = resolve_backup_dir(
+                        config_path.as_path(),
+                        to_endpoint.get_backup_dir().as_ref().unwrap(),
+                    );
+                    let run_root = base.join(&backup_run_tag);
+                    backup_run_roots.insert(to.to_string(), run_root.clone());
+                    run_root
+                };
                 let index_dir = backup_dir.join(index_name);
                 let data_dir = index_dir.join("data");
                 if let Err(err) = backup::ensure_dir(&data_dir) {
@@ -295,10 +309,6 @@ async fn main() {
                 }
 
                 let backup_catalog_path = backup_dir.join("indices.json");
-                let mut catalog = BackupIndexCatalog::default();
-                if backup_catalog_path.exists() {
-                    catalog = backup::load_catalog(&backup_catalog_path);
-                }
 
                 let mapping = source_es_client
                     .as_mut()
@@ -333,6 +343,8 @@ async fn main() {
                     original_number_of_shards: original_shards,
                     original_number_of_replicas: original_replicas,
                     docs_total: None,
+                    quantile_field: None,
+                    quantile_digest: None,
                 };
 
                 if let Err(err) = backup::write_json_file(&index_dir.join("mappings.json"), &mapping) {
@@ -345,6 +357,10 @@ async fn main() {
                 if index.is_copy_content() {
                     let max_docs = index.get_buffer_size().max(1);
                     let mut writer = BackupChunkWriter::new(data_dir.clone(), max_docs);
+                    let mut quantile_digest = index
+                        .get_backup_quantile_field()
+                        .as_ref()
+                        .map(|field| (field.clone(), backup::QuantileDigest::new(200)));
                     source_es_client
                         .as_mut()
                         .unwrap()
@@ -355,6 +371,13 @@ async fn main() {
                             for doc in docs {
                                 let source_value: serde_json::Value =
                                     serde_json::from_str(doc.get_source()).unwrap_or_default();
+                                if let Some((field, digest)) = quantile_digest.as_mut() {
+                                    if let Some(value) =
+                                        backup::extract_quantile_value(&source_value, field)
+                                    {
+                                        digest.add(value);
+                                    }
+                                }
                                 let backup_doc = BackupDoc {
                                     id: doc.get_id().to_string(),
                                     doc_type: doc.get_doc_type().to_string(),
@@ -376,21 +399,32 @@ async fn main() {
                     if let Err(err) = writer.finish() {
                         panic!("Failed to finish backup chunk: {:?}", err);
                     }
+                    if let Some((field, digest)) = quantile_digest {
+                        let centroids = digest.into_centroids();
+                        if !centroids.is_empty() {
+                            metadata.quantile_field = Some(field);
+                            metadata.quantile_digest = Some(centroids);
+                        }
+                    }
                 }
 
-                if let Err(err) =
-                    backup::write_json_file(&index_dir.join("metadata.json"), &metadata)
-                {
-                    panic!("Failed to write metadata.json: {:?}", err);
-                }
+                let metadata = match backup::write_metadata_with_lock(
+                    &index_dir.join("metadata.json"),
+                    metadata,
+                ) {
+                    Ok(value) => value,
+                    Err(err) => panic!("Failed to write metadata.json: {:?}", err),
+                };
 
-                catalog.indices.push(BackupIndexEntry {
+                let entry = BackupIndexEntry {
                     name: index_name.to_string(),
                     dir: index_name.to_string(),
                     created_at: Utc::now().to_rfc3339(),
                     docs_total: metadata.docs_total,
-                });
-                if let Err(err) = backup::save_catalog(&backup_catalog_path, &catalog) {
+                };
+                if let Err(err) =
+                    backup::update_catalog_entry_with_lock(&backup_catalog_path, entry)
+                {
                     warn!("Failed to update indices.json: {:?}", err);
                 }
 

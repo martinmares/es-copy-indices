@@ -84,6 +84,8 @@ pub struct Index {
     keep_alive: String,
     #[serde(default)]
     routing_field: Option<String>,
+    #[serde(default)]
+    backup_quantile_field: Option<String>,
     #[serde(default = "default_pre_create_doc_ids")]
     pre_create_doc_ids: bool,
     #[serde(default = "default_pre_create_doc_source")]
@@ -325,6 +327,9 @@ impl Index {
     }
     pub fn get_routing_field(&self) -> &Option<String> {
         &self.routing_field
+    }
+    pub fn get_backup_quantile_field(&self) -> &Option<String> {
+        &self.backup_quantile_field
     }
     pub fn is_copy_mapping(&self) -> bool {
         *&self.copy_mapping

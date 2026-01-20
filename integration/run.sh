@@ -67,12 +67,22 @@ fi
 
 ${ROOT_DIR}/target/debug/es-copy-indices -c "${ROOT_DIR}/integration/backup.toml"
 
-test -f "${backup_dir}/test-index/metadata.json"
-test -f "${backup_dir}/test-index/mappings.json"
-test -f "${backup_dir}/test-index/settings.json"
-ls "${backup_dir}/test-index/data/"*.jsonl.zst >/dev/null
+backup_run_dir=$(find "${backup_dir}" -mindepth 1 -maxdepth 1 -type d | sort | tail -n1 || true)
+if [ -z "${backup_run_dir}" ]; then
+  echo "Backup run directory not found under ${backup_dir}" >&2
+  exit 1
+fi
 
-${ROOT_DIR}/target/debug/es-copy-indices -c "${ROOT_DIR}/integration/restore.toml"
+test -f "${backup_run_dir}/test-index/metadata.json"
+test -f "${backup_run_dir}/test-index/mappings.json"
+test -f "${backup_run_dir}/test-index/settings.json"
+ls "${backup_run_dir}/test-index/data/"*.jsonl.zst >/dev/null
+
+restore_tmp=$(mktemp)
+sed "s#backup_dir = \"\\./backup\"#backup_dir = \"${backup_run_dir}\"#" \
+  "${ROOT_DIR}/integration/restore.toml" > "${restore_tmp}"
+${ROOT_DIR}/target/debug/es-copy-indices -c "${restore_tmp}"
+rm -f "${restore_tmp}"
 
 curl -s -X POST "http://localhost:9202/test-index-restore/_refresh" >/dev/null
 count_restore=0
@@ -89,7 +99,16 @@ if [ "${count_restore}" != "3" ]; then
 fi
 
 ${ROOT_DIR}/target/debug/es-copy-indices -c "${ROOT_DIR}/integration/backup-routing.toml"
-${ROOT_DIR}/target/debug/es-copy-indices -c "${ROOT_DIR}/integration/restore-routing.toml"
+backup_run_dir=$(find "${backup_dir}" -mindepth 1 -maxdepth 1 -type d | sort | tail -n1 || true)
+if [ -z "${backup_run_dir}" ]; then
+  echo "Backup run directory not found under ${backup_dir} for routing restore" >&2
+  exit 1
+fi
+restore_routing_tmp=$(mktemp)
+sed "s#backup_dir = \"\\./backup\"#backup_dir = \"${backup_run_dir}\"#" \
+  "${ROOT_DIR}/integration/restore-routing.toml" > "${restore_routing_tmp}"
+${ROOT_DIR}/target/debug/es-copy-indices -c "${restore_routing_tmp}"
+rm -f "${restore_routing_tmp}"
 
 curl -s -X POST "http://localhost:9202/pc-index-restore/_refresh" >/dev/null
 count_pc_restore=0
