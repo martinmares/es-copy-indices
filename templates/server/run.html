@@ -95,6 +95,11 @@
         {% if run.wizard.is_some() %}
           <span class="badge bg-indigo text-white">wizard</span>
         {% endif %}
+        {% if run.run_mode.as_str() == "backup" %}
+          <span class="badge bg-teal text-white">backup</span>
+        {% elif run.run_mode.as_str() == "restore" %}
+          <span class="badge bg-indigo text-white">restore</span>
+        {% endif %}
       </div>
       <div class="text-secondary mt-1">template {{ run.template.name }}</div>
       <div class="text-secondary small">

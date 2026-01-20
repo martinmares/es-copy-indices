@@ -68,6 +68,22 @@
       background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 45%, #22d3ee 100%);
       box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
     }
+    .backup-cta {
+      position: relative;
+      overflow: hidden;
+      border: none;
+      color: #ecfeff;
+      background: linear-gradient(135deg, #0f766e 0%, #14b8a6 55%, #22d3ee 100%);
+      box-shadow: 0 8px 18px rgba(20, 184, 166, 0.25);
+    }
+    .restore-cta {
+      position: relative;
+      overflow: hidden;
+      border: none;
+      color: #eff6ff;
+      background: linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%);
+      box-shadow: 0 8px 18px rgba(99, 102, 241, 0.25);
+    }
     .wizard-cta::after {
       content: "";
       position: absolute;
@@ -90,6 +106,20 @@
       box-shadow: 0 8px 18px rgba(249, 115, 22, 0.25);
     }
     .classic-cta::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        120deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.35) 45%,
+        transparent 60%
+      );
+      transform: translateX(-120%);
+      animation: classicShimmer 7s ease-in-out infinite;
+    }
+    .backup-cta::after,
+    .restore-cta::after {
       content: "";
       position: absolute;
       inset: 0;
@@ -144,6 +174,18 @@
       max-height: 70vh;
       overflow: auto;
     }
+    .backup-restore-modal {
+      --tblr-modal-width: 1100px;
+      width: 94vw !important;
+      max-width: 1100px !important;
+      padding: 0;
+      border: 0;
+    }
+    .backup-restore-modal .modal-dialog {
+      max-width: 1100px !important;
+      width: 100% !important;
+      margin: 1.5rem auto !important;
+    }
     .wizard-source-name {
       white-space: nowrap;
     }
@@ -172,6 +214,8 @@
       </div>
       <div class="col-auto">
         <div class="btn-list">
+          <button class="btn backup-cta" id="openBackupRun" type="button">Create Backup</button>
+          <button class="btn restore-cta" id="openRestoreRun" type="button">Restore from Backup</button>
           <button class="btn classic-cta" id="openClassicRun" type="button">Create New Run</button>
           <button class="btn wizard-cta" id="openWizardRun" type="button">Wizard mode</button>
         </div>
@@ -255,6 +299,11 @@
                 {% endif %}
                 {% if run.wizard %}
                   <span class="badge bg-indigo text-white ms-2">wizard</span>
+                {% endif %}
+                {% if run.run_mode.as_str() == "backup" %}
+                  <span class="badge bg-teal text-white ms-2">backup</span>
+                {% elif run.run_mode.as_str() == "restore" %}
+                  <span class="badge bg-indigo text-white ms-2">restore</span>
                 {% endif %}
               </div>
               <div class="text-end">
@@ -368,6 +417,93 @@
             <div class="btn-list">
               <button class="btn btn-outline-secondary" type="button" id="cancelClassicRun">Cancel</button>
               <button class="btn btn-primary" type="submit" id="classicSubmitRun">Create</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="modal backup-restore-modal" id="backupRestoreModal">
+    <div class="modal-dialog modal-xl">
+      <div class="modal-content">
+        <form action="{{ base_path }}/runs" method="post" id="backupRestoreForm">
+          <input type="hidden" name="mode" id="backupMode" value="backup">
+          <div class="modal-header">
+            <h3 class="modal-title" id="backupRestoreTitle">Create Backup</h3>
+            <button class="btn-close" type="button" id="closeBackupRestore"></button>
+          </div>
+          <div class="modal-body">
+            <div class="row g-3">
+              <div class="col-md-6" id="backupSrcGroup">
+                <label class="form-label">Source endpoint</label>
+                <select class="form-select" name="src_endpoint_id" id="backupSrcEndpointSelect">
+                  {% for endpoint in endpoints %}
+                    <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-6 d-none" id="backupDstGroup">
+                <label class="form-label">Destination endpoint</label>
+                <select class="form-select" name="dst_endpoint_id" id="backupDstEndpointSelect">
+                  {% for endpoint in endpoints %}
+                    <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" id="backupDirLabel">Backup directory</label>
+                <input class="form-control" type="text" name="backup_dir" id="backupDirInput" placeholder="/path/to/backup">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Template</label>
+                <select class="form-select" name="template_id" id="backupTemplateSelect" required>
+                  {% for template in templates %}
+                    <option value="{{ template.id }}">{{ template.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-12">
+                <div class="d-flex align-items-center justify-content-between">
+                  <label class="form-label mb-0">Select indices (optional)</label>
+                  <label class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" id="backupSelectAll">
+                    <span class="form-check-label">Select all</span>
+                  </label>
+                </div>
+                <div class="card mt-2">
+                  <div class="table-responsive" style="max-height: 280px;">
+                    <table class="table table-vcenter card-table" id="backupIndicesTable">
+                      <thead>
+                        <tr>
+                          <th class="w-1"></th>
+                          <th>Index</th>
+                          <th class="text-end">Split</th>
+                        </tr>
+                      </thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="text-secondary small mt-1" id="backupSelectedCount">0 selected</div>
+              </div>
+              <div class="col-12">
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" name="dry_run" value="1">
+                  <span class="form-check-label">Dry run (skip es-copy-indices, mark jobs succeeded)</span>
+                </label>
+              </div>
+            </div>
+            <div class="alert alert-danger mt-3 d-none" id="backupRestoreError"></div>
+          </div>
+          <div class="modal-footer">
+            <div class="d-flex align-items-center gap-2">
+              <div class="spinner-border spinner-border-sm text-primary d-none" role="status" id="backupRestoreSpinner"></div>
+              <span class="text-secondary small d-none" id="backupRestoreSpinnerLabel">Creating...</span>
+            </div>
+            <div class="btn-list ms-auto">
+              <button class="btn btn-outline-secondary" type="button" id="backupRestoreCancel">Cancel</button>
+              <button class="btn btn-success" type="submit" id="backupRestoreCreate">Create</button>
             </div>
           </div>
         </form>
@@ -910,10 +1046,15 @@
     const noRunsCard = document.getElementById("noRunsCard");
     const classicModal = document.getElementById("createRunModal");
     const wizardModal = document.getElementById("wizardRunModal");
+    const backupRestoreModal = document.getElementById("backupRestoreModal");
     const openClassicBtn = document.getElementById("openClassicRun");
     const openWizardBtn = document.getElementById("openWizardRun");
+    const openBackupBtn = document.getElementById("openBackupRun");
+    const openRestoreBtn = document.getElementById("openRestoreRun");
     const closeClassicBtn = document.getElementById("closeClassicRun");
+    const closeBackupRestoreBtn = document.getElementById("closeBackupRestore");
     const cancelClassicBtn = document.getElementById("cancelClassicRun");
+    const backupRestoreCancel = document.getElementById("backupRestoreCancel");
     const classicRunForm = document.getElementById("createRunForm");
     const classicRunError = document.getElementById("classicRunError");
     const classicSameEndpointWarning = document.getElementById("classicSameEndpointWarning");
@@ -926,6 +1067,23 @@
     const classicRunSpinner = document.getElementById("classicRunSpinner");
     const classicRunSpinnerLabel = document.getElementById("classicRunSpinnerLabel");
     const classicSubmitRun = document.getElementById("classicSubmitRun");
+    const backupRestoreForm = document.getElementById("backupRestoreForm");
+    const backupRestoreTitle = document.getElementById("backupRestoreTitle");
+    const backupModeInput = document.getElementById("backupMode");
+    const backupSrcGroup = document.getElementById("backupSrcGroup");
+    const backupDstGroup = document.getElementById("backupDstGroup");
+    const backupDirLabel = document.getElementById("backupDirLabel");
+    const backupDirInput = document.getElementById("backupDirInput");
+    const backupTemplateSelect = document.getElementById("backupTemplateSelect");
+    const backupIndicesTable = document.getElementById("backupIndicesTable");
+    const backupSelectAll = document.getElementById("backupSelectAll");
+    const backupSelectedCount = document.getElementById("backupSelectedCount");
+    const backupRestoreError = document.getElementById("backupRestoreError");
+    const backupRestoreSpinner = document.getElementById("backupRestoreSpinner");
+    const backupRestoreSpinnerLabel = document.getElementById("backupRestoreSpinnerLabel");
+    const backupRestoreCreate = document.getElementById("backupRestoreCreate");
+    const backupSrcEndpointSelect = document.getElementById("backupSrcEndpointSelect");
+    const backupDstEndpointSelect = document.getElementById("backupDstEndpointSelect");
     const createRunError = document.getElementById("createRunError");
     const sameEndpointWarning = document.getElementById("sameEndpointWarning");
     const srcEndpointSelect = document.getElementById("srcEndpointSelect");
@@ -1032,9 +1190,59 @@
       return `${template.name} · indices=${template.indices_count} · replicas=${replicas}`;
     }
 
+    function getEndpointById(id) {
+      return endpoints.find((item) => item.id === id);
+    }
+
+    function templateCompatible(template, srcEndpoint, dstEndpoint, mode) {
+      const templateTenants = Array.isArray(template.tenants) ? template.tenants : [];
+      if (!templateTenants.length) return false;
+      const srcTenants = Array.isArray(srcEndpoint?.tenants) ? srcEndpoint.tenants : [];
+      const dstTenants = Array.isArray(dstEndpoint?.tenants) ? dstEndpoint.tenants : [];
+      const matches = (tenants) => tenants.some((value) => templateTenants.includes(value));
+      if (mode === "backup") return matches(srcTenants);
+      if (mode === "restore") return matches(dstTenants);
+      return matches(srcTenants) && matches(dstTenants);
+    }
+
+    function updateTemplateOptions(selectEl, mode, srcId, dstId) {
+      if (!selectEl) return;
+      const src = getEndpointById(srcId);
+      const dst = getEndpointById(dstId);
+      const compatible = templates.filter((template) => templateCompatible(template, src, dst, mode));
+      const current = selectEl.value;
+      selectEl.innerHTML = "";
+      if (!compatible.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No matching templates";
+        option.disabled = true;
+        option.selected = true;
+        selectEl.appendChild(option);
+        return;
+      }
+      compatible.forEach((template) => {
+        const option = document.createElement("option");
+        option.value = template.id;
+        option.textContent = template.name;
+        selectEl.appendChild(option);
+      });
+      if (compatible.some((template) => template.id === current)) {
+        selectEl.value = current;
+      } else {
+        selectEl.value = compatible[0].id;
+      }
+    }
+
     function updateClassicDetails() {
-      const src = endpoints.find((item) => item.id === classicSrcEndpointSelect.value);
-      const dst = endpoints.find((item) => item.id === classicDstEndpointSelect.value);
+      updateTemplateOptions(
+        classicTemplateSelect,
+        "copy",
+        classicSrcEndpointSelect.value,
+        classicDstEndpointSelect.value
+      );
+      const src = getEndpointById(classicSrcEndpointSelect.value);
+      const dst = getEndpointById(classicDstEndpointSelect.value);
       const template = templates.find((item) => item.id === classicTemplateSelect.value);
       classicSrcDetails.textContent = formatEndpointDetail(src);
       classicDstDetails.textContent = formatEndpointDetail(dst);
@@ -1055,8 +1263,14 @@
     }
 
     function updateClassicDetails() {
-      const src = endpoints.find((item) => item.id === classicSrcEndpointSelect.value);
-      const dst = endpoints.find((item) => item.id === classicDstEndpointSelect.value);
+      updateTemplateOptions(
+        classicTemplateSelect,
+        "copy",
+        classicSrcEndpointSelect.value,
+        classicDstEndpointSelect.value
+      );
+      const src = getEndpointById(classicSrcEndpointSelect.value);
+      const dst = getEndpointById(classicDstEndpointSelect.value);
       const template = templates.find((item) => item.id === classicTemplateSelect.value);
       classicSrcDetails.textContent = formatEndpointDetail(src);
       classicDstDetails.textContent = formatEndpointDetail(dst);
@@ -1204,6 +1418,82 @@
       classicSrcEndpointSelect.focus();
     }
 
+    function renderBackupIndices() {
+      if (!backupIndicesTable || !backupTemplateSelect) return;
+      const template = templates.find((item) => item.id === backupTemplateSelect.value);
+      const tbody = backupIndicesTable.querySelector("tbody");
+      if (!tbody) return;
+      const items = template?.indices ?? [];
+      if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="3" class="text-secondary">No indices in template.</td></tr>`;
+        if (backupSelectedCount) backupSelectedCount.textContent = "0 selected";
+        if (backupSelectAll) backupSelectAll.checked = false;
+        return;
+      }
+      tbody.innerHTML = items
+        .map((index) => {
+          const splitBadge = index.has_split
+            ? `<span class="badge bg-teal-lt text-teal">split</span>`
+            : `<span class="text-secondary">-</span>`;
+          return `
+            <tr>
+              <td><input class="form-check-input backup-index-check" type="checkbox" name="selected_indices" value="${index.name}"></td>
+              <td>${index.name}</td>
+              <td class="text-end">${splitBadge}</td>
+            </tr>`;
+        })
+        .join("");
+      if (backupSelectAll) backupSelectAll.checked = false;
+      if (backupSelectedCount) backupSelectedCount.textContent = "0 selected";
+    }
+
+    function updateBackupSelectedCount() {
+      if (!backupIndicesTable || !backupSelectedCount) return;
+      const selected = backupIndicesTable.querySelectorAll(".backup-index-check:checked").length;
+      backupSelectedCount.textContent = `${selected} selected`;
+    }
+
+    function openBackupRestore(mode) {
+      if (!backupRestoreModal) return;
+      if (backupRestoreError) {
+        backupRestoreError.classList.add("d-none");
+        backupRestoreError.textContent = "";
+      }
+      if (backupRestoreForm) {
+        backupRestoreForm.reset();
+      }
+      if (backupModeInput) backupModeInput.value = mode;
+      if (backupRestoreTitle) {
+        backupRestoreTitle.textContent = mode === "restore" ? "Restore from Backup" : "Create Backup";
+      }
+      if (backupDirLabel) {
+        backupDirLabel.textContent = "Backup directory";
+      }
+      if (backupSrcGroup) backupSrcGroup.classList.toggle("d-none", mode === "restore");
+      if (backupDstGroup) backupDstGroup.classList.toggle("d-none", mode === "backup");
+      if (backupSrcEndpointSelect) backupSrcEndpointSelect.required = mode === "backup";
+      if (backupDstEndpointSelect) backupDstEndpointSelect.required = mode === "restore";
+      if (backupDirInput) backupDirInput.required = true;
+      if (backupRestoreSpinner) backupRestoreSpinner.classList.add("d-none");
+      if (backupRestoreSpinnerLabel) backupRestoreSpinnerLabel.classList.add("d-none");
+      if (backupRestoreCreate) backupRestoreCreate.disabled = false;
+      updateTemplateOptions(
+        backupTemplateSelect,
+        mode,
+        backupSrcEndpointSelect?.value,
+        backupDstEndpointSelect?.value
+      );
+      renderBackupIndices();
+      backupRestoreModal.showModal();
+      if (backupDirInput) {
+        backupDirInput.focus();
+      }
+    }
+
+    function closeBackupRestore() {
+      backupRestoreModal?.close();
+    }
+
     function openModal() {
       createRunError.classList.add("d-none");
       createRunError.textContent = "";
@@ -1260,8 +1550,12 @@
 
     openClassicBtn?.addEventListener("click", openClassicModal);
     openWizardBtn?.addEventListener("click", openModal);
+    openBackupBtn?.addEventListener("click", () => openBackupRestore("backup"));
+    openRestoreBtn?.addEventListener("click", () => openBackupRestore("restore"));
     closeClassicBtn?.addEventListener("click", closeClassicModal);
     cancelClassicBtn?.addEventListener("click", closeClassicModal);
+    closeBackupRestoreBtn?.addEventListener("click", closeBackupRestore);
+    backupRestoreCancel?.addEventListener("click", closeBackupRestore);
     document.getElementById("closeCreateRun")?.addEventListener("click", closeModal);
     cancelModalBtn?.addEventListener("click", closeModal);
     srcEndpointSelect?.addEventListener("change", updateModalDetails);
@@ -1269,6 +1563,38 @@
     classicSrcEndpointSelect?.addEventListener("change", updateClassicDetails);
     classicDstEndpointSelect?.addEventListener("change", updateClassicDetails);
     classicTemplateSelect?.addEventListener("change", updateClassicDetails);
+    backupSrcEndpointSelect?.addEventListener("change", () => {
+      updateTemplateOptions(
+        backupTemplateSelect,
+        backupModeInput?.value ?? "backup",
+        backupSrcEndpointSelect?.value,
+        backupDstEndpointSelect?.value
+      );
+      renderBackupIndices();
+    });
+    backupDstEndpointSelect?.addEventListener("change", () => {
+      updateTemplateOptions(
+        backupTemplateSelect,
+        backupModeInput?.value ?? "backup",
+        backupSrcEndpointSelect?.value,
+        backupDstEndpointSelect?.value
+      );
+      renderBackupIndices();
+    });
+    backupTemplateSelect?.addEventListener("change", renderBackupIndices);
+    backupSelectAll?.addEventListener("change", () => {
+      if (!backupIndicesTable) return;
+      const checked = backupSelectAll.checked;
+      backupIndicesTable.querySelectorAll(".backup-index-check").forEach((el) => {
+        el.checked = checked;
+      });
+      updateBackupSelectedCount();
+    });
+    backupIndicesTable?.addEventListener("change", (event) => {
+      if (event.target.classList.contains("backup-index-check")) {
+        updateBackupSelectedCount();
+      }
+    });
     aliasEnabled?.addEventListener("change", () => applyAliasToggle(aliasEnabled.checked));
 
     classicRunForm?.addEventListener("submit", async (event) => {
@@ -1304,6 +1630,59 @@
         classicRunSpinner.classList.add("d-none");
         classicRunSpinnerLabel.classList.add("d-none");
         classicSubmitRun.disabled = false;
+      }
+    });
+
+    backupRestoreForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (backupRestoreError) {
+        backupRestoreError.classList.add("d-none");
+        backupRestoreError.textContent = "";
+      }
+      backupRestoreSpinner?.classList.remove("d-none");
+      backupRestoreSpinnerLabel?.classList.remove("d-none");
+      if (backupRestoreCreate) backupRestoreCreate.disabled = true;
+      const payload = new URLSearchParams();
+      if (backupModeInput?.value) payload.append("mode", backupModeInput.value);
+      if (backupSrcEndpointSelect?.value) payload.append("src_endpoint_id", backupSrcEndpointSelect.value);
+      if (backupDstEndpointSelect?.value) payload.append("dst_endpoint_id", backupDstEndpointSelect.value);
+      if (backupDirInput?.value) payload.append("backup_dir", backupDirInput.value);
+      if (backupTemplateSelect?.value) payload.append("template_id", backupTemplateSelect.value);
+      if (backupRestoreForm.querySelector("input[name=\"dry_run\"]")?.checked) {
+        payload.append("dry_run", "1");
+      }
+      const selected = backupIndicesTable
+        ? Array.from(backupIndicesTable.querySelectorAll(".backup-index-check:checked"))
+          .map((el) => el.value)
+          .filter((value) => value && value.trim().length > 0)
+        : [];
+      if (selected.length) {
+        payload.append("selected_indices", selected.join("\n"));
+      }
+      try {
+        const response = await fetch(`${basePath}/runs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: payload.toString(),
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Failed to create run");
+        }
+        if (response.redirected) {
+          window.location.href = response.url;
+          return;
+        }
+        closeBackupRestore();
+      } catch (err) {
+        if (backupRestoreError) {
+          backupRestoreError.textContent = err instanceof Error ? err.message : "Failed to create run";
+          backupRestoreError.classList.remove("d-none");
+        }
+      } finally {
+        backupRestoreSpinner?.classList.add("d-none");
+        backupRestoreSpinnerLabel?.classList.add("d-none");
+        if (backupRestoreCreate) backupRestoreCreate.disabled = false;
       }
     });
 
@@ -1756,8 +2135,6 @@
         src_endpoint_id: srcEndpointSelect.value,
         dst_endpoint_id: dstEndpointSelect.value,
         dry_run: dryRunToggle.checked,
-        index_copy_suffix: null,
-        alias_suffix: null,
         defaults: defaults,
         rename: getRenameRulePayload(),
         alias: getAliasRulePayload(),
@@ -1907,6 +2284,11 @@
       runsListEl.innerHTML = runs.map((run) => {
         const dryRunBadge = run.dry_run ? `<span class="badge bg-azure text-white ms-2">dry run</span>` : "";
         const wizardBadge = run.wizard ? `<span class="badge bg-indigo text-white ms-2">wizard</span>` : "";
+        const modeBadge = run.run_mode === "backup"
+          ? `<span class="badge bg-teal text-white ms-2">backup</span>`
+          : run.run_mode === "restore"
+            ? `<span class="badge bg-indigo text-white ms-2">restore</span>`
+            : "";
         const stopButton = run.jobs_running > 0
           ? `<button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="${run.id}">Stop all jobs</button>`
           : "";
@@ -1920,6 +2302,7 @@
                     <span class="text-secondary fw-normal small ms-2">(${run.id})</span>
                     ${dryRunBadge}
                     ${wizardBadge}
+                    ${modeBadge}
                   </div>
                   <div class="text-end">
                     <div class="text-secondary">${run.created_at}</div>

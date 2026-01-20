@@ -9,8 +9,9 @@ use clap::Parser;
 use reqwest::Certificate;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use serde::de::{self, Deserializer};
 use libc::{kill, SIGTERM};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -125,6 +126,8 @@ struct RunPersist {
     alias_suffix: Option<String>,
     #[serde(default)]
     wizard: Option<WizardSnapshot>,
+    #[serde(default)]
+    run_mode: RunMode,
     stages: Vec<StagePersist>,
     jobs: Vec<JobPersist>,
 }
@@ -244,6 +247,30 @@ struct WizardItemSnapshot {
     overrides: Option<WizardOverrides>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum RunMode {
+    Copy,
+    Backup,
+    Restore,
+}
+
+impl Default for RunMode {
+    fn default() -> Self {
+        RunMode::Copy
+    }
+}
+
+impl RunMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            RunMode::Copy => "copy",
+            RunMode::Backup => "backup",
+            RunMode::Restore => "restore",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RunState {
     id: String,
@@ -255,6 +282,7 @@ struct RunState {
     copy_suffix: Option<String>,
     alias_suffix: Option<String>,
     wizard: Option<WizardSnapshot>,
+    run_mode: RunMode,
     stages: Vec<StageState>,
     jobs: HashMap<String, JobState>,
 }
@@ -349,6 +377,10 @@ struct EndpointFile {
     keep_alive: String,
     #[serde(default)]
     auth: Option<EndpointAuth>,
+    #[serde(default)]
+    backup_dir: Option<String>,
+    #[serde(default)]
+    tenants: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -365,6 +397,8 @@ struct EndpointConfig {
     number_of_replicas: u64,
     keep_alive: String,
     auth: Option<EndpointAuth>,
+    backup_dir: Option<String>,
+    tenants: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -375,6 +409,10 @@ struct EndpointSnapshot {
     prefix: String,
     number_of_replicas: u64,
     keep_alive: String,
+    #[serde(default)]
+    backup_dir: Option<String>,
+    #[serde(default)]
+    tenants: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -390,6 +428,8 @@ struct TemplateSnapshot {
 struct TemplateGlobal {
     name: Option<String>,
     number_of_replicas: Option<u64>,
+    #[serde(default)]
+    tenants: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -459,6 +499,7 @@ struct TemplateConfig {
     path: PathBuf,
     number_of_replicas: Option<u64>,
     indices: Vec<InputIndex>,
+    tenants: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -501,6 +542,8 @@ struct OutputEndpoint {
     insecure: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     basic_auth: Option<OutputBasicAuth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup_dir: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -529,6 +572,8 @@ struct OutputIndex {
     number_of_replicas: u64,
     number_of_shards: u64,
     to: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup_quantile_field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     routing_field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -621,6 +666,7 @@ struct EndpointView {
     url: String,
     prefix: String,
     keep_alive: String,
+    tenants: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -630,6 +676,14 @@ struct TemplateView {
     file_name: String,
     indices_count: usize,
     number_of_replicas: Option<u64>,
+    indices: Vec<TemplateIndexView>,
+    tenants: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct TemplateIndexView {
+    name: String,
+    has_split: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -654,6 +708,7 @@ struct RunSummary {
     copy_suffix: Option<String>,
     alias_suffix: Option<String>,
     wizard: bool,
+    run_mode: RunMode,
 }
 
 #[derive(Clone, Serialize)]
@@ -668,6 +723,7 @@ struct RunView {
     copy_suffix: Option<String>,
     alias_suffix: Option<String>,
     wizard: Option<WizardSnapshot>,
+    run_mode: RunMode,
 }
 
 #[derive(Clone, Serialize)]
@@ -962,6 +1018,74 @@ struct CreateRunForm {
     dry_run: Option<String>,
     index_copy_suffix: Option<String>,
     alias_suffix: Option<String>,
+    mode: Option<String>,
+    backup_dir: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    selected_indices: Vec<String>,
+}
+
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrVec;
+
+    impl<'de> de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or list of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(Vec::new());
+            }
+            if trimmed.contains('\n') {
+                let values = trimmed
+                    .lines()
+                    .map(|line| line.trim())
+                    .filter(|line| !line.is_empty())
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>();
+                return Ok(values);
+            }
+            if trimmed.contains(',') {
+                let values = trimmed
+                    .split(',')
+                    .map(|item| item.trim())
+                    .filter(|item| !item.is_empty())
+                    .map(|item| item.to_string())
+                    .collect::<Vec<_>>();
+                return Ok(values);
+            }
+            Ok(vec![trimmed.to_string()])
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&value)
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element::<String>()? {
+                values.push(value);
+            }
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
 }
 
 #[derive(Deserialize)]
@@ -970,8 +1094,6 @@ struct WizardRunRequest {
     dst_endpoint_id: String,
     #[serde(default)]
     dry_run: bool,
-    index_copy_suffix: Option<String>,
-    alias_suffix: Option<String>,
     defaults: WizardDefaults,
     rename: WizardRenameRule,
     alias: WizardAliasRule,
@@ -999,18 +1121,30 @@ struct MaxConcurrentForm {
     value: Option<usize>,
 }
 
+fn backup_endpoint_config(backup_dir: &str) -> EndpointConfig {
+    EndpointConfig {
+        id: "backup".to_string(),
+        name: "Backup directory".to_string(),
+        url: String::new(),
+        prefix: String::new(),
+        number_of_replicas: 0,
+        keep_alive: "10m".to_string(),
+        auth: None,
+        backup_dir: Some(backup_dir.to_string()),
+        tenants: Vec::new(),
+    }
+}
+
 async fn create_run(
     State(state): State<Arc<AppState>>,
     Form(form): Form<CreateRunForm>,
 ) -> impl IntoResponse {
-    let src_endpoint = match endpoint_by_id(&state, &form.src_endpoint_id) {
-        Some(endpoint) => endpoint.clone(),
-        None => return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response(),
-    };
-    let dst_endpoint = match endpoint_by_id(&state, &form.dst_endpoint_id) {
-        Some(endpoint) => endpoint.clone(),
-        None => return (StatusCode::BAD_REQUEST, "Unknown destination endpoint").into_response(),
-    };
+    let mode = form
+        .mode
+        .as_deref()
+        .unwrap_or("copy")
+        .trim()
+        .to_lowercase();
     let template = match template_by_id(&state, &form.template_id) {
         Some(template) => template.clone(),
         None => return (StatusCode::BAD_REQUEST, "Unknown template").into_response(),
@@ -1018,8 +1152,122 @@ async fn create_run(
     let dry_run = form.dry_run.is_some();
     let copy_suffix_override = form.index_copy_suffix.map(|value| value.trim().to_string());
     let alias_suffix_override = form.alias_suffix.map(|value| value.trim().to_string());
+    let selected_indices = if form.selected_indices.is_empty() {
+        None
+    } else {
+        let filtered: HashSet<String> = form
+            .selected_indices
+            .iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        if filtered.is_empty() { None } else { Some(filtered) }
+    };
 
-    match create_run_state(
+    let (src_endpoint, dst_endpoint, run_mode) = match mode.as_str() {
+        "backup" => {
+            let src_endpoint = match endpoint_by_id(&state, &form.src_endpoint_id) {
+                Some(endpoint) => endpoint.clone(),
+                None => {
+                    return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response()
+                }
+            };
+            let backup_dir = form
+                .backup_dir
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if backup_dir.is_empty() {
+                return (StatusCode::BAD_REQUEST, "backup_dir is required").into_response();
+            }
+            (src_endpoint, backup_endpoint_config(&backup_dir), RunMode::Backup)
+        }
+        "restore" => {
+            let dst_endpoint = match endpoint_by_id(&state, &form.dst_endpoint_id) {
+                Some(endpoint) => endpoint.clone(),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "Unknown destination endpoint",
+                    )
+                        .into_response()
+                }
+            };
+            let backup_dir = form
+                .backup_dir
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if backup_dir.is_empty() {
+                return (StatusCode::BAD_REQUEST, "backup_dir is required").into_response();
+            }
+            (backup_endpoint_config(&backup_dir), dst_endpoint, RunMode::Restore)
+        }
+        _ => {
+            let src_endpoint = match endpoint_by_id(&state, &form.src_endpoint_id) {
+                Some(endpoint) => endpoint.clone(),
+                None => return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response(),
+            };
+            let dst_endpoint = match endpoint_by_id(&state, &form.dst_endpoint_id) {
+                Some(endpoint) => endpoint.clone(),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "Unknown destination endpoint",
+                    )
+                        .into_response()
+                }
+            };
+            (src_endpoint, dst_endpoint, RunMode::Copy)
+        }
+    };
+
+    let copy_suffix_override = if run_mode == RunMode::Copy {
+        copy_suffix_override
+    } else {
+        None
+    };
+    let alias_suffix_override = if run_mode == RunMode::Copy {
+        alias_suffix_override
+    } else {
+        None
+    };
+
+    match run_mode {
+        RunMode::Copy => {
+            if !tenants_overlap(&template, &src_endpoint)
+                || !tenants_overlap(&template, &dst_endpoint)
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Template tenants do not match selected endpoints",
+                )
+                    .into_response();
+            }
+        }
+        RunMode::Backup => {
+            if !tenants_overlap(&template, &src_endpoint) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Template tenants do not match selected endpoint",
+                )
+                    .into_response();
+            }
+        }
+        RunMode::Restore => {
+            if !tenants_overlap(&template, &dst_endpoint) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Template tenants do not match selected endpoint",
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    match create_run_state_with_filter(
         &state,
         &template,
         &src_endpoint,
@@ -1027,6 +1275,8 @@ async fn create_run(
         dry_run,
         copy_suffix_override,
         alias_suffix_override,
+        selected_indices.as_ref(),
+        run_mode,
     )
     .await
     {
@@ -1151,6 +1401,7 @@ async fn create_run_wizard(
         copy_suffix_override,
         alias_suffix_override,
         Some(wizard_snapshot),
+        RunMode::Copy,
     )
     .await
     {
@@ -2728,6 +2979,7 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
                 copy_suffix: run.copy_suffix.clone(),
                 alias_suffix: run.alias_suffix.clone(),
                 wizard: run.wizard.is_some(),
+                run_mode: run.run_mode.clone(),
             });
         }
     }
@@ -2874,6 +3126,7 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
         copy_suffix: run.copy_suffix.clone(),
         alias_suffix: run.alias_suffix.clone(),
         wizard: run.wizard.clone(),
+        run_mode: run.run_mode.clone(),
     })
 }
 
@@ -2897,7 +3150,7 @@ async fn build_job_view(state: &Arc<AppState>, run_id: &str, job_id: &str) -> Op
     })
 }
 
-async fn create_run_state(
+async fn create_run_state_with_filter(
     state: &Arc<AppState>,
     template: &TemplateConfig,
     src_endpoint: &EndpointConfig,
@@ -2905,8 +3158,17 @@ async fn create_run_state(
     dry_run: bool,
     copy_suffix_override: Option<String>,
     alias_suffix_override: Option<String>,
+    selected_indices: Option<&HashSet<String>>,
+    run_mode: RunMode,
 ) -> Result<String, String> {
-    let stages = plan_stages(template, state, src_endpoint).await?;
+    let stages = plan_stages_filtered(
+        template,
+        state,
+        src_endpoint,
+        selected_indices,
+        run_mode.clone(),
+    )
+    .await?;
     create_run_state_from_stages(
         state,
         stages,
@@ -2917,6 +3179,7 @@ async fn create_run_state(
         copy_suffix_override,
         alias_suffix_override,
         None,
+        run_mode,
     )
     .await
 }
@@ -2931,6 +3194,7 @@ async fn create_run_state_from_stages(
     copy_suffix_override: Option<String>,
     alias_suffix_override: Option<String>,
     wizard: Option<WizardSnapshot>,
+    run_mode: RunMode,
 ) -> Result<String, String> {
     let run_id = unique_run_id(&state.runs_dir);
     let run_dir = state.runs_dir.join(&run_id);
@@ -2954,6 +3218,15 @@ async fn create_run_state_from_stages(
         state.alias_suffix.clone()
     };
 
+    let src_effective = src_endpoint.clone();
+    let mut dst_effective = dst_endpoint.clone();
+    if run_mode == RunMode::Backup {
+        if let Some(dir) = dst_effective.backup_dir.clone() {
+            let adjusted = PathBuf::from(dir).join(&run_id);
+            dst_effective.backup_dir = Some(adjusted.to_string_lossy().to_string());
+        }
+    }
+
     let mut stage_states = Vec::new();
     let mut job_states = HashMap::new();
     for stage in stages {
@@ -2970,10 +3243,11 @@ async fn create_run_state_from_stages(
             let output_config = build_output_config(
                 state,
                 &job,
-                src_endpoint,
-                dst_endpoint,
+                &src_effective,
+                &dst_effective,
                 copy_suffix.as_deref(),
                 alias_suffix.as_deref(),
+                run_mode.clone(),
             )?;
             let split_field = job.index.split.as_ref().map(|s| s.field_name.clone());
             let split_query = output_config
@@ -3032,12 +3306,13 @@ async fn create_run_state_from_stages(
         id: run_id.clone(),
         created_at,
         template: template_snapshot,
-        src_endpoint: endpoint_snapshot(src_endpoint),
-        dst_endpoint: endpoint_snapshot(dst_endpoint),
+        src_endpoint: endpoint_snapshot(&src_effective),
+        dst_endpoint: endpoint_snapshot(&dst_effective),
         dry_run,
         copy_suffix: copy_suffix.clone(),
         alias_suffix: alias_suffix.clone(),
         wizard,
+        run_mode,
         stages: stage_states,
         jobs: job_states,
     };
@@ -3205,6 +3480,7 @@ async fn load_runs(state: &AppState) {
                     copy_suffix: persist.copy_suffix,
                     alias_suffix: persist.alias_suffix,
                     wizard: persist.wizard,
+                    run_mode: persist.run_mode,
                     stages,
                     jobs: job_map,
                 };
@@ -3302,6 +3578,7 @@ fn run_snapshot(run: &RunState) -> RunPersist {
         copy_suffix: run.copy_suffix.clone(),
         alias_suffix: run.alias_suffix.clone(),
         wizard: run.wizard.clone(),
+        run_mode: run.run_mode.clone(),
         stages,
         jobs,
     }
@@ -3359,6 +3636,18 @@ fn load_main_config(path: &PathBuf) -> Vec<EndpointConfig> {
                 format!("{}-{}", base, counter)
             };
             *counter += 1;
+            let tenants: Vec<String> = endpoint
+                .tenants
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect();
+            if tenants.is_empty() {
+                panic!(
+                    "Endpoint {:?} is missing tenants in {:?}",
+                    endpoint.name, path
+                );
+            }
             EndpointConfig {
                 id: if id.is_empty() {
                     format!("endpoint-{}", idx + 1)
@@ -3371,6 +3660,8 @@ fn load_main_config(path: &PathBuf) -> Vec<EndpointConfig> {
                 number_of_replicas: endpoint.number_of_replicas,
                 keep_alive: endpoint.keep_alive,
                 auth: endpoint.auth,
+                backup_dir: endpoint.backup_dir,
+                tenants,
             }
         })
         .collect()
@@ -3410,6 +3701,21 @@ fn load_templates(path: &PathBuf) -> Vec<TemplateConfig> {
             .and_then(|g| g.name.clone())
             .unwrap_or_else(|| file_name.clone());
         let global_replicas = config.global.as_ref().and_then(|g| g.number_of_replicas);
+        let tenants: Vec<String> = config
+            .global
+            .as_ref()
+            .map(|global| {
+                global
+                    .tenants
+                    .iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if tenants.is_empty() {
+            panic!("Template {:?} is missing [global].tenants", path);
+        }
         let mut indices = config.indices;
         if let Some(default_replicas) = global_replicas {
             for index in &mut indices {
@@ -3436,6 +3742,7 @@ fn load_templates(path: &PathBuf) -> Vec<TemplateConfig> {
             path,
             number_of_replicas: global_replicas,
             indices,
+            tenants,
         });
     }
     templates
@@ -3449,6 +3756,13 @@ fn template_by_id<'a>(state: &'a AppState, id: &str) -> Option<&'a TemplateConfi
     state.templates.iter().find(|template| template.id == id)
 }
 
+fn tenants_overlap(template: &TemplateConfig, endpoint: &EndpointConfig) -> bool {
+    template
+        .tenants
+        .iter()
+        .any(|tenant| endpoint.tenants.iter().any(|value| value == tenant))
+}
+
 fn endpoint_snapshot(endpoint: &EndpointConfig) -> EndpointSnapshot {
     EndpointSnapshot {
         id: endpoint.id.clone(),
@@ -3457,6 +3771,8 @@ fn endpoint_snapshot(endpoint: &EndpointConfig) -> EndpointSnapshot {
         prefix: endpoint.prefix.clone(),
         number_of_replicas: endpoint.number_of_replicas,
         keep_alive: endpoint.keep_alive.clone(),
+        backup_dir: endpoint.backup_dir.clone(),
+        tenants: endpoint.tenants.clone(),
     }
 }
 
@@ -3479,6 +3795,7 @@ fn build_endpoint_views(state: &AppState) -> Vec<EndpointView> {
             url: endpoint.url.clone(),
             prefix: endpoint.prefix.clone(),
             keep_alive: endpoint.keep_alive.clone(),
+            tenants: endpoint.tenants.clone(),
         })
         .collect()
 }
@@ -3498,6 +3815,15 @@ fn build_template_views(state: &AppState) -> Vec<TemplateView> {
                 .to_string(),
             indices_count: template.indices.len(),
             number_of_replicas: template.number_of_replicas,
+            indices: template
+                .indices
+                .iter()
+                .map(|index| TemplateIndexView {
+                    name: index.name.clone(),
+                    has_split: index.split.is_some(),
+                })
+                .collect(),
+            tenants: template.tenants.clone(),
         })
         .collect()
 }
@@ -3607,10 +3933,12 @@ impl StringExt for String {
     }
 }
 
-async fn plan_stages(
+async fn plan_stages_filtered(
     template: &TemplateConfig,
     state: &AppState,
     src_endpoint: &EndpointConfig,
+    selected_indices: Option<&HashSet<String>>,
+    run_mode: RunMode,
 ) -> Result<Vec<StagePlan>, String> {
     let mut stages: Vec<StagePlan> = Vec::new();
     let mut stage_index: HashMap<String, usize> = HashMap::new();
@@ -3629,41 +3957,71 @@ async fn plan_stages(
         }
     };
     for index in &template.indices {
+        if let Some(selected) = selected_indices {
+            if !selected.contains(&index.name) {
+                continue;
+            }
+        }
         if let Some(split) = &index.split {
-            let stage_name = format!("{}-{}", DEFAULT_STAGE_NAME, index.name);
-            let date_ranges =
-                generate_date_intervals(state, src_endpoint, index, split).await?;
-            let mut leftover = index.clone();
-            leftover.split = Some(split.clone());
-            push_job(
-                stage_name.clone(),
-                JobPlan {
-                name: format!("{}-{}-{}-leftover", DEFAULT_STAGE_NAME, index.name, SPLIT_SUFFIX),
-                index: leftover,
-                date_from: None,
-                date_to: None,
-                leftover: true,
-                split_doc_count: None,
-            },
-            );
-            for (i, range) in date_ranges.into_iter().enumerate() {
+            if matches!(run_mode, RunMode::Copy | RunMode::Backup) {
+                let stage_name = format!("{}-{}", DEFAULT_STAGE_NAME, index.name);
+                let date_ranges =
+                    generate_date_intervals(state, src_endpoint, index, split).await?;
+                let mut leftover = index.clone();
+                leftover.split = Some(split.clone());
                 push_job(
                     stage_name.clone(),
                     JobPlan {
-                    name: format!("{}-{}-{}-{}", DEFAULT_STAGE_NAME, index.name, SPLIT_SUFFIX, i + 1),
-                    index: index.clone(),
-                    date_from: range.from,
-                    date_to: range.to,
-                    leftover: false,
-                    split_doc_count: range.doc_count,
-                },
+                        name: format!(
+                            "{}-{}-{}-leftover",
+                            DEFAULT_STAGE_NAME, index.name, SPLIT_SUFFIX
+                        ),
+                        index: leftover,
+                        date_from: None,
+                        date_to: None,
+                        leftover: true,
+                        split_doc_count: None,
+                    },
                 );
+                for (i, range) in date_ranges.into_iter().enumerate() {
+                    push_job(
+                        stage_name.clone(),
+                        JobPlan {
+                            name: format!(
+                                "{}-{}-{}-{}",
+                                DEFAULT_STAGE_NAME,
+                                index.name,
+                                SPLIT_SUFFIX,
+                                i + 1
+                            ),
+                            index: index.clone(),
+                            date_from: range.from,
+                            date_to: range.to,
+                            leftover: false,
+                            split_doc_count: range.doc_count,
+                        },
+                    );
+                }
+                continue;
             }
-        } else {
-            let stage_name = DEFAULT_STAGE_NAME.to_string();
+            let stage_name = format!("{}-{}", DEFAULT_STAGE_NAME, index.name);
             push_job(
                 stage_name,
                 JobPlan {
+                    name: format!("{}-{}", DEFAULT_STAGE_NAME, index.name),
+                    index: index.clone(),
+                    date_from: None,
+                    date_to: None,
+                    leftover: false,
+                    split_doc_count: None,
+                },
+            );
+            continue;
+        }
+        let stage_name = DEFAULT_STAGE_NAME.to_string();
+        push_job(
+            stage_name,
+            JobPlan {
                 name: format!("{}-{}", DEFAULT_STAGE_NAME, index.name),
                 index: index.clone(),
                 date_from: None,
@@ -3671,8 +4029,7 @@ async fn plan_stages(
                 leftover: false,
                 split_doc_count: None,
             },
-            );
-        }
+        );
     }
     Ok(stages)
 }
@@ -3874,6 +4231,7 @@ fn build_output_config(
     dst_endpoint: &EndpointConfig,
     copy_suffix: Option<&str>,
     alias_suffix: Option<&str>,
+    run_mode: RunMode,
 ) -> Result<OutputConfig, String> {
     let timestamp = state
         .timestamp
@@ -3968,6 +4326,15 @@ fn build_output_config(
         job.index.copy_mapping
     };
 
+    let backup_quantile_field = if run_mode == RunMode::Backup {
+        job.index
+            .split
+            .as_ref()
+            .map(|split| split.field_name.clone())
+    } else {
+        None
+    };
+
     let routing_field = job.index.routing_field.clone();
     let pre_create_doc_source = routing_field.as_ref().map(|_| {
         format!(
@@ -3986,6 +4353,7 @@ fn build_output_config(
                 username: escape_shell_value(&auth.username),
                 password: auth.password.as_ref().map(|value| escape_shell_value(value)),
             }),
+            backup_dir: src_endpoint.backup_dir.clone(),
         },
         OutputEndpoint {
             name: "es-destination".to_string(),
@@ -3996,6 +4364,7 @@ fn build_output_config(
                 username: escape_shell_value(&auth.username),
                 password: auth.password.as_ref().map(|value| escape_shell_value(value)),
             }),
+            backup_dir: dst_endpoint.backup_dir.clone(),
         },
     ];
 
@@ -4015,6 +4384,7 @@ fn build_output_config(
         number_of_replicas,
         number_of_shards,
         to: "es-destination".to_string(),
+        backup_quantile_field,
         routing_field,
         pre_create_doc_source,
         alias: if job.index.alias_enabled {
