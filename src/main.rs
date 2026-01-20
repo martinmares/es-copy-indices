@@ -115,6 +115,25 @@ fn resolve_backup_dir(config_path: &Path, dir: &str) -> PathBuf {
     }
 }
 
+fn is_run_id_component(value: &str) -> bool {
+    if value.len() != 20 {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    if bytes[8] != b'-' || bytes[15] != b'-' {
+        return false;
+    }
+    for (idx, byte) in bytes.iter().enumerate() {
+        if idx == 8 || idx == 15 {
+            continue;
+        }
+        if !byte.is_ascii_digit() {
+            return false;
+        }
+    }
+    true
+}
+
 fn validate_endpoint_for_backup(endpoint: &conf::Endpoint) -> Result<(), String> {
     if endpoint.has_backup_dir() {
         if !endpoint.get_url().is_empty() {
@@ -298,7 +317,10 @@ async fn main() {
                         config_path.as_path(),
                         to_endpoint.get_backup_dir().as_ref().unwrap(),
                     );
-                    let run_root = base.join(&backup_run_tag);
+                    let run_root = match base.file_name().and_then(|name| name.to_str()) {
+                        Some(name) if is_run_id_component(name) => base.clone(),
+                        _ => base.join(&backup_run_tag),
+                    };
                     backup_run_roots.insert(to.to_string(), run_root.clone());
                     run_root
                 };
@@ -367,6 +389,17 @@ async fn main() {
                         .scroll_start(index, index_name)
                         .await;
                     while source_es_client.as_mut().unwrap().has_docs() {
+                        let total = source_es_client.as_mut().unwrap().get_total_size();
+                        let counter = source_es_client.as_mut().unwrap().get_docs_counter();
+                        let percent = if total > 0 {
+                            (counter as f64 / total as f64) * 100.00
+                        } else {
+                            0.00
+                        };
+                        info!(
+                            "Iterate {} - docs {}/{} ({:.2} %)",
+                            index_name, counter, total, percent
+                        );
                         if let Some(docs) = source_es_client.as_mut().unwrap().get_docs() {
                             for doc in docs {
                                 let source_value: serde_json::Value =
