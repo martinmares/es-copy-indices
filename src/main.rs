@@ -21,6 +21,87 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use twelf::Layer;
 use crate::backup::{BackupChunkWriter, BackupDoc, BackupIndexCatalog, BackupIndexEntry, BackupMetadata};
+use std::collections::HashSet;
+
+async fn flush_restore_batch(
+    docs: &mut Vec<BackupDoc>,
+    dest_name: &str,
+    index: &conf::Index,
+    destination_es_client: &mut es_client::EsClient,
+    server_major_version: u64,
+    pre_created_ids: &mut HashSet<String>,
+) {
+    if docs.is_empty() {
+        return;
+    }
+    let is_routing_field = index.is_routing_field();
+    let routing_field = index.get_routing_field().clone();
+    let mut bulk_body_pre_create = String::new();
+    let mut bulk_body = String::new();
+
+    for doc in docs.drain(..) {
+        let mut add_routing_to_bulk: Option<String> = None;
+        if is_routing_field {
+            if let Some(pointer) = &routing_field {
+                if let Some(value) = doc.source.pointer(pointer) {
+                    if let Some(id) = value.as_str() {
+                        add_routing_to_bulk = Some(id.to_string());
+                        if index.is_pre_create_doc_ids() && !pre_created_ids.contains(id) {
+                            pre_created_ids.insert(id.to_string());
+                            if server_major_version <= 7 {
+                                bulk_body_pre_create.push_str(&format!(
+                                    "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                    "create", dest_name, "_doc", id));
+                            } else {
+                                bulk_body_pre_create.push_str(&format!(
+                                    "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                                    "create", dest_name, id
+                                ));
+                            }
+                            bulk_body_pre_create.push_str("\n");
+                            bulk_body_pre_create.push_str(index.get_pre_create_doc_source());
+                            bulk_body_pre_create.push_str("\n");
+                        }
+                    }
+                }
+            }
+        }
+        let id = doc.id;
+        let doc_type = doc.doc_type;
+        if server_major_version <= 7 {
+            if let Some(id_routing) = add_routing_to_bulk {
+                bulk_body.push_str(&format!(
+                    "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\", \"routing\": \"{}\" }} }}",
+                    "index", dest_name, doc_type, id, id_routing));
+            } else {
+                bulk_body.push_str(&format!(
+                    "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                    "index", dest_name, doc_type, id));
+            }
+        } else {
+            if let Some(id_routing) = add_routing_to_bulk {
+                bulk_body.push_str(&format!(
+                    "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\", \"routing\": \"{}\" }} }}",
+                    "index", dest_name, id, id_routing
+                ));
+            } else {
+                bulk_body.push_str(&format!(
+                    "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
+                    "index", dest_name, id
+                ));
+            }
+        }
+        bulk_body.push_str("\n");
+        bulk_body.push_str(&serde_json::to_string(&doc.source).unwrap());
+        bulk_body.push_str("\n");
+    }
+
+    if !bulk_body_pre_create.is_empty() {
+        let _ = destination_es_client.post_bulk(dest_name, &bulk_body_pre_create).await;
+    }
+
+    let _ = destination_es_client.post_bulk(dest_name, &bulk_body).await;
+}
 
 fn resolve_backup_dir(config_path: &Path, dir: &str) -> PathBuf {
     let dir_path = PathBuf::from(dir);
@@ -262,8 +343,8 @@ async fn main() {
                 }
 
                 if index.is_copy_content() {
-                    let max_bytes = index.get_buffer_size().saturating_mul(1024 * 1024);
-                    let mut writer = BackupChunkWriter::new(data_dir.clone(), max_bytes.max(1));
+                    let max_docs = index.get_buffer_size().max(1);
+                    let mut writer = BackupChunkWriter::new(data_dir.clone(), max_docs);
                     source_es_client
                         .as_mut()
                         .unwrap()
@@ -372,96 +453,41 @@ async fn main() {
                 if index.is_copy_content() {
                     let files = backup::list_data_files(&data_dir)
                         .expect("Failed to list backup data files");
+                    let max_docs = index.get_buffer_size().max(1) as usize;
+                    let server_major_version = destination_es_client
+                        .as_ref()
+                        .unwrap()
+                        .get_server_major_version();
+                    let mut batch: Vec<backup::BackupDoc> = Vec::new();
+                    let mut pre_created_ids: HashSet<String> = HashSet::new();
+
                     for file in files {
                         let docs = backup::read_backup_docs(&file)
                             .expect("Failed to read backup data file");
-                        let is_routing_field = index.is_routing_field();
-                        let routing_field = index.get_routing_field().clone();
-                        let mut bulk_body_pre_create = String::new();
-                        let mut bulk_body = String::new();
-                        let server_major_version = destination_es_client
-                            .as_ref()
-                            .unwrap()
-                            .get_server_major_version();
-
-                        let mut pre_create_doc_ids = backup::extract_routing_ids(&docs, &routing_field);
                         for doc in docs {
-                            let mut add_routing_to_bulk: Option<String> = None;
-                            if is_routing_field {
-                                if let Some(pointer) = &routing_field {
-                                    if let Some(value) = doc.source.pointer(pointer) {
-                                        if let Some(id) = value.as_str() {
-                                            add_routing_to_bulk = Some(id.to_string());
-                                            if index.is_pre_create_doc_ids() {
-                                                pre_create_doc_ids.insert(id.to_string());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            let id = doc.id;
-                            let doc_type = doc.doc_type;
-                            if server_major_version <= 7 {
-                                if let Some(id_routing) = add_routing_to_bulk {
-                                    bulk_body.push_str(&format!(
-                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\", \"routing\": \"{}\" }} }}",
-                                        "index", dest_name, doc_type, id, id_routing));
-                                } else {
-                                    bulk_body.push_str(&format!(
-                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
-                                        "index", dest_name, doc_type, id));
-                                }
-                            } else {
-                                if let Some(id_routing) = add_routing_to_bulk {
-                                    bulk_body.push_str(&format!(
-                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\", \"routing\": \"{}\" }} }}",
-                                        "index", dest_name, id, id_routing
-                                    ));
-                                } else {
-                                    bulk_body.push_str(&format!(
-                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
-                                        "index", dest_name, id
-                                    ));
-                                }
-                            }
-                            bulk_body.push_str("\n");
-                            bulk_body.push_str(&serde_json::to_string(&doc.source).unwrap());
-                            bulk_body.push_str("\n");
-                        }
-
-                        if is_routing_field && !pre_create_doc_ids.is_empty() && index.is_pre_create_doc_ids() {
-                            for id_parent in pre_create_doc_ids {
-                                if server_major_version <= 7 {
-                                    bulk_body_pre_create.push_str(&format!(
-                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_type\" : \"{}\", \"_id\" : \"{}\" }} }}",
-                                        "create", dest_name, "_doc", id_parent));
-                                } else {
-                                    bulk_body_pre_create.push_str(&format!(
-                                        "{{ \"{}\" : {{ \"_index\" : \"{}\", \"_id\" : \"{}\" }} }}",
-                                        "create", dest_name, id_parent
-                                    ));
-                                }
-                                bulk_body_pre_create.push_str("\n");
-                                bulk_body_pre_create
-                                    .push_str(index.get_pre_create_doc_source());
-                                bulk_body_pre_create.push_str("\n");
-                            }
-                        }
-
-                        if !bulk_body_pre_create.is_empty() {
-                            let _ = destination_es_client
-                                .as_mut()
-                                .unwrap()
-                                .post_bulk(dest_name, &bulk_body_pre_create)
+                            batch.push(doc);
+                            if batch.len() >= max_docs {
+                                flush_restore_batch(
+                                    &mut batch,
+                                    dest_name,
+                                    index,
+                                    destination_es_client.as_mut().unwrap(),
+                                    server_major_version,
+                                    &mut pre_created_ids,
+                                )
                                 .await;
+                            }
                         }
-
-                        let _ = destination_es_client
-                            .as_mut()
-                            .unwrap()
-                            .post_bulk(dest_name, &bulk_body)
-                            .await;
                     }
+                    flush_restore_batch(
+                        &mut batch,
+                        dest_name,
+                        index,
+                        destination_es_client.as_mut().unwrap(),
+                        server_major_version,
+                        &mut pre_created_ids,
+                    )
+                    .await;
                 }
 
                 destination_es_client

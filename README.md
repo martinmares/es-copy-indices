@@ -80,7 +80,7 @@ from = "es-source"
 to = "backup"
 name = "my-index-*"
 multiple = true
-buffer_size = 50 # MB per backup chunk
+buffer_size = 50 # docs per backup chunk
 copy_mapping = true
 copy_content = true
 ```
@@ -108,7 +108,8 @@ copy_content = true
 ```
 
 Notes:
-- In backup/restore mode, `buffer_size` is treated as **MB per backup chunk** (not a document count).
+- In backup/restore mode, `buffer_size` is treated as **documents per backup chunk**.
+- Restore re-chunks the backup data to match the **destination** `buffer_size` (it may differ from the backup chunk size).
 - `name_of_copy` is ignored during backup (the backup directory uses the source index name).
 - Restore uses `number_of_shards`/`number_of_replicas` from the config, not the backup settings.
 
@@ -399,7 +400,7 @@ enabled = true
 - `to` (string, required): Endpoint name of the destination cluster.
 - `name_of_copy` (string, optional): Destination index name.
 - `multiple` (bool, optional, default false): Treat `name` as a wildcard pattern and copy all matches.
-- `buffer_size` (number, required): Batch size per request (backup/restore treats this as MB per backup chunk).
+- `buffer_size` (number, required): Batch size per request (backup/restore treats this as docs per backup chunk).
 - `keep_alive` (string, optional, default `5m`): Scroll or PIT keep-alive.
 - `copy_mapping` (bool, required): Copy mappings and settings.
 - `copy_content` (bool, required): Copy documents.

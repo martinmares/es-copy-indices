@@ -54,18 +54,18 @@ pub struct BackupDoc {
 
 pub struct BackupChunkWriter {
     dir: PathBuf,
-    max_bytes: u64,
-    current_bytes: u64,
+    max_docs: u64,
+    current_docs: u64,
     counter: u64,
     writer: Option<Encoder<'static, File>>,
 }
 
 impl BackupChunkWriter {
-    pub fn new(dir: PathBuf, max_bytes: u64) -> Self {
+    pub fn new(dir: PathBuf, max_docs: u64) -> Self {
         Self {
             dir,
-            max_bytes,
-            current_bytes: 0,
+            max_docs,
+            current_docs: 0,
             counter: 0,
             writer: None,
         }
@@ -73,8 +73,7 @@ impl BackupChunkWriter {
 
     pub fn write_doc(&mut self, doc: &BackupDoc) -> std::io::Result<()> {
         let line = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
-        let line_len = (line.len() + 1) as u64;
-        if self.current_bytes > 0 && self.current_bytes + line_len > self.max_bytes {
+        if self.current_docs >= self.max_docs {
             self.finish()?;
         }
         if self.writer.is_none() {
@@ -83,7 +82,7 @@ impl BackupChunkWriter {
         if let Some(writer) = &mut self.writer {
             writer.write_all(line.as_bytes())?;
             writer.write_all(b"\n")?;
-            self.current_bytes += line_len;
+            self.current_docs += 1;
         }
         Ok(())
     }
@@ -92,7 +91,7 @@ impl BackupChunkWriter {
         if let Some(writer) = self.writer.take() {
             let _ = writer.finish()?;
         }
-        self.current_bytes = 0;
+        self.current_docs = 0;
         Ok(())
     }
 
@@ -104,7 +103,7 @@ impl BackupChunkWriter {
         let encoder = Encoder::new(file, 3)?;
         self.writer = Some(encoder);
         self.counter += 1;
-        self.current_bytes = 0;
+        self.current_docs = 0;
         Ok(())
     }
 }
