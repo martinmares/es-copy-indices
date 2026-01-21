@@ -390,6 +390,10 @@ pub fn extract_quantile_value(source: &Value, field: &str) -> Option<f64> {
                 Some(parsed)
             } else if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(text) {
                 Some(parsed.timestamp_millis() as f64)
+            } else if let Ok(parsed) = chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f%z") {
+                Some(parsed.timestamp_millis() as f64)
+            } else if let Ok(parsed) = chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%z") {
+                Some(parsed.timestamp_millis() as f64)
             } else {
                 None
             }
