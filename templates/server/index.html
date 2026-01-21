@@ -443,6 +443,18 @@
                   {% endfor %}
                 </select>
               </div>
+              <div class="col-md-6" id="backupDirGroup">
+                <label class="form-label" id="backupDirLabel">Backup directory</label>
+                <div class="form-control-plaintext text-secondary" id="backupDirDisplay" data-backup-root="{{ backup_root_value }}">
+                  {{ backup_root_display }}
+                </div>
+              </div>
+              <div class="col-md-6 d-none" id="restoreFromGroup">
+                <label class="form-label">Restore from</label>
+                <select class="form-select" name="backup_id" id="restoreFromSelect"></select>
+                <div class="text-secondary small mt-1 d-none" id="restoreNoBackups">No backups found.</div>
+                <div class="text-secondary small mt-1" id="restoreFromDetails"></div>
+              </div>
               <div class="col-md-6 d-none" id="backupDstGroup">
                 <label class="form-label">Destination endpoint</label>
                 <select class="form-select" name="dst_endpoint_id" id="backupDstEndpointSelect">
@@ -450,10 +462,6 @@
                     <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
                   {% endfor %}
                 </select>
-              </div>
-              <div class="col-md-6">
-                <label class="form-label" id="backupDirLabel">Backup directory</label>
-                <input class="form-control" type="text" name="backup_dir" id="backupDirInput" placeholder="/path/to/backup">
               </div>
               <div class="col-md-6">
                 <label class="form-label">Template</label>
@@ -1073,7 +1081,12 @@
     const backupSrcGroup = document.getElementById("backupSrcGroup");
     const backupDstGroup = document.getElementById("backupDstGroup");
     const backupDirLabel = document.getElementById("backupDirLabel");
-    const backupDirInput = document.getElementById("backupDirInput");
+    const backupDirGroup = document.getElementById("backupDirGroup");
+    const backupDirDisplay = document.getElementById("backupDirDisplay");
+    const restoreFromGroup = document.getElementById("restoreFromGroup");
+    const restoreFromSelect = document.getElementById("restoreFromSelect");
+    const restoreFromDetails = document.getElementById("restoreFromDetails");
+    const restoreNoBackups = document.getElementById("restoreNoBackups");
     const backupTemplateSelect = document.getElementById("backupTemplateSelect");
     const backupIndicesTable = document.getElementById("backupIndicesTable");
     const backupSelectAll = document.getElementById("backupSelectAll");
@@ -1447,6 +1460,63 @@
       if (backupSelectedCount) backupSelectedCount.textContent = "0 selected";
     }
 
+    let backupRunsCache = [];
+
+    async function loadBackupRuns() {
+      if (!restoreFromSelect) return;
+      backupRunsCache = [];
+      restoreFromSelect.innerHTML = "";
+      restoreFromDetails.textContent = "";
+      restoreNoBackups?.classList.add("d-none");
+      try {
+        const response = await fetch(`${basePath}/backups`);
+        if (!response.ok) {
+          throw new Error("Failed to load backups");
+        }
+        const payload = await response.json();
+        const backups = payload.backups || [];
+        backupRunsCache = backups;
+        if (!backups.length) {
+          restoreNoBackups?.classList.remove("d-none");
+          if (backupRestoreCreate) backupRestoreCreate.disabled = true;
+          return;
+        }
+        backups.forEach((backup) => {
+          const option = document.createElement("option");
+          option.value = backup.id;
+          option.textContent = backup.label || backup.id;
+          restoreFromSelect.appendChild(option);
+        });
+        restoreFromSelect.selectedIndex = 0;
+        updateRestoreDetails();
+        if (backupRestoreCreate) backupRestoreCreate.disabled = false;
+      } catch (err) {
+        restoreNoBackups?.classList.remove("d-none");
+        restoreNoBackups.textContent = "Failed to load backups.";
+        if (backupRestoreCreate) backupRestoreCreate.disabled = true;
+      }
+    }
+
+    function updateRestoreDetails() {
+      if (!restoreFromSelect || !restoreFromDetails) return;
+      const selected = restoreFromSelect.value;
+      const backup = backupRunsCache.find((item) => item.id === selected);
+      if (!backup) {
+        restoreFromDetails.textContent = "";
+        return;
+      }
+      const indices = backup.indices || [];
+      const lines = indices
+        .map((item) => {
+          const docs = item.docs_total != null ? ` · ${item.docs_total} docs` : "";
+          return `${item.name}${docs}`;
+        })
+        .join(", ");
+      const count = backup.index_count ?? indices.length;
+      const docsTotal = backup.docs_total != null ? ` · ${backup.docs_total} docs` : "";
+      restoreFromDetails.textContent = `${count} indices${docsTotal}${lines ? `: ${lines}` : ""}`;
+    }
+
     function updateBackupSelectedCount() {
       if (!backupIndicesTable || !backupSelectedCount) return;
       const selected = backupIndicesTable.querySelectorAll(".backup-index-check:checked").length;
@@ -1469,14 +1539,25 @@
       if (backupDirLabel) {
         backupDirLabel.textContent = "Backup directory";
       }
+      if (backupDirGroup) backupDirGroup.classList.toggle("d-none", mode === "restore");
+      if (restoreFromGroup) restoreFromGroup.classList.toggle("d-none", mode !== "restore");
       if (backupSrcGroup) backupSrcGroup.classList.toggle("d-none", mode === "restore");
       if (backupDstGroup) backupDstGroup.classList.toggle("d-none", mode === "backup");
       if (backupSrcEndpointSelect) backupSrcEndpointSelect.required = mode === "backup";
       if (backupDstEndpointSelect) backupDstEndpointSelect.required = mode === "restore";
-      if (backupDirInput) backupDirInput.required = true;
       if (backupRestoreSpinner) backupRestoreSpinner.classList.add("d-none");
       if (backupRestoreSpinnerLabel) backupRestoreSpinnerLabel.classList.add("d-none");
       if (backupRestoreCreate) backupRestoreCreate.disabled = false;
+      if (mode === "backup") {
+        const configured = backupDirDisplay?.dataset.backupRoot?.trim();
+        if (!configured) {
+          if (backupRestoreCreate) backupRestoreCreate.disabled = true;
+          if (backupRestoreError) {
+            backupRestoreError.textContent = "Backup directory is not configured on the server.";
+            backupRestoreError.classList.remove("d-none");
+          }
+        }
+      }
       updateTemplateOptions(
         backupTemplateSelect,
         mode,
@@ -1485,8 +1566,11 @@
       );
       renderBackupIndices();
       backupRestoreModal.showModal();
-      if (backupDirInput) {
-        backupDirInput.focus();
+      if (mode === "restore") {
+        loadBackupRuns();
+        restoreFromSelect?.focus();
+      } else {
+        backupDirDisplay?.scrollIntoView({ block: "nearest" });
       }
     }
 
@@ -1582,6 +1666,7 @@
       renderBackupIndices();
     });
     backupTemplateSelect?.addEventListener("change", renderBackupIndices);
+    restoreFromSelect?.addEventListener("change", updateRestoreDetails);
     backupSelectAll?.addEventListener("change", () => {
       if (!backupIndicesTable) return;
       const checked = backupSelectAll.checked;
@@ -1639,6 +1724,13 @@
         backupRestoreError.classList.add("d-none");
         backupRestoreError.textContent = "";
       }
+      if (backupModeInput?.value === "restore" && !restoreFromSelect?.value) {
+        if (backupRestoreError) {
+          backupRestoreError.textContent = "Select a backup to restore.";
+          backupRestoreError.classList.remove("d-none");
+        }
+        return;
+      }
       backupRestoreSpinner?.classList.remove("d-none");
       backupRestoreSpinnerLabel?.classList.remove("d-none");
       if (backupRestoreCreate) backupRestoreCreate.disabled = true;
@@ -1646,7 +1738,9 @@
       if (backupModeInput?.value) payload.append("mode", backupModeInput.value);
       if (backupSrcEndpointSelect?.value) payload.append("src_endpoint_id", backupSrcEndpointSelect.value);
       if (backupDstEndpointSelect?.value) payload.append("dst_endpoint_id", backupDstEndpointSelect.value);
-      if (backupDirInput?.value) payload.append("backup_dir", backupDirInput.value);
+      if (backupModeInput?.value === "restore" && restoreFromSelect?.value) {
+        payload.append("backup_id", restoreFromSelect.value);
+      }
       if (backupTemplateSelect?.value) payload.append("template_id", backupTemplateSelect.value);
       if (backupRestoreForm.querySelector("input[name=\"dry_run\"]")?.checked) {
         payload.append("dry_run", "1");

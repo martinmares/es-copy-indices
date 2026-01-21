@@ -5,6 +5,7 @@ use axum::response::{Html, IntoResponse, Redirect, Sse};
 use axum::Json;
 use axum::routing::{get, post};
 use axum::Router;
+use crate::backup;
 use clap::Parser;
 use reqwest::Certificate;
 use serde::{Deserialize, Serialize};
@@ -68,6 +69,8 @@ struct ServerArgs {
     alias_remove_if_exists: bool,
     #[arg(long, default_value_t = false)]
     audit: bool,
+    #[arg(long = "backup-dir", value_name = "PATH")]
+    backup_dir: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -89,6 +92,7 @@ struct AppState {
     alias_suffix: Option<String>,
     alias_remove_if_exists: bool,
     audit: bool,
+    backup_dir: Option<PathBuf>,
     runs: Arc<RwLock<RunStore>>,
     quarantined_runs: Arc<RwLock<Vec<String>>>,
     job_queue: Arc<Mutex<VecDeque<QueuedJob>>>,
@@ -383,8 +387,16 @@ struct EndpointFile {
     tenants: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct MainGlobalConfig {
+    #[serde(default)]
+    backup_dir: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct MainConfigFile {
+    #[serde(default)]
+    global: Option<MainGlobalConfig>,
     endpoints: Vec<EndpointFile>,
 }
 
@@ -614,6 +626,8 @@ struct IndexTemplate {
     queued_total: usize,
     copy_suffix: Option<String>,
     alias_suffix: Option<String>,
+    backup_root_display: String,
+    backup_root_value: String,
 }
 
 #[derive(Template)]
@@ -852,7 +866,18 @@ pub async fn run() {
     if args.insecure && args.root_certificates.is_none() {
         warn!("--insecure disables TLS verification for percentile queries and generated jobs.");
     }
-    let endpoints = load_main_config(&args.main_config);
+    let main_config = load_main_config(&args.main_config);
+    let mut backup_dir = args
+        .backup_dir
+        .clone()
+        .and_then(resolve_backup_dir_path)
+        .or(main_config.backup_dir);
+    if let Some(dir) = &backup_dir {
+        if dir.as_os_str().is_empty() {
+            backup_dir = None;
+        }
+    }
+    let endpoints = main_config.endpoints;
     let templates = load_templates(&args.templates_dir);
     if endpoints.is_empty() {
         panic!("No endpoints found in {:?}", args.main_config);
@@ -889,6 +914,7 @@ pub async fn run() {
         alias_suffix: args.alias_suffix,
         alias_remove_if_exists: args.alias_remove_if_exists,
         audit: args.audit,
+        backup_dir,
         runs: Arc::new(RwLock::new(RunStore::default())),
         quarantined_runs: Arc::new(RwLock::new(Vec::new())),
         job_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -921,6 +947,7 @@ pub async fn run() {
         .route("/status", get(status_view))
         .route("/status/snapshot", get(status_snapshot))
         .route("/status/stream", get(status_stream))
+        .route("/backups", get(backups_list))
         .route("/jobs/snapshot", get(jobs_snapshot))
         .route("/jobs/stream", get(jobs_stream))
         .route("/runs/snapshot", get(runs_snapshot))
@@ -969,6 +996,16 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let running_total = runs.iter().map(|run| run.jobs_running).sum();
     let queued_total = runs.iter().map(|run| run.jobs_queued).sum();
     let max_concurrent_jobs = state.max_concurrent_jobs.read().await.clone();
+    let backup_root_value = state
+        .backup_dir
+        .as_ref()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let backup_root_display = if backup_root_value.is_empty() {
+        "Not configured".to_string()
+    } else {
+        backup_root_value.clone()
+    };
     let template = IndexTemplate {
         runs,
         base_path: state.base_path.clone(),
@@ -983,8 +1020,89 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         queued_total,
         copy_suffix: state.copy_suffix.clone(),
         alias_suffix: state.alias_suffix.clone(),
+        backup_root_display,
+        backup_root_value,
     };
     Html(render_template(&template)).into_response()
+}
+
+async fn backups_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let backup_root = match &state.backup_dir {
+        Some(path) => path.clone(),
+        None => {
+            let response = BackupListResponse {
+                backup_root: None,
+                backups: Vec::new(),
+            };
+            return Json(response).into_response();
+        }
+    };
+    let backup_root_str = backup_root.to_string_lossy().to_string();
+    let read_dir = match std::fs::read_dir(&backup_root) {
+        Ok(entries) => entries,
+        Err(_) => {
+            let response = BackupListResponse {
+                backup_root: Some(backup_root_str),
+                backups: Vec::new(),
+            };
+            return Json(response).into_response();
+        }
+    };
+    let mut backups = Vec::new();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let run_id = match path.file_name().and_then(|name| name.to_str()) {
+            Some(name) if !name.is_empty() => name.to_string(),
+            _ => continue,
+        };
+        let indices_path = path.join("indices.json");
+        if !indices_path.is_file() {
+            continue;
+        }
+        let catalog = backup::load_catalog(&indices_path);
+        if catalog.indices.is_empty() {
+            continue;
+        }
+        let index_count = catalog.indices.len();
+        let docs_total = catalog
+            .indices
+            .iter()
+            .filter_map(|item| item.docs_total)
+            .sum::<u64>();
+        let created_at = catalog.indices.first().map(|item| item.created_at.clone());
+        let mut source = None;
+        let run_path = state.runs_dir.join(&run_id).join("run.json");
+        if let Ok(content) = std::fs::read_to_string(run_path) {
+            if let Ok(run) = serde_json::from_str::<RunPersist>(&content) {
+                if !run.src_endpoint.name.is_empty() {
+                    source = Some(run.src_endpoint.name);
+                }
+            }
+        }
+        let label = if let Some(src) = &source {
+            format!("{} · {}", run_id, src)
+        } else {
+            format!("{} · {} indices", run_id, index_count)
+        };
+        backups.push(BackupRunSummary {
+            id: run_id,
+            label,
+            source,
+            created_at,
+            index_count,
+            docs_total,
+            indices: catalog.indices,
+        });
+    }
+    backups.sort_by(|a, b| b.id.cmp(&a.id));
+    let response = BackupListResponse {
+        backup_root: Some(backup_root_str),
+        backups,
+    };
+    Json(response).into_response()
 }
 
 async fn config_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -1019,9 +1137,26 @@ struct CreateRunForm {
     index_copy_suffix: Option<String>,
     alias_suffix: Option<String>,
     mode: Option<String>,
-    backup_dir: Option<String>,
+    backup_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     selected_indices: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct BackupRunSummary {
+    id: String,
+    label: String,
+    source: Option<String>,
+    created_at: Option<String>,
+    index_count: usize,
+    docs_total: u64,
+    indices: Vec<backup::BackupIndexEntry>,
+}
+
+#[derive(Serialize)]
+struct BackupListResponse {
+    backup_root: Option<String>,
+    backups: Vec<BackupRunSummary>,
 }
 
 fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -1172,16 +1307,17 @@ async fn create_run(
                     return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response()
                 }
             };
-            let backup_dir = form
-                .backup_dir
-                .as_deref()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if backup_dir.is_empty() {
-                return (StatusCode::BAD_REQUEST, "backup_dir is required").into_response();
-            }
-            (src_endpoint, backup_endpoint_config(&backup_dir), RunMode::Backup)
+            let backup_root = match &state.backup_dir {
+                Some(path) => path.to_string_lossy().to_string(),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "backup_dir is not configured on the server",
+                    )
+                        .into_response()
+                }
+            };
+            (src_endpoint, backup_endpoint_config(&backup_root), RunMode::Backup)
         }
         "restore" => {
             let dst_endpoint = match endpoint_by_id(&state, &form.dst_endpoint_id) {
@@ -1194,15 +1330,34 @@ async fn create_run(
                         .into_response()
                 }
             };
-            let backup_dir = form
-                .backup_dir
+            let backup_root = match &state.backup_dir {
+                Some(path) => path.clone(),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "backup_dir is not configured on the server",
+                    )
+                        .into_response()
+                }
+            };
+            let backup_id = form
+                .backup_id
                 .as_deref()
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            if backup_dir.is_empty() {
-                return (StatusCode::BAD_REQUEST, "backup_dir is required").into_response();
+            if backup_id.is_empty() {
+                return (StatusCode::BAD_REQUEST, "backup_id is required").into_response();
             }
+            let backup_dir = backup_root.join(&backup_id);
+            if !backup_dir.is_dir() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Selected backup directory does not exist",
+                )
+                    .into_response();
+            }
+            let backup_dir = backup_dir.to_string_lossy().to_string();
             (backup_endpoint_config(&backup_dir), dst_endpoint, RunMode::Restore)
         }
         _ => {
@@ -3630,13 +3785,39 @@ fn is_not_found(err: &std::io::Error) -> bool {
     err.kind() == ErrorKind::NotFound || err.raw_os_error() == Some(2)
 }
 
-fn load_main_config(path: &PathBuf) -> Vec<EndpointConfig> {
+#[derive(Clone, Debug)]
+struct MainConfigBundle {
+    endpoints: Vec<EndpointConfig>,
+    backup_dir: Option<PathBuf>,
+}
+
+fn resolve_backup_dir_value(value: Option<String>) -> Option<PathBuf> {
+    let raw = value?.trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    resolve_backup_dir_path(PathBuf::from(raw))
+}
+
+fn resolve_backup_dir_path(path: PathBuf) -> Option<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    if path.is_absolute() {
+        return Some(path);
+    }
+    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    Some(base.join(path))
+}
+
+fn load_main_config(path: &PathBuf) -> MainConfigBundle {
     let content = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("Failed to read main config {:?}: {e}", path));
     let config: MainConfigFile =
         toml::from_str(&content).unwrap_or_else(|e| panic!("Invalid main config {:?}: {e}", path));
+    let backup_dir = resolve_backup_dir_value(config.global.and_then(|g| g.backup_dir));
     let mut used = HashMap::new();
-    config
+    let endpoints = config
         .endpoints
         .into_iter()
         .enumerate()
@@ -3677,7 +3858,11 @@ fn load_main_config(path: &PathBuf) -> Vec<EndpointConfig> {
                 tenants,
             }
         })
-        .collect()
+        .collect();
+    MainConfigBundle {
+        endpoints,
+        backup_dir,
+    }
 }
 
 fn load_templates(path: &PathBuf) -> Vec<TemplateConfig> {

@@ -24,6 +24,7 @@ audit/
 runs/
 images/2026-*.png
 backup/
+backups/
 
 # Icon must end with two \r
 Icon
