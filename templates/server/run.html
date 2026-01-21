@@ -338,6 +338,9 @@
       if (!container) {
         return;
       }
+      const scrollY = window.scrollY;
+      const scrollX = window.scrollX;
+      const previousScrollBehavior = document.documentElement.style.scrollBehavior;
       const openSplits = new Set(
         Array.from(document.querySelectorAll("details.split-details[open]"))
           .map((detail) => detail.getAttribute("data-stage-id"))
@@ -492,6 +495,9 @@
           detail.open = true;
         }
       });
+      document.documentElement.style.scrollBehavior = "auto";
+      window.scrollTo(scrollX, scrollY);
+      document.documentElement.style.scrollBehavior = previousScrollBehavior;
     }
 
     async function fetchRetryFailed() {

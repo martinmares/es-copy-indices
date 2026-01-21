@@ -2160,7 +2160,7 @@ async fn stop_stage(
     }
 
     if errors.is_empty() {
-        (StatusCode::OK, format!("Stop requested for {stopped} job(s).")).into_response()
+        Redirect::to(&with_base(&state, &format!("/runs/{}", run_id))).into_response()
     } else {
         (
             StatusCode::BAD_REQUEST,
@@ -2193,7 +2193,7 @@ async fn stop_run(
     }
 
     if errors.is_empty() {
-        (StatusCode::OK, format!("Stop requested for {stopped} job(s).")).into_response()
+        Redirect::to(&with_base(&state, &format!("/runs/{}", run_id))).into_response()
     } else {
         (
             StatusCode::BAD_REQUEST,
@@ -3416,12 +3416,25 @@ async fn load_runs(state: &AppState) {
                         read_tail_lines(job.stdout_path.as_str(), MAX_TAIL_LINES).await;
                     let stderr_tail =
                         read_tail_lines(job.stderr_path.as_str(), MAX_TAIL_LINES).await;
+                    let completed_from_tail = stdout_tail
+                        .iter()
+                        .any(|line| line.contains("Application completed!"));
+                    if completed_from_tail {
+                        job.completed_line = true;
+                    }
                     if matches!(job.status, JobStatus::Running) {
-                        job.status = JobStatus::Failed;
-                        job.exit_code = Some(-1);
-                        job.finished_at = Some(now_string());
-                        job.completed_line = false;
-                        run_changed = true;
+                        if job.completed_line {
+                            job.status = JobStatus::Succeeded;
+                            job.exit_code = Some(0);
+                            job.finished_at = Some(now_string());
+                            run_changed = true;
+                        } else {
+                            job.status = JobStatus::Failed;
+                            job.exit_code = Some(-1);
+                            job.finished_at = Some(now_string());
+                            job.completed_line = false;
+                            run_changed = true;
+                        }
                     }
                     if matches!(job.status, JobStatus::Queued) {
                         queued.push(QueuedJob {
