@@ -16,7 +16,7 @@ pub struct BackupIndexCatalog {
     pub indices: Vec<BackupIndexEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BackupIndexEntry {
     pub name: String,
     pub dir: String,
@@ -487,4 +487,42 @@ pub fn extract_routing_ids(
         }
     }
     ids
+}
+
+pub fn resolve_index_dir(backup_dir: &Path, index_name: &str) -> Result<PathBuf, String> {
+    let catalog_path = backup_dir.join("indices.json");
+    if !catalog_path.exists() {
+        return Ok(backup_dir.join(index_name));
+    }
+
+    let catalog = load_catalog(&catalog_path);
+    let direct = catalog
+        .indices
+        .iter()
+        .find(|entry| entry.name == index_name)
+        .cloned();
+    if let Some(entry) = direct {
+        return Ok(backup_dir.join(entry.dir));
+    }
+
+    let mut matches: Vec<&BackupIndexEntry> = catalog
+        .indices
+        .iter()
+        .filter(|entry| entry.name.ends_with(index_name))
+        .collect();
+    if matches.len() == 1 {
+        return Ok(backup_dir.join(matches.remove(0).dir.clone()));
+    }
+    if matches.is_empty() {
+        return Ok(backup_dir.join(index_name));
+    }
+    Err(format!(
+        "Multiple backup indices match '{}': {}",
+        index_name,
+        matches
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }

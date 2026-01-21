@@ -7,6 +7,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use crate::backup;
 use clap::Parser;
+use clap::ArgAction;
+use chrono::TimeZone;
 use reqwest::Certificate;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -31,6 +33,7 @@ use zip::write::FileOptions;
 const DEFAULT_STAGE_NAME: &str = "copy";
 const SPLIT_SUFFIX: &str = "split";
 const MAX_TAIL_LINES: usize = 200;
+const REDACTED_VALUE: &str = "***";
 
 #[derive(Parser, Debug)]
 #[command(name = "es-copy-indices-server", version)]
@@ -71,6 +74,8 @@ struct ServerArgs {
     audit: bool,
     #[arg(long = "backup-dir", value_name = "PATH")]
     backup_dir: Option<PathBuf>,
+    #[arg(long = "no-redact-logs", action = ArgAction::SetTrue)]
+    no_redact_logs: bool,
 }
 
 #[derive(Clone)]
@@ -92,6 +97,7 @@ struct AppState {
     alias_suffix: Option<String>,
     alias_remove_if_exists: bool,
     audit: bool,
+    redact_logs: bool,
     backup_dir: Option<PathBuf>,
     runs: Arc<RwLock<RunStore>>,
     quarantined_runs: Arc<RwLock<Vec<String>>>,
@@ -434,6 +440,8 @@ struct TemplateSnapshot {
     path: String,
     #[serde(default)]
     number_of_replicas: Option<u64>,
+    #[serde(default)]
+    tenants: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -547,7 +555,8 @@ struct OutputConfig {
 #[derive(Serialize)]
 struct OutputEndpoint {
     name: String,
-    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     root_certificates: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -914,6 +923,7 @@ pub async fn run() {
         alias_suffix: args.alias_suffix,
         alias_remove_if_exists: args.alias_remove_if_exists,
         audit: args.audit,
+        redact_logs: !args.no_redact_logs,
         backup_dir,
         runs: Arc::new(RwLock::new(RunStore::default())),
         quarantined_runs: Arc::new(RwLock::new(Vec::new())),
@@ -1074,11 +1084,19 @@ async fn backups_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             .sum::<u64>();
         let created_at = catalog.indices.first().map(|item| item.created_at.clone());
         let mut source = None;
+        let mut tenants = Vec::new();
         let run_path = state.runs_dir.join(&run_id).join("run.json");
         if let Ok(content) = std::fs::read_to_string(run_path) {
             if let Ok(run) = serde_json::from_str::<RunPersist>(&content) {
                 if !run.src_endpoint.name.is_empty() {
                     source = Some(run.src_endpoint.name);
+                }
+                if !run.template.tenants.is_empty() {
+                    tenants = run.template.tenants;
+                } else if !run.src_endpoint.tenants.is_empty() {
+                    tenants = run.src_endpoint.tenants;
+                } else if !run.dst_endpoint.tenants.is_empty() {
+                    tenants = run.dst_endpoint.tenants;
                 }
             }
         }
@@ -1095,6 +1113,7 @@ async fn backups_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             index_count,
             docs_total,
             indices: catalog.indices,
+            tenants,
         });
     }
     backups.sort_by(|a, b| b.id.cmp(&a.id));
@@ -1151,6 +1170,7 @@ struct BackupRunSummary {
     index_count: usize,
     docs_total: u64,
     indices: Vec<backup::BackupIndexEntry>,
+    tenants: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1379,15 +1399,15 @@ async fn create_run(
         }
     };
 
-    let copy_suffix_override = if run_mode == RunMode::Copy {
+    let copy_suffix_override = if run_mode == RunMode::Backup {
+        None
+    } else {
         copy_suffix_override
-    } else {
-        None
     };
-    let alias_suffix_override = if run_mode == RunMode::Copy {
-        alias_suffix_override
-    } else {
+    let alias_suffix_override = if run_mode == RunMode::Backup {
         None
+    } else {
+        alias_suffix_override
     };
 
     match run_mode {
@@ -1533,11 +1553,18 @@ async fn create_run_wizard(
         name: DEFAULT_STAGE_NAME.to_string(),
         jobs,
     }];
+    let mut wizard_tenants = src_endpoint.tenants.clone();
+    for tenant in &dst_endpoint.tenants {
+        if !wizard_tenants.iter().any(|value| value == tenant) {
+            wizard_tenants.push(tenant.clone());
+        }
+    }
     let template_snapshot = TemplateSnapshot {
         id: "wizard".to_string(),
         name: "Wizard selection".to_string(),
         path: "".to_string(),
         number_of_replicas: defaults.number_of_replicas,
+        tenants: wizard_tenants,
     };
     let wizard_snapshot = WizardSnapshot {
         defaults: defaults.clone(),
@@ -2755,12 +2782,13 @@ async fn run_dry_job(
         )
         .await;
         for line in content.lines() {
+            let line = redact_config_line(line, state.redact_logs);
             let _ = append_log_line(
                 &state,
                 &run_id,
                 &job_id,
                 LogStream::Stdout,
-                line,
+                &line,
                 &stdout_path,
             )
             .await;
@@ -2787,6 +2815,7 @@ async fn run_dry_job(
     )
     .await;
     for (key, value) in env_vars {
+        let value = redact_env_value(&key, &value, state.redact_logs);
         let _ = append_log_line(
             &state,
             &run_id,
@@ -3799,15 +3828,29 @@ fn resolve_backup_dir_value(value: Option<String>) -> Option<PathBuf> {
     resolve_backup_dir_path(PathBuf::from(raw))
 }
 
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component),
+        }
+    }
+    normalized
+}
+
 fn resolve_backup_dir_path(path: PathBuf) -> Option<PathBuf> {
     if path.as_os_str().is_empty() {
         return None;
     }
     if path.is_absolute() {
-        return Some(path);
+        return Some(normalize_path(path));
     }
     let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    Some(base.join(path))
+    Some(normalize_path(base.join(path)))
 }
 
 fn load_main_config(path: &PathBuf) -> MainConfigBundle {
@@ -3980,6 +4023,7 @@ fn template_snapshot(template: &TemplateConfig) -> TemplateSnapshot {
         name: template.name.clone(),
         path: template.path.to_string_lossy().to_string(),
         number_of_replicas: template.number_of_replicas,
+        tenants: template.tenants.clone(),
     }
 }
 
@@ -4202,6 +4246,47 @@ async fn plan_stages_filtered(
                 }
                 continue;
             }
+            if matches!(run_mode, RunMode::Restore) {
+                let stage_name = format!("{}-{}", DEFAULT_STAGE_NAME, index.name);
+                let date_ranges =
+                    generate_date_intervals_from_backup(state, src_endpoint, index, split).await?;
+                let mut leftover = index.clone();
+                leftover.split = Some(split.clone());
+                push_job(
+                    stage_name.clone(),
+                    JobPlan {
+                        name: format!(
+                            "{}-{}-{}-leftover",
+                            DEFAULT_STAGE_NAME, index.name, SPLIT_SUFFIX
+                        ),
+                        index: leftover,
+                        date_from: None,
+                        date_to: None,
+                        leftover: true,
+                        split_doc_count: None,
+                    },
+                );
+                for (i, range) in date_ranges.into_iter().enumerate() {
+                    push_job(
+                        stage_name.clone(),
+                        JobPlan {
+                            name: format!(
+                                "{}-{}-{}-{}",
+                                DEFAULT_STAGE_NAME,
+                                index.name,
+                                SPLIT_SUFFIX,
+                                i + 1
+                            ),
+                            index: index.clone(),
+                            date_from: range.from,
+                            date_to: range.to,
+                            leftover: false,
+                            split_doc_count: range.doc_count,
+                        },
+                    );
+                }
+                continue;
+            }
             let stage_name = format!("{}-{}", DEFAULT_STAGE_NAME, index.name);
             push_job(
                 stage_name,
@@ -4382,6 +4467,120 @@ async fn generate_date_intervals(
     Ok(ranges)
 }
 
+async fn generate_date_intervals_from_backup(
+    state: &AppState,
+    src_endpoint: &EndpointConfig,
+    index: &InputIndex,
+    split: &SplitConfig,
+) -> Result<Vec<SplitRange>, String> {
+    let backup_dir = src_endpoint
+        .backup_dir
+        .as_ref()
+        .ok_or_else(|| "backup_dir is missing for restore split".to_string())?;
+    let backup_dir = PathBuf::from(backup_dir);
+    let index_dir = backup::resolve_index_dir(&backup_dir, &index.name)
+        .map_err(|err| format!("Failed to resolve backup index directory: {err}"))?;
+    let metadata: backup::BackupMetadata =
+        backup::read_json_file(&index_dir.join("metadata.json"))
+            .map_err(|e| format!("Failed to read metadata.json: {e}"))?;
+
+    let field = metadata
+        .quantile_field
+        .clone()
+        .ok_or_else(|| format!("backup metadata missing quantile_field for {}", index.name))?;
+    if field != split.field_name {
+        warn!(
+            "backup quantile field {} does not match split field {}; using {}",
+            field, split.field_name, field
+        );
+    }
+    let centroids = metadata
+        .quantile_digest
+        .clone()
+        .ok_or_else(|| format!("backup metadata missing quantile_digest for {}", index.name))?;
+    if centroids.is_empty() {
+        return Err(format!(
+            "backup metadata quantile_digest empty for {}",
+            index.name
+        ));
+    }
+
+    let percents = generate_ranges(split.number_of_parts);
+    let mut percentile_values: Vec<Option<String>> = Vec::new();
+    for percent in percents {
+        let value = quantile_from_centroids(&centroids, percent as f64)
+            .ok_or_else(|| format!("Failed to compute quantile {} for {}", percent, index.name))?;
+        let value = quantile_value_to_string(value).ok_or_else(|| {
+            format!(
+                "Failed to format quantile {} for {}",
+                percent, index.name
+            )
+        })?;
+        percentile_values.push(Some(value));
+    }
+
+    let mut ordered_values = percentile_values;
+    ordered_values.insert(0, None);
+    ordered_values.push(None);
+
+    let mut ranges = Vec::new();
+    for window in ordered_values.windows(2) {
+        ranges.push(SplitRange {
+            from: window[0].clone(),
+            to: window[1].clone(),
+            doc_count: None,
+        });
+    }
+
+    if ranges.len() < split.number_of_parts as usize {
+        return Err("percentile ranges shorter than expected".to_string());
+    }
+
+    Ok(ranges
+        .into_iter()
+        .take(split.number_of_parts as usize)
+        .collect())
+}
+
+fn quantile_from_centroids(centroids: &[backup::QuantileCentroid], percent: f64) -> Option<f64> {
+    if centroids.is_empty() {
+        return None;
+    }
+    let mut ordered: Vec<backup::QuantileCentroid> = centroids.to_vec();
+    ordered.sort_by(|a, b| {
+        a.mean
+            .partial_cmp(&b.mean)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let total: f64 = ordered.iter().map(|c| c.count).sum();
+    if total <= 0.0 {
+        return None;
+    }
+    let target = total * (percent / 100.0);
+    let mut cumulative = 0.0;
+    for centroid in ordered.iter() {
+        cumulative += centroid.count;
+        if cumulative >= target {
+            return Some(centroid.mean);
+        }
+    }
+    ordered.last().map(|c| c.mean)
+}
+
+fn quantile_value_to_string(value: f64) -> Option<String> {
+    if !value.is_finite() {
+        return None;
+    }
+    let millis = value.round() as i64;
+    Some(
+        chrono::Utc
+            .timestamp_millis_opt(millis)
+            .single()
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_else(|| millis.to_string()),
+    )
+}
+
 fn generate_ranges(parts: u64) -> Vec<u64> {
     let limit = 100;
     let step = limit / parts.max(1);
@@ -4544,7 +4743,11 @@ fn build_output_config(
     let endpoints = vec![
         OutputEndpoint {
             name: "es-source".to_string(),
-            url: src_endpoint.url.clone(),
+            url: if src_endpoint.backup_dir.is_some() {
+                None
+            } else {
+                Some(src_endpoint.url.clone())
+            },
             root_certificates: state.ca_path().map(|p| p.to_string_lossy().to_string()),
             insecure: if state.insecure { Some(true) } else { None },
             basic_auth: src_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
@@ -4555,7 +4758,11 @@ fn build_output_config(
         },
         OutputEndpoint {
             name: "es-destination".to_string(),
-            url: dst_endpoint.url.clone(),
+            url: if dst_endpoint.backup_dir.is_some() {
+                None
+            } else {
+                Some(dst_endpoint.url.clone())
+            },
             root_certificates: state.ca_path().map(|p| p.to_string_lossy().to_string()),
             insecure: if state.insecure { Some(true) } else { None },
             basic_auth: dst_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
@@ -4673,6 +4880,159 @@ fn normalize_base_path(value: &str) -> String {
         result.pop();
     }
     result
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "password"
+            | "passwd"
+            | "passphrase"
+            | "secret"
+            | "token"
+            | "api_key"
+            | "apikey"
+            | "access_key"
+            | "secret_key"
+            | "authorization"
+    )
+}
+
+fn redact_env_value(key: &str, value: &str, enabled: bool) -> String {
+    if enabled && is_sensitive_key(key) {
+        REDACTED_VALUE.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn is_word_char(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn find_key_case_insensitive(haystack: &[u8], key: &[u8], start: usize) -> Option<usize> {
+    if key.is_empty() || haystack.len() < key.len() || start >= haystack.len() {
+        return None;
+    }
+    let key_len = key.len();
+    for i in start..=haystack.len() - key_len {
+        let mut matched = true;
+        for j in 0..key_len {
+            let h = haystack[i + j].to_ascii_lowercase();
+            if h != key[j] {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn redact_line_for_key(line: &str, key: &str) -> String {
+    let mut output = line.to_string();
+    let key_bytes = key.as_bytes();
+    let mut search_start = 0;
+
+    loop {
+        let bytes = output.as_bytes();
+        let Some(match_idx) = find_key_case_insensitive(bytes, key_bytes, search_start) else {
+            break;
+        };
+
+        let before = if match_idx == 0 { None } else { bytes.get(match_idx - 1) };
+        let after = bytes.get(match_idx + key_bytes.len());
+        let before_ok = before.map_or(true, |b| !is_word_char(*b));
+        let after_ok = after.map_or(true, |b| !is_word_char(*b));
+        if !before_ok || !after_ok {
+            search_start = match_idx + key_bytes.len();
+            continue;
+        }
+
+        let mut eq_idx = None;
+        for i in match_idx + key_bytes.len()..bytes.len() {
+            if bytes[i] == b'=' {
+                eq_idx = Some(i);
+                break;
+            }
+        }
+        let Some(eq_idx) = eq_idx else {
+            break;
+        };
+
+        let mut value_start = eq_idx + 1;
+        while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
+            value_start += 1;
+        }
+        if value_start >= bytes.len() {
+            break;
+        }
+
+        let (value_end, wrap_with_quotes, quote_char) = if bytes[value_start] == b'"' || bytes[value_start] == b'\'' {
+            let quote = bytes[value_start];
+            let mut end = value_start + 1;
+            while end < bytes.len() {
+                if bytes[end] == quote && bytes.get(end.wrapping_sub(1)) != Some(&b'\\') {
+                    break;
+                }
+                end += 1;
+            }
+            if end >= bytes.len() {
+                break;
+            }
+            (end, true, quote as char)
+        } else {
+            let mut end = value_start;
+            while end < bytes.len() {
+                let b = bytes[end];
+                if b.is_ascii_whitespace() || b == b',' || b == b'}' || b == b']' {
+                    break;
+                }
+                end += 1;
+            }
+            (end, false, '"')
+        };
+
+        let mut replaced = String::with_capacity(output.len() + REDACTED_VALUE.len());
+        replaced.push_str(&output[..value_start]);
+        if wrap_with_quotes {
+            replaced.push(quote_char);
+            replaced.push_str(REDACTED_VALUE);
+            replaced.push(quote_char);
+            replaced.push_str(&output[value_end + 1..]);
+        } else {
+            replaced.push_str(REDACTED_VALUE);
+            replaced.push_str(&output[value_end..]);
+        }
+        output = replaced;
+        search_start = value_start + REDACTED_VALUE.len();
+    }
+
+    output
+}
+
+fn redact_config_line(line: &str, enabled: bool) -> String {
+    if !enabled {
+        return line.to_string();
+    }
+    let mut redacted = line.to_string();
+    for key in [
+        "password",
+        "passwd",
+        "passphrase",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "access_key",
+        "secret_key",
+        "authorization",
+    ] {
+        redacted = redact_line_for_key(&redacted, key);
+    }
+    redacted
 }
 
 fn with_base(state: &AppState, path: &str) -> String {

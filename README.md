@@ -259,6 +259,7 @@ Charts:
 - Retry Failed to re-run only the failed jobs without rebuilding the run.
 - Dry run to validate pipelines without touching Elasticsearch.
 - Log filter + copy to clipboard for fast diagnostics.
+- Dry run redacts secrets in the config/env output by default; use `--no-redact-logs` to show raw values.
 
 ### Routes
 - `/` (Dashboard), plus aliases `/dashboard` and `/runs`.
@@ -279,6 +280,7 @@ Flags are strict CLI-only (no env fallbacks).
 - `--alias-suffix SUFFIX`: adds `-SUFFIX` to alias name.
 - `--alias-remove-if-exists`: if set, alias removal is enabled (default false).
 - `--audit`: if set, audit logging is enabled (default false).
+- `--no-redact-logs`: disable redaction in dry-run config/env output (default redacts secrets).
 - `--timestamp STRING`: override timestamp used in `name_of_copy`.
 - `--root-certificates DIR`: PEM directory for HTTPS (alias: `--ca-path`).
 - `--insecure`: disable TLS verify for percentile queries and generated jobs (useful with self-signed or non-compliant certs).

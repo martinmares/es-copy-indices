@@ -18,6 +18,7 @@ use tracing_subscriber::EnvFilter;
 // use env_logger::Env;
 // use log::{error, info, warn};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use chrono::Utc;
 use twelf::Layer;
 use crate::backup::{BackupChunkWriter, BackupDoc, BackupIndexEntry, BackupMetadata};
@@ -129,6 +130,137 @@ fn is_run_id_component(value: &str) -> bool {
         }
         if !byte.is_ascii_digit() {
             return false;
+        }
+    }
+    true
+}
+
+#[derive(Debug)]
+struct RestoreFilter {
+    range_field: Option<String>,
+    gte: Option<f64>,
+    lt: Option<f64>,
+    must_not_exists_field: Option<String>,
+}
+
+fn parse_restore_filter(query: &str) -> Option<RestoreFilter> {
+    let value: serde_json::Value = serde_json::from_str(query).ok()?;
+    let bool = value.get("bool")?;
+
+    let mut range_field = None;
+    let mut gte = None;
+    let mut lt = None;
+
+    if let Some(filters) = bool.get("filter").and_then(|v| v.as_array()) {
+        for filter in filters {
+            if let Some(range) = filter.get("range").and_then(|v| v.as_object()) {
+                for (field, spec) in range {
+                    range_field = Some(field.clone());
+                    if let Some(spec) = spec.as_object() {
+                        if let Some(value) = spec.get("gte") {
+                            gte = parse_range_bound(value);
+                        }
+                        if let Some(value) = spec.get("lt") {
+                            lt = parse_range_bound(value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut must_not_exists_field = None;
+    if let Some(must_not) = bool.get("must_not") {
+        let list = if must_not.is_array() {
+            must_not.as_array().cloned().unwrap_or_default()
+        } else {
+            vec![must_not.clone()]
+        };
+        for entry in list {
+            if let Some(exists) = entry.get("exists").and_then(|v| v.as_object()) {
+                if let Some(field) = exists.get("field").and_then(|v| v.as_str()) {
+                    must_not_exists_field = Some(field.to_string());
+                }
+            }
+        }
+    }
+
+    if range_field.is_none() && must_not_exists_field.is_none() {
+        return None;
+    }
+
+    Some(RestoreFilter {
+        range_field,
+        gte,
+        lt,
+        must_not_exists_field,
+    })
+}
+
+fn parse_range_bound(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Number(number) => number.as_f64(),
+        serde_json::Value::String(text) => {
+            if let Ok(parsed) = f64::from_str(text) {
+                Some(parsed)
+            } else if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(text) {
+                Some(parsed.timestamp_millis() as f64)
+            } else if let Ok(parsed) =
+                chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f%z")
+            {
+                Some(parsed.timestamp_millis() as f64)
+            } else if let Ok(parsed) =
+                chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%z")
+            {
+                Some(parsed.timestamp_millis() as f64)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn doc_has_field(source: &serde_json::Value, field: &str) -> bool {
+    if field.starts_with('/') {
+        return source
+            .pointer(field)
+            .map(|value| !value.is_null())
+            .unwrap_or(false);
+    }
+    if field.contains('.') {
+        let mut current = source;
+        for part in field.split('.') {
+            match current.get(part) {
+                Some(next) => current = next,
+                None => return false,
+            }
+        }
+        return !current.is_null();
+    }
+    source.get(field).map(|value| !value.is_null()).unwrap_or(false)
+}
+
+fn doc_matches_filter(doc: &BackupDoc, filter: &RestoreFilter) -> bool {
+    if let Some(field) = &filter.must_not_exists_field {
+        if doc_has_field(&doc.source, field) {
+            return false;
+        }
+    }
+    if let Some(field) = &filter.range_field {
+        let value = backup::extract_quantile_value(&doc.source, field);
+        let Some(value) = value else {
+            return false;
+        };
+        if let Some(gte) = filter.gte {
+            if value < gte {
+                return false;
+            }
+        }
+        if let Some(lt) = filter.lt {
+            if value >= lt {
+                return false;
+            }
         }
     }
     true
@@ -470,9 +602,15 @@ async fn main() {
                     config_path.as_path(),
                     from_endpoint.get_backup_dir().as_ref().unwrap(),
                 );
-                let index_dir = backup_dir.join(index_name);
+                let index_dir = match backup::resolve_index_dir(&backup_dir, index_name) {
+                    Ok(path) => path,
+                    Err(err) => panic!("Failed to resolve backup index directory: {}", err),
+                };
                 let data_dir = index_dir.join("data");
 
+                let metadata: backup::BackupMetadata =
+                    backup::read_json_file(&index_dir.join("metadata.json"))
+                        .expect("Failed to read metadata.json");
                 let mapping: serde_json::Value =
                     backup::read_json_file(&index_dir.join("mappings.json"))
                         .expect("Failed to read mappings.json");
@@ -527,12 +665,41 @@ async fn main() {
                         .get_server_major_version();
                     let mut batch: Vec<backup::BackupDoc> = Vec::new();
                     let mut pre_created_ids: HashSet<String> = HashSet::new();
+                    let restore_filter = index
+                        .get_custom()
+                        .as_ref()
+                        .and_then(|custom| custom.get_query().as_ref())
+                        .and_then(|query| parse_restore_filter(query.as_str()));
 
+                    let mut total_docs = metadata.docs_total.unwrap_or(0);
+                    if restore_filter.is_some() {
+                        total_docs = 0;
+                        for file in &files {
+                            let docs = backup::read_backup_docs(file)
+                                .expect("Failed to read backup data file");
+                            for doc in docs {
+                                if let Some(filter) = &restore_filter {
+                                    if !doc_matches_filter(&doc, filter) {
+                                        continue;
+                                    }
+                                }
+                                total_docs += 1;
+                            }
+                        }
+                    }
+
+                    let mut processed_docs = 0u64;
                     for file in files {
                         let docs = backup::read_backup_docs(&file)
                             .expect("Failed to read backup data file");
                         for doc in docs {
+                            if let Some(filter) = &restore_filter {
+                                if !doc_matches_filter(&doc, filter) {
+                                    continue;
+                                }
+                            }
                             batch.push(doc);
+                            processed_docs += 1;
                             if batch.len() >= max_docs {
                                 flush_restore_batch(
                                     &mut batch,
@@ -543,18 +710,41 @@ async fn main() {
                                     &mut pre_created_ids,
                                 )
                                 .await;
+                                if total_docs > 0 {
+                                    let percent = (processed_docs as f64 / total_docs as f64) * 100.0;
+                                    info!(
+                                        "Iterate {} - docs {}/{} ({:.2} %)",
+                                        index_name, processed_docs, total_docs, percent
+                                    );
+                                } else {
+                                    info!(
+                                        "Iterate {} - docs {}",
+                                        index_name, processed_docs
+                                    );
+                                }
                             }
                         }
                     }
-                    flush_restore_batch(
-                        &mut batch,
-                        dest_name,
-                        index,
-                        destination_es_client.as_mut().unwrap(),
-                        server_major_version,
-                        &mut pre_created_ids,
-                    )
-                    .await;
+                    if !batch.is_empty() {
+                        flush_restore_batch(
+                            &mut batch,
+                            dest_name,
+                            index,
+                            destination_es_client.as_mut().unwrap(),
+                            server_major_version,
+                            &mut pre_created_ids,
+                        )
+                        .await;
+                    }
+                    if total_docs > 0 {
+                        let percent = (processed_docs as f64 / total_docs as f64) * 100.0;
+                        info!(
+                            "Iterate {} - docs {}/{} ({:.2} %)",
+                            index_name, processed_docs, total_docs, percent
+                        );
+                    } else {
+                        info!("Iterate {} - docs {}", index_name, processed_docs);
+                    }
                 }
 
                 destination_es_client

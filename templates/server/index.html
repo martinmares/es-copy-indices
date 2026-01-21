@@ -463,6 +463,14 @@
                   {% endfor %}
                 </select>
               </div>
+              <div class="col-md-6 d-none" id="restoreSuffixGroup">
+                <label class="form-label">Index copy suffix</label>
+                <input class="form-control" type="text" name="index_copy_suffix" id="restoreCopySuffix" value="{{ copy_suffix.as_deref().unwrap_or("") }}">
+              </div>
+              <div class="col-md-6 d-none" id="restoreAliasSuffixGroup">
+                <label class="form-label">Alias suffix</label>
+                <input class="form-control" type="text" name="alias_suffix" id="restoreAliasSuffix" value="{{ alias_suffix.as_deref().unwrap_or("") }}">
+              </div>
               <div class="col-md-6">
                 <label class="form-label">Template</label>
                 <select class="form-select" name="template_id" id="backupTemplateSelect" required>
@@ -1087,6 +1095,10 @@
     const restoreFromSelect = document.getElementById("restoreFromSelect");
     const restoreFromDetails = document.getElementById("restoreFromDetails");
     const restoreNoBackups = document.getElementById("restoreNoBackups");
+    const restoreSuffixGroup = document.getElementById("restoreSuffixGroup");
+    const restoreAliasSuffixGroup = document.getElementById("restoreAliasSuffixGroup");
+    const restoreCopySuffix = document.getElementById("restoreCopySuffix");
+    const restoreAliasSuffix = document.getElementById("restoreAliasSuffix");
     const backupTemplateSelect = document.getElementById("backupTemplateSelect");
     const backupIndicesTable = document.getElementById("backupIndicesTable");
     const backupSelectAll = document.getElementById("backupSelectAll");
@@ -1207,22 +1219,30 @@
       return endpoints.find((item) => item.id === id);
     }
 
-    function templateCompatible(template, srcEndpoint, dstEndpoint, mode) {
+    function templateCompatible(template, srcEndpoint, dstEndpoint, mode, restoreTenantsOverride) {
       const templateTenants = Array.isArray(template.tenants) ? template.tenants : [];
       if (!templateTenants.length) return false;
       const srcTenants = Array.isArray(srcEndpoint?.tenants) ? srcEndpoint.tenants : [];
       const dstTenants = Array.isArray(dstEndpoint?.tenants) ? dstEndpoint.tenants : [];
       const matches = (tenants) => tenants.some((value) => templateTenants.includes(value));
       if (mode === "backup") return matches(srcTenants);
-      if (mode === "restore") return matches(dstTenants);
+      if (mode === "restore") {
+        const restoreTenants = Array.isArray(restoreTenantsOverride) ? restoreTenantsOverride : [];
+        if (restoreTenants.length) {
+          return matches(restoreTenants);
+        }
+        return matches(dstTenants);
+      }
       return matches(srcTenants) && matches(dstTenants);
     }
 
-    function updateTemplateOptions(selectEl, mode, srcId, dstId) {
+    function updateTemplateOptions(selectEl, mode, srcId, dstId, restoreTenantsOverride) {
       if (!selectEl) return;
       const src = getEndpointById(srcId);
       const dst = getEndpointById(dstId);
-      const compatible = templates.filter((template) => templateCompatible(template, src, dst, mode));
+      const compatible = templates.filter((template) =>
+        templateCompatible(template, src, dst, mode, restoreTenantsOverride)
+      );
       const current = selectEl.value;
       selectEl.innerHTML = "";
       if (!compatible.length) {
@@ -1245,6 +1265,51 @@
       } else {
         selectEl.value = compatible[0].id;
       }
+    }
+
+    function updateRestoreEndpointOptions(tenants) {
+      if (!backupDstEndpointSelect) return;
+      const restoreTenantList = Array.isArray(tenants) ? tenants : [];
+      const current = backupDstEndpointSelect.value;
+      const allowed = restoreTenantList.length
+        ? endpoints.filter((endpoint) =>
+            Array.isArray(endpoint.tenants) &&
+            restoreTenantList.some((value) => endpoint.tenants.includes(value))
+          )
+        : endpoints.slice();
+      backupDstEndpointSelect.innerHTML = "";
+      if (!allowed.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No matching endpoints";
+        option.disabled = true;
+        option.selected = true;
+        backupDstEndpointSelect.appendChild(option);
+        return;
+      }
+      allowed.forEach((endpoint) => {
+        const option = document.createElement("option");
+        option.value = endpoint.id;
+        option.textContent = endpoint.name;
+        backupDstEndpointSelect.appendChild(option);
+      });
+      if (allowed.some((endpoint) => endpoint.id === current)) {
+        backupDstEndpointSelect.value = current;
+      } else {
+        backupDstEndpointSelect.value = allowed[0].id;
+      }
+    }
+
+    function applyRestoreTenants(tenants) {
+      restoreTenants = Array.isArray(tenants) ? tenants : [];
+      updateRestoreEndpointOptions(restoreTenants);
+      updateTemplateOptions(
+        backupTemplateSelect,
+        "restore",
+        backupSrcEndpointSelect?.value,
+        backupDstEndpointSelect?.value,
+        restoreTenants
+      );
     }
 
     function updateClassicDetails() {
@@ -1461,6 +1526,7 @@
     }
 
     let backupRunsCache = [];
+    let restoreTenants = [];
 
     async function loadBackupRuns() {
       if (!restoreFromSelect) return;
@@ -1505,6 +1571,7 @@
         restoreFromDetails.textContent = "";
         return;
       }
+      applyRestoreTenants(backup.tenants || []);
       const indices = backup.indices || [];
       const lines = indices
         .map((item) => {
@@ -1541,6 +1608,8 @@
       }
       if (backupDirGroup) backupDirGroup.classList.toggle("d-none", mode === "restore");
       if (restoreFromGroup) restoreFromGroup.classList.toggle("d-none", mode !== "restore");
+      if (restoreSuffixGroup) restoreSuffixGroup.classList.toggle("d-none", mode !== "restore");
+      if (restoreAliasSuffixGroup) restoreAliasSuffixGroup.classList.toggle("d-none", mode !== "restore");
       if (backupSrcGroup) backupSrcGroup.classList.toggle("d-none", mode === "restore");
       if (backupDstGroup) backupDstGroup.classList.toggle("d-none", mode === "backup");
       if (backupSrcEndpointSelect) backupSrcEndpointSelect.required = mode === "backup";
@@ -1548,6 +1617,13 @@
       if (backupRestoreSpinner) backupRestoreSpinner.classList.add("d-none");
       if (backupRestoreSpinnerLabel) backupRestoreSpinnerLabel.classList.add("d-none");
       if (backupRestoreCreate) backupRestoreCreate.disabled = false;
+      if (mode !== "restore") {
+        restoreTenants = [];
+      }
+      if (mode !== "restore") {
+        if (restoreCopySuffix) restoreCopySuffix.value = "";
+        if (restoreAliasSuffix) restoreAliasSuffix.value = "";
+      }
       if (mode === "backup") {
         const configured = backupDirDisplay?.dataset.backupRoot?.trim();
         if (!configured) {
@@ -1562,7 +1638,8 @@
         backupTemplateSelect,
         mode,
         backupSrcEndpointSelect?.value,
-        backupDstEndpointSelect?.value
+        backupDstEndpointSelect?.value,
+        mode === "restore" ? restoreTenants : undefined
       );
       renderBackupIndices();
       backupRestoreModal.showModal();
@@ -1652,7 +1729,8 @@
         backupTemplateSelect,
         backupModeInput?.value ?? "backup",
         backupSrcEndpointSelect?.value,
-        backupDstEndpointSelect?.value
+        backupDstEndpointSelect?.value,
+        backupModeInput?.value === "restore" ? restoreTenants : undefined
       );
       renderBackupIndices();
     });
@@ -1661,7 +1739,8 @@
         backupTemplateSelect,
         backupModeInput?.value ?? "backup",
         backupSrcEndpointSelect?.value,
-        backupDstEndpointSelect?.value
+        backupDstEndpointSelect?.value,
+        backupModeInput?.value === "restore" ? restoreTenants : undefined
       );
       renderBackupIndices();
     });
@@ -1740,6 +1819,8 @@
       if (backupDstEndpointSelect?.value) payload.append("dst_endpoint_id", backupDstEndpointSelect.value);
       if (backupModeInput?.value === "restore" && restoreFromSelect?.value) {
         payload.append("backup_id", restoreFromSelect.value);
+        if (restoreCopySuffix?.value) payload.append("index_copy_suffix", restoreCopySuffix.value);
+        if (restoreAliasSuffix?.value) payload.append("alias_suffix", restoreAliasSuffix.value);
       }
       if (backupTemplateSelect?.value) payload.append("template_id", backupTemplateSelect.value);
       if (backupRestoreForm.querySelector("input[name=\"dry_run\"]")?.checked) {
