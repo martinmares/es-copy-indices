@@ -500,5 +500,11 @@ scroll_mode = "scrolling_search"
 ## Built With
 This project includes server UI and workflow improvements built with the help of CatGPT 5.2 codex.
 
+## Server License (es-copy-indices-server)
+The `es-copy-indices-server` binary is dual-licensed:
+- **Free for non-commercial use** under the terms in `LICENSE-server.txt`.
+- **Commercial use** requires a paid license (see `LICENSE-server.txt` for contact details).
+
 ## License
-See `LICENSE`.
+`es-copy-indices` (CLI) is MIT licensed.  
+`es-copy-indices-server` uses the dual-license described in `LICENSE-server.txt`.
