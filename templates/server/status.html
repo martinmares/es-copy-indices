@@ -140,11 +140,7 @@
         <div class="card-body">
           <div class="text-secondary">Concurrency Limit</div>
           <div class="h2 m-0" id="jobLimit">
-            {% if summary.max_concurrent_jobs.is_some() %}
-              {{ summary.max_concurrent_jobs.unwrap() }}
-            {% else %}
-              Unlimited
-            {% endif %}
+            Per destination
           </div>
         </div>
       </div>
@@ -358,7 +354,7 @@
       totalMem.textContent = `${Math.round(sample.total_mem_kb / 1024)} MB`;
       runningJobs.textContent = sample.running_jobs;
       queuedJobs.textContent = sample.queued_jobs;
-      jobLimit.textContent = sample.max_concurrent_jobs ? sample.max_concurrent_jobs : "Unlimited";
+      jobLimit.textContent = "Per destination";
       loadAvg.textContent = `${sample.load1.toFixed(2)} / ${sample.load5.toFixed(2)} / ${sample.load15.toFixed(2)}`;
     }
 

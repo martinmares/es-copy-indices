@@ -227,30 +227,50 @@
 {% block content %}
   <div class="row row-cards mb-3">
     <div class="col-12 col-lg-6">
-      <div class="card">
+      <div class="card h-100">
         <div class="card-body">
-          <div class="text-secondary mb-2">Concurrency</div>
-          <div class="d-flex align-items-center gap-2 flex-wrap concurrency-row">
-            <div class="text-secondary">Max concurrent jobs</div>
-            <div class="btn-group btn-group-sm" role="group" aria-label="Adjust concurrency">
-              <button class="btn btn-outline-secondary" id="decreaseConcurrency" type="button">&nbsp;&nbsp;
-                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M6 9l6 6l6-6"></path>
-                </svg>
-                &nbsp;&nbsp;</button>
-              <span class="btn btn-outline-secondary disabled concurrency-value" id="maxConcurrencyValue" data-max-concurrency="{{ max_concurrent_jobs.unwrap_or(0) }}">
-                {% if max_concurrent_jobs.is_some() %}
-                  {{ max_concurrent_jobs.unwrap() }}
-                {% else %}
-                  ∞
-                {% endif %}
-              </span>
-              <button class="btn btn-outline-secondary" id="increaseConcurrency" type="button">&nbsp;&nbsp;
-                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M6 15l6-6l6 6"></path>
-                </svg>
-                &nbsp;&nbsp;</button>
-            </div>
+          <div class="text-secondary mb-2">Concurrency by destination</div>
+          <div class="table-responsive">
+            <table class="table table-sm table-vcenter">
+              <thead>
+                <tr>
+                  <th>Destination</th>
+                  <th>Running</th>
+                  <th>Queued</th>
+                  <th class="text-end">Limit</th>
+                </tr>
+              </thead>
+              <tbody id="queueLimits">
+                {% for limit in queue_limits %}
+                <tr data-endpoint-id="{{ limit.endpoint_id }}">
+                  <td>{{ limit.endpoint_name }}</td>
+                  <td><span class="badge bg-yellow text-dark js-queue-running">{{ limit.running_jobs }}</span></td>
+                  <td><span class="badge bg-blue text-white js-queue-queued">{{ limit.queued_jobs }}</span></td>
+                  <td class="text-end">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Adjust concurrency">
+                      <button class="btn btn-outline-secondary js-queue-decrease" type="button" data-endpoint-id="{{ limit.endpoint_id }}">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M6 9l6 6l6-6"></path>
+                        </svg>
+                      </button>
+                      <span class="btn btn-outline-secondary disabled concurrency-value js-queue-limit" data-max-concurrency="{{ limit.max_concurrent_jobs.unwrap_or(0) }}">
+                        {% if limit.max_concurrent_jobs.is_some() %}
+                          {{ limit.max_concurrent_jobs.unwrap() }}
+                        {% else %}
+                          ∞
+                        {% endif %}
+                      </span>
+                      <button class="btn btn-outline-secondary js-queue-increase" type="button" data-endpoint-id="{{ limit.endpoint_id }}">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M6 15l6-6l6 6"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
           </div>
           <div class="mt-2" id="runTotals">
             <span class="badge bg-green text-dark run-total-badge">Running {{ running_total }}</span>
@@ -260,7 +280,7 @@
       </div>
     </div>
     <div class="col-12 col-lg-6">
-      <div class="card">
+      <div class="card h-100">
         <div class="card-body">
           <div class="text-secondary">System snapshot</div>
           <div class="row g-3 mt-1">
@@ -1056,7 +1076,6 @@
     const endpoints = {{ endpoints_json | safe }};
     const templates = {{ templates_json | safe }};
     const metricsSamples = {{ metrics_samples_json | safe }};
-    const concurrencyValueEl = document.getElementById("maxConcurrencyValue");
     const runTotalsEl = document.getElementById("runTotals");
     const runsListEl = document.getElementById("runsList");
     const noRunsCard = document.getElementById("noRunsCard");
@@ -2590,39 +2609,91 @@
       }
     });
 
+    function renderQueueLimits(limits) {
+      const container = document.getElementById("queueLimits");
+      if (!container) return;
+      const rows = limits.map((limit) => {
+        const value = limit.max_concurrent_jobs ?? 0;
+        const label = limit.max_concurrent_jobs ? limit.max_concurrent_jobs : "∞";
+        return `<tr data-endpoint-id="${limit.endpoint_id}">
+          <td>${limit.endpoint_name}</td>
+          <td><span class="badge bg-yellow text-dark js-queue-running">${limit.running_jobs}</span></td>
+          <td><span class="badge bg-blue text-white js-queue-queued">${limit.queued_jobs}</span></td>
+          <td class="text-end">
+            <div class="btn-group btn-group-sm" role="group" aria-label="Adjust concurrency">
+              <button class="btn btn-outline-secondary js-queue-decrease" type="button" data-endpoint-id="${limit.endpoint_id}">
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M6 9l6 6l6-6"></path>
+                </svg>
+              </button>
+              <span class="btn btn-outline-secondary disabled concurrency-value js-queue-limit" data-max-concurrency="${value}">
+                ${label}
+              </span>
+              <button class="btn btn-outline-secondary js-queue-increase" type="button" data-endpoint-id="${limit.endpoint_id}">
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M6 15l6-6l6 6"></path>
+                </svg>
+              </button>
+            </div>
+          </td>
+        </tr>`;
+      });
+      container.innerHTML = rows.join("");
+    }
+
     const runsSource = new EventSource(`${basePath}/runs/stream`);
     runsSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (Array.isArray(data)) {
-          updateTotals(data);
-          renderRuns(data);
+        if (data && Array.isArray(data.runs)) {
+          updateTotals(data.runs);
+          renderRuns(data.runs);
+        }
+        if (data && Array.isArray(data.queue_limits)) {
+          renderQueueLimits(data.queue_limits);
         }
       } catch (_) {}
     };
 
-    function updateConcurrency(value) {
-      fetch(`${basePath}/settings/max-concurrent-jobs`, {
+    function updateEndpointConcurrency(endpointId, value) {
+      const body = new URLSearchParams();
+      body.set("value", value);
+      fetch(`${basePath}/settings/max-concurrent-jobs/${endpointId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ max_concurrent_jobs: value }),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
       }).catch(() => {});
     }
 
-    document.getElementById("decreaseConcurrency")?.addEventListener("click", () => {
-      const current = parseInt(concurrencyValueEl.dataset.maxConcurrency || "0", 10);
-      if (current <= 1) return;
-      const next = current - 1;
-      concurrencyValueEl.dataset.maxConcurrency = `${next}`;
-      concurrencyValueEl.textContent = `${next}`;
-      updateConcurrency(next);
-    });
-    document.getElementById("increaseConcurrency")?.addEventListener("click", () => {
-      const current = parseInt(concurrencyValueEl.dataset.maxConcurrency || "0", 10);
-      const next = current + 1;
-      concurrencyValueEl.dataset.maxConcurrency = `${next}`;
-      concurrencyValueEl.textContent = `${next}`;
-      updateConcurrency(next);
+    document.addEventListener("click", (event) => {
+      const decrease = event.target.closest(".js-queue-decrease");
+      if (decrease) {
+        const endpointId = decrease.dataset.endpointId;
+        if (!endpointId) return;
+        const row = decrease.closest("tr");
+        const valueEl = row?.querySelector(".js-queue-limit");
+        if (!valueEl) return;
+        const current = parseInt(valueEl.dataset.maxConcurrency || "0", 10);
+        if (current <= 1) return;
+        const next = current - 1;
+        valueEl.dataset.maxConcurrency = `${next}`;
+        valueEl.textContent = `${next}`;
+        updateEndpointConcurrency(endpointId, next);
+        return;
+      }
+      const increase = event.target.closest(".js-queue-increase");
+      if (increase) {
+        const endpointId = increase.dataset.endpointId;
+        if (!endpointId) return;
+        const row = increase.closest("tr");
+        const valueEl = row?.querySelector(".js-queue-limit");
+        if (!valueEl) return;
+        const current = parseInt(valueEl.dataset.maxConcurrency || "0", 10);
+        const next = current + 1;
+        valueEl.dataset.maxConcurrency = `${next}`;
+        valueEl.textContent = `${next}`;
+        updateEndpointConcurrency(endpointId, next);
+      }
     });
   </script>
 {% endblock %}

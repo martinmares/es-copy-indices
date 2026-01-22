@@ -101,8 +101,8 @@ struct AppState {
     backup_dir: Option<PathBuf>,
     runs: Arc<RwLock<RunStore>>,
     quarantined_runs: Arc<RwLock<Vec<String>>>,
-    job_queue: Arc<Mutex<VecDeque<QueuedJob>>>,
-    max_concurrent_jobs: Arc<RwLock<Option<usize>>>,
+    default_max_concurrent_jobs: Option<usize>,
+    destination_queues: Arc<Mutex<HashMap<String, DestinationQueue>>>,
     queue_notify: Arc<Notify>,
 }
 
@@ -112,10 +112,39 @@ struct RunStore {
     runs: HashMap<String, RunState>,
 }
 
+fn build_destination_queues(
+    endpoints: &[EndpointConfig],
+    default_max: Option<usize>,
+) -> HashMap<String, DestinationQueue> {
+    let mut queues = HashMap::new();
+    for endpoint in endpoints {
+        queues.entry(endpoint.id.clone()).or_insert_with(|| DestinationQueue {
+            max_concurrent_jobs: default_max,
+            queue: VecDeque::new(),
+        });
+    }
+    queues
+}
+
+async fn ensure_destination_queue(state: &Arc<AppState>, destination_id: &str) {
+    let mut queues = state.destination_queues.lock().await;
+    queues.entry(destination_id.to_string()).or_insert_with(|| DestinationQueue {
+        max_concurrent_jobs: state.default_max_concurrent_jobs,
+        queue: VecDeque::new(),
+    });
+}
+
 #[derive(Clone, Debug)]
 struct QueuedJob {
     run_id: String,
     job_id: String,
+    destination_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct DestinationQueue {
+    max_concurrent_jobs: Option<usize>,
+    queue: VecDeque<QueuedJob>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -630,7 +659,7 @@ struct IndexTemplate {
     endpoints_json: String,
     templates_json: String,
     metrics_samples_json: String,
-    max_concurrent_jobs: Option<usize>,
+    queue_limits: Vec<QueueLimitView>,
     running_total: usize,
     queued_total: usize,
     copy_suffix: Option<String>,
@@ -726,12 +755,22 @@ struct RunSummary {
     jobs_succeeded: usize,
     src_name: String,
     dst_name: String,
+    dst_id: String,
     template_name: String,
     dry_run: bool,
     copy_suffix: Option<String>,
     alias_suffix: Option<String>,
     wizard: bool,
     run_mode: RunMode,
+}
+
+#[derive(Clone, Serialize)]
+struct QueueLimitView {
+    endpoint_id: String,
+    endpoint_name: String,
+    running_jobs: usize,
+    queued_jobs: usize,
+    max_concurrent_jobs: Option<usize>,
 }
 
 #[derive(Clone, Serialize)]
@@ -847,7 +886,6 @@ struct MetricsSummary {
     total_mem_mb: u64,
     running_jobs: usize,
     queued_jobs: usize,
-    max_concurrent_jobs: Option<usize>,
     load1: f64,
     load5: f64,
     load15: f64,
@@ -905,6 +943,12 @@ pub async fn run() {
 
     let metrics = Arc::new(RwLock::new(MetricsState::default()));
     let (metrics_tx, _) = broadcast::channel(200);
+    let default_max_concurrent_jobs = if args.max_concurrent_jobs == 0 {
+        None
+    } else {
+        Some(args.max_concurrent_jobs)
+    };
+    let destination_queues = build_destination_queues(&endpoints, default_max_concurrent_jobs);
     let state = Arc::new(AppState {
         endpoints,
         templates,
@@ -927,12 +971,8 @@ pub async fn run() {
         backup_dir,
         runs: Arc::new(RwLock::new(RunStore::default())),
         quarantined_runs: Arc::new(RwLock::new(Vec::new())),
-        job_queue: Arc::new(Mutex::new(VecDeque::new())),
-        max_concurrent_jobs: Arc::new(RwLock::new(if args.max_concurrent_jobs == 0 {
-            None
-        } else {
-            Some(args.max_concurrent_jobs)
-        })),
+        default_max_concurrent_jobs,
+        destination_queues: Arc::new(Mutex::new(destination_queues)),
         queue_notify: Arc::new(Notify::new()),
     });
 
@@ -942,7 +982,6 @@ pub async fn run() {
         Arc::clone(&state.metrics),
         state.metrics_tx.clone(),
         Arc::clone(&state.runs),
-        Arc::clone(&state.max_concurrent_jobs),
         args.metrics_seconds,
     );
 
@@ -965,6 +1004,10 @@ pub async fn run() {
         .route(
             "/settings/max-concurrent-jobs",
             post(update_max_concurrent_jobs),
+        )
+        .route(
+            "/settings/max-concurrent-jobs/{endpoint_id}",
+            post(update_max_concurrent_jobs_for_endpoint),
         )
         .route("/runs/{run_id}", get(run_view))
         .route("/runs/{run_id}/stream", get(run_stream))
@@ -1005,7 +1048,7 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_summaries(&state).await;
     let running_total = runs.iter().map(|run| run.jobs_running).sum();
     let queued_total = runs.iter().map(|run| run.jobs_queued).sum();
-    let max_concurrent_jobs = state.max_concurrent_jobs.read().await.clone();
+    let queue_limits = build_queue_limits(&state).await;
     let backup_root_value = state
         .backup_dir
         .as_ref()
@@ -1025,7 +1068,7 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         endpoints_json: endpoints_json(&state),
         templates_json: templates_json(&state),
         metrics_samples_json: metrics_samples_json(state.as_ref()).await,
-        max_concurrent_jobs,
+        queue_limits,
         running_total,
         queued_total,
         copy_suffix: state.copy_suffix.clone(),
@@ -1799,8 +1842,13 @@ async fn update_max_concurrent_jobs(
     State(state): State<Arc<AppState>>,
     Form(form): Form<MaxConcurrentForm>,
 ) -> impl IntoResponse {
-    let mut guard = state.max_concurrent_jobs.write().await;
-    let current = guard.unwrap_or(0);
+    let mut queues = state.destination_queues.lock().await;
+    let current = queues
+        .values()
+        .filter_map(|queue| queue.max_concurrent_jobs)
+        .next()
+        .or(state.default_max_concurrent_jobs)
+        .unwrap_or(0);
     let mut next = if let Some(value) = form.value {
         value as i32
     } else {
@@ -1810,16 +1858,57 @@ async fn update_max_concurrent_jobs(
     if next < 0 {
         next = 0;
     }
-    if next == 0 {
-        *guard = None;
+    let next_value = if next == 0 {
+        None
     } else {
-        *guard = Some(next as usize);
+        Some(next as usize)
+    };
+    for queue in queues.values_mut() {
+        queue.max_concurrent_jobs = next_value;
     }
-    drop(guard);
+    drop(queues);
     state.queue_notify.notify_one();
     Json(json!({
-        "max_concurrent_jobs": state.max_concurrent_jobs.read().await.clone()
+        "max_concurrent_jobs": next_value
     }))
+}
+
+async fn update_max_concurrent_jobs_for_endpoint(
+    State(state): State<Arc<AppState>>,
+    Path(endpoint_id): Path<String>,
+    Form(form): Form<MaxConcurrentForm>,
+) -> impl IntoResponse {
+    let mut queues = state.destination_queues.lock().await;
+    let queue = match queues.get_mut(&endpoint_id) {
+        Some(queue) => queue,
+        None => return (StatusCode::NOT_FOUND, "Unknown destination").into_response(),
+    };
+    let current = queue
+        .max_concurrent_jobs
+        .or(state.default_max_concurrent_jobs)
+        .unwrap_or(0);
+    let mut next = if let Some(value) = form.value {
+        value as i32
+    } else {
+        let delta = form.delta.unwrap_or(0);
+        current as i32 + delta
+    };
+    if next < 0 {
+        next = 0;
+    }
+    queue.max_concurrent_jobs = if next == 0 {
+        None
+    } else {
+        Some(next as usize)
+    };
+    let updated = queue.max_concurrent_jobs;
+    drop(queues);
+    state.queue_notify.notify_one();
+    Json(json!({
+        "endpoint_id": endpoint_id,
+        "max_concurrent_jobs": updated
+    }))
+    .into_response()
 }
 
 async fn run_view(
@@ -1990,7 +2079,12 @@ async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         let state = Arc::clone(&state);
         async move {
             let runs = build_run_summaries(&state).await;
-            let payload = serde_json::to_string(&runs).unwrap_or_else(|_| "[]".to_string());
+            let queue_limits = build_queue_limits(&state).await;
+            let payload = serde_json::to_string(&serde_json::json!({
+                "runs": runs,
+                "queue_limits": queue_limits
+            }))
+            .unwrap_or_else(|_| "{}".to_string());
             Ok::<axum::response::sse::Event, Infallible>(
                 axum::response::sse::Event::default().data(payload),
             )
@@ -2001,7 +2095,12 @@ async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn runs_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_summaries(&state).await;
-    Json(runs).into_response()
+    let queue_limits = build_queue_limits(&state).await;
+    Json(json!({
+        "runs": runs,
+        "queue_limits": queue_limits
+    }))
+    .into_response()
 }
 
 async fn jobs_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -2390,15 +2489,26 @@ async fn start_job_runner(
     run_id: String,
     job_id: String,
 ) -> Result<(), String> {
-    let max_concurrent_jobs = state.max_concurrent_jobs.read().await.clone();
+    let destination_id = {
+        let runs = state.runs.read().await;
+        let run = runs
+            .runs
+            .get(&run_id)
+            .ok_or_else(|| "run not found".to_string())?;
+        run.dst_endpoint.id.clone()
+    };
+    ensure_destination_queue(&state, &destination_id).await;
+    let max_concurrent_jobs = {
+        let queues = state.destination_queues.lock().await;
+        queues
+            .get(&destination_id)
+            .and_then(|queue| queue.max_concurrent_jobs)
+            .or(state.default_max_concurrent_jobs)
+    };
     let (config_path, stdout_path, stderr_path, snapshot, dry_run, queued) = {
         let mut queued = false;
         let mut runs = state.runs.write().await;
-        let running_count = if max_concurrent_jobs.is_some() {
-            count_running_jobs(&runs)
-        } else {
-            0
-        };
+        let running_count = count_running_jobs_for_destination(&runs, &destination_id);
         let run = runs
             .runs
             .get_mut(&run_id)
@@ -2445,7 +2555,7 @@ async fn start_job_runner(
         }
     });
     if queued {
-        enqueue_job(&state, run_id.clone(), job_id.clone()).await;
+        enqueue_job(&state, run_id.clone(), job_id.clone(), destination_id.clone()).await;
         return Ok(());
     }
 
@@ -2491,26 +2601,48 @@ async fn start_job_runner(
     Ok(())
 }
 
-fn count_running_jobs(runs: &RunStore) -> usize {
+fn count_running_jobs_for_destination(runs: &RunStore, destination_id: &str) -> usize {
     runs.runs
         .values()
+        .filter(|run| run.dst_endpoint.id == destination_id)
         .flat_map(|run| run.jobs.values())
         .filter(|job| matches!(job.status, JobStatus::Running))
         .count()
 }
 
-async fn enqueue_job(state: &Arc<AppState>, run_id: String, job_id: String) {
-    let mut queue = state.job_queue.lock().await;
-    if queue.iter().any(|job| job.run_id == run_id && job.job_id == job_id) {
+async fn enqueue_job(
+    state: &Arc<AppState>,
+    run_id: String,
+    job_id: String,
+    destination_id: String,
+) {
+    let mut queues = state.destination_queues.lock().await;
+    let queue = queues
+        .entry(destination_id.clone())
+        .or_insert_with(|| DestinationQueue {
+            max_concurrent_jobs: state.default_max_concurrent_jobs,
+            queue: VecDeque::new(),
+        });
+    if queue
+        .queue
+        .iter()
+        .any(|job| job.run_id == run_id && job.job_id == job_id)
+    {
         return;
     }
-    queue.push_back(QueuedJob { run_id, job_id });
+    queue.queue.push_back(QueuedJob {
+        run_id,
+        job_id,
+        destination_id,
+    });
     state.queue_notify.notify_one();
 }
 
 async fn remove_from_queue(state: &Arc<AppState>, run_id: &str, job_id: &str) {
-    let mut queue = state.job_queue.lock().await;
-    queue.retain(|job| !(job.run_id == run_id && job.job_id == job_id));
+    let mut queues = state.destination_queues.lock().await;
+    for queue in queues.values_mut() {
+        queue.queue.retain(|job| !(job.run_id == run_id && job.job_id == job_id));
+    }
 }
 
 fn start_queue_worker(state: Arc<AppState>) {
@@ -2523,21 +2655,26 @@ async fn queue_worker(state: Arc<AppState>) {
     loop {
         state.queue_notify.notified().await;
         loop {
-            let max = state
-                .max_concurrent_jobs
-                .read()
-                .await
-                .unwrap_or(usize::MAX);
-            let running = {
-                let runs = state.runs.read().await;
-                count_running_jobs(&runs)
-            };
-            if running >= max {
-                break;
-            }
             let next = {
-                let mut queue = state.job_queue.lock().await;
-                queue.pop_front()
+                let runs = state.runs.read().await;
+                let running_by_dest = count_jobs_by_destination(&runs);
+                let mut queues = state.destination_queues.lock().await;
+                let mut selected: Option<QueuedJob> = None;
+                for (dest_id, queue_state) in queues.iter_mut() {
+                    let max = queue_state
+                        .max_concurrent_jobs
+                        .or(state.default_max_concurrent_jobs)
+                        .unwrap_or(usize::MAX);
+                    let running = running_by_dest.get(dest_id).map(|c| c.0).unwrap_or(0);
+                    if running >= max {
+                        continue;
+                    }
+                    if let Some(job) = queue_state.queue.pop_front() {
+                        selected = Some(job);
+                        break;
+                    }
+                }
+                selected
             };
             let Some(next) = next else { break };
             let _ = start_job_runner(Arc::clone(&state), next.run_id, next.job_id).await;
@@ -2958,7 +3095,6 @@ fn build_metrics_summary(sample: Option<&MetricsSample>) -> MetricsSummary {
             total_mem_mb: mem_to_mb(sample.total_mem_kb),
             running_jobs: sample.running_jobs,
             queued_jobs: sample.queued_jobs,
-            max_concurrent_jobs: sample.max_concurrent_jobs,
             load1: sample.load1,
             load5: sample.load5,
             load15: sample.load15,
@@ -2984,7 +3120,6 @@ fn start_metrics_sampler(
     metrics: Arc<RwLock<MetricsState>>,
     sender: broadcast::Sender<MetricsSample>,
     runs: Arc<RwLock<RunStore>>,
-    max_concurrent_jobs: Arc<RwLock<Option<usize>>>,
     seconds: u64,
 ) {
     let interval_seconds = if seconds == 0 { 5 } else { seconds };
@@ -3051,7 +3186,6 @@ fn start_metrics_sampler(
                 (running, queued)
             };
 
-            let max_concurrent_jobs = max_concurrent_jobs.read().await.clone();
             let sample = MetricsSample {
                 ts: chrono::Utc::now().timestamp(),
                 host_cpu,
@@ -3065,7 +3199,7 @@ fn start_metrics_sampler(
                 total_mem_kb: total_mem,
                 running_jobs,
                 queued_jobs,
-                max_concurrent_jobs,
+                max_concurrent_jobs: None,
                 load1: load.one,
                 load5: load.five,
                 load15: load.fifteen,
@@ -3158,6 +3292,7 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
                     .name
                     .clone()
                     .if_empty_then("unknown"),
+                dst_id: run.dst_endpoint.id.clone(),
                 template_name: run.template.name.clone().if_empty_then("unnamed"),
                 dry_run: run.dry_run,
                 copy_suffix: run.copy_suffix.clone(),
@@ -3168,6 +3303,48 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
         }
     }
     summaries
+}
+
+fn count_jobs_by_destination(runs: &RunStore) -> HashMap<String, (usize, usize)> {
+    let mut counts = HashMap::new();
+    for run in runs.runs.values() {
+        let entry = counts
+            .entry(run.dst_endpoint.id.clone())
+            .or_insert((0usize, 0usize));
+        for job in run.jobs.values() {
+            match job.status {
+                JobStatus::Running => entry.0 += 1,
+                JobStatus::Queued => entry.1 += 1,
+                _ => {}
+            }
+        }
+    }
+    counts
+}
+
+async fn build_queue_limits(state: &Arc<AppState>) -> Vec<QueueLimitView> {
+    let runs = state.runs.read().await;
+    let counts = count_jobs_by_destination(&runs);
+    let queues = state.destination_queues.lock().await;
+    let mut views = Vec::new();
+    for endpoint in &state.endpoints {
+        let (running, queued) = counts
+            .get(&endpoint.id)
+            .copied()
+            .unwrap_or((0, 0));
+        let max_concurrent_jobs = queues
+            .get(&endpoint.id)
+            .map(|queue| queue.max_concurrent_jobs)
+            .unwrap_or(state.default_max_concurrent_jobs);
+        views.push(QueueLimitView {
+            endpoint_id: endpoint.id.clone(),
+            endpoint_name: endpoint.name.clone(),
+            running_jobs: running,
+            queued_jobs: queued,
+            max_concurrent_jobs,
+        });
+    }
+    views
 }
 
 async fn build_run_options(state: &Arc<AppState>) -> Vec<RunOption> {
@@ -3624,6 +3801,7 @@ async fn load_runs(state: &AppState) {
                         queued.push(QueuedJob {
                             run_id: run_id.clone(),
                             job_id: job.id.clone(),
+                            destination_id: persist.dst_endpoint.id.clone(),
                         });
                     }
                     job_map.insert(
@@ -3701,18 +3879,25 @@ async fn load_runs(state: &AppState) {
     store.runs = runs.runs;
 
     if !queued.is_empty() {
-        let mut queue = state.job_queue.lock().await;
+        let mut queues = state.destination_queues.lock().await;
         for item in queued {
+            let queue = queues.entry(item.destination_id.clone()).or_insert_with(|| {
+                DestinationQueue {
+                    max_concurrent_jobs: state.default_max_concurrent_jobs,
+                    queue: VecDeque::new(),
+                }
+            });
             if !queue
+                .queue
                 .iter()
                 .any(|job| job.run_id == item.run_id && job.job_id == item.job_id)
             {
-                queue.push_back(item);
+                queue.queue.push_back(item);
             }
         }
     }
-    let queue = state.job_queue.lock().await;
-    if !queue.is_empty() {
+    let queues = state.destination_queues.lock().await;
+    if queues.values().any(|queue| !queue.queue.is_empty()) {
         state.queue_notify.notify_one();
     }
 }
@@ -4468,7 +4653,7 @@ async fn generate_date_intervals(
 }
 
 async fn generate_date_intervals_from_backup(
-    state: &AppState,
+    _state: &AppState,
     src_endpoint: &EndpointConfig,
     index: &InputIndex,
     split: &SplitConfig,
