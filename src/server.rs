@@ -3344,6 +3344,20 @@ async fn build_queue_limits(state: &Arc<AppState>) -> Vec<QueueLimitView> {
             max_concurrent_jobs,
         });
     }
+    if state.backup_dir.is_some() {
+        let (running, queued) = counts.get("backup").copied().unwrap_or((0, 0));
+        let max_concurrent_jobs = queues
+            .get("backup")
+            .map(|queue| queue.max_concurrent_jobs)
+            .unwrap_or(state.default_max_concurrent_jobs);
+        views.push(QueueLimitView {
+            endpoint_id: "backup".to_string(),
+            endpoint_name: "Backup".to_string(),
+            running_jobs: running,
+            queued_jobs: queued,
+            max_concurrent_jobs,
+        });
+    }
     views
 }
 
