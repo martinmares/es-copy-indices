@@ -1578,6 +1578,16 @@ async fn create_run(
     } else {
         template.clone()
     };
+    let selected_indices_for_run: Option<HashSet<String>> = if run_mode == RunMode::Restore {
+        restore_map.as_ref().map(|map| {
+            map.iter()
+                .map(|entry| entry.backup.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect::<HashSet<_>>()
+        })
+    } else {
+        selected_indices.clone()
+    };
 
     match create_run_state_with_filter(
         &state,
@@ -1587,7 +1597,7 @@ async fn create_run(
         dry_run,
         copy_suffix_override,
         alias_suffix_override,
-        selected_indices.as_ref(),
+        selected_indices_for_run.as_ref(),
         run_mode,
     )
     .await
