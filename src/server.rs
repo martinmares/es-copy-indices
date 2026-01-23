@@ -1429,13 +1429,18 @@ async fn create_run(
             .collect();
         if filtered.is_empty() { None } else { Some(filtered) }
     };
-    let restore_map = match form.restore_map.as_deref() {
+    let mut restore_map = match form.restore_map.as_deref() {
         Some(value) => match parse_restore_map(value) {
             Ok(map) => Some(map),
             Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
         },
         None => None,
     };
+    if mode == "restore" {
+        if let (Some(map), Some(selected)) = (restore_map.as_mut(), selected_indices.as_ref()) {
+            map.retain(|entry| selected.contains(entry.target.trim()));
+        }
+    }
 
     let (src_endpoint, dst_endpoint, run_mode) = match mode.as_str() {
         "backup" => {
