@@ -514,6 +514,47 @@ pub fn resolve_index_dir(backup_dir: &Path, index_name: &str) -> Result<PathBuf,
         return Ok(backup_dir.join(matches.remove(0).dir.clone()));
     }
     if matches.is_empty() {
+        // Fall back to scanning metadata.json files to match by metadata fields.
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Ok(entries) = fs::read_dir(backup_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let metadata_path = path.join("metadata.json");
+                if !metadata_path.is_file() {
+                    continue;
+                }
+                if let Ok(metadata) = read_json_file::<BackupMetadata>(&metadata_path) {
+                    let matches_name = metadata.index_name == index_name
+                        || metadata
+                            .name_of_copy
+                            .as_deref()
+                            .map(|name| name == index_name)
+                            .unwrap_or(false)
+                        || metadata
+                            .alias_name
+                            .as_deref()
+                            .map(|name| name == index_name)
+                            .unwrap_or(false);
+                    if matches_name {
+                        candidates.push(path.clone());
+                    }
+                }
+            }
+        }
+
+        if candidates.len() == 1 {
+            return Ok(candidates.remove(0));
+        }
+        if candidates.len() > 1 {
+            return Err(format!(
+                "Multiple backup indices match '{}': {:?}",
+                index_name, candidates
+            ));
+        }
+
         return Ok(backup_dir.join(index_name));
     }
     Err(format!(
