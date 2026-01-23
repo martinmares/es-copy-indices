@@ -3521,7 +3521,10 @@ async fn build_jobs_list(state: &Arc<AppState>) -> Vec<JobListEntry> {
                 _ => (None, None, None),
             };
             let can_stop = matches!(job.status, JobStatus::Running | JobStatus::Queued);
-            let can_start = !matches!(job.status, JobStatus::Running | JobStatus::Queued);
+            let can_start = matches!(
+                job.status,
+                JobStatus::Pending | JobStatus::Failed | JobStatus::Stopped
+            );
             entries.push(JobListEntry {
                 run_id: run.id.clone(),
                 run_label: run_label.clone(),

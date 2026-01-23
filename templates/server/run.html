@@ -183,7 +183,7 @@
                         <form class="js-stop-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/stop" method="post">
                           <button class="btn btn-outline-danger" type="submit">Stop Job</button>
                         </form>
-                      {% else %}
+                      {% else if job.status.as_str() == "pending" || job.status.as_str() == "failed" || job.status.as_str() == "stopped" %}
                         <form class="js-start-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/start?redirect=run" method="post">
                           <button class="btn btn-outline-primary" type="submit">Start Job</button>
                         </form>
@@ -367,7 +367,7 @@
                       <button class="btn btn-outline-danger" type="submit">Stop Job</button>
                     </form>`
                 : "";
-              const startButton = (job.status !== "running" && job.status !== "queued")
+              const startButton = (job.status === "pending" || job.status === "failed" || job.status === "stopped")
                 ? `
                     <form class="js-start-job" action="${basePath}/runs/${run.id}/jobs/${job.id}/start?redirect=run" method="post">
                       <button class="btn btn-outline-primary" type="submit">Start Job</button>
