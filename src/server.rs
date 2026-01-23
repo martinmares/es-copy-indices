@@ -794,6 +794,8 @@ struct StageView {
     name: String,
     jobs: Vec<JobSummary>,
     split_details: Vec<SplitDetailView>,
+    can_start: bool,
+    can_stop: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -3595,11 +3597,19 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
                 }
             }
         }
+        let can_start = jobs.iter().any(|job| {
+            matches!(job.status, JobStatus::Pending | JobStatus::Failed | JobStatus::Stopped)
+        });
+        let can_stop = jobs
+            .iter()
+            .any(|job| matches!(job.status, JobStatus::Running | JobStatus::Queued));
         stages.push(StageView {
             id: stage.id.clone(),
             name: stage.name.clone(),
             jobs,
             split_details,
+            can_start,
+            can_stop,
         });
     }
     Some(RunView {

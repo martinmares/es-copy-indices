@@ -118,12 +118,16 @@
         <div class="card-header">
           <div class="card-title">{{ stage.name }}</div>
           <div class="card-actions d-flex gap-2 align-items-center">
-            <form class="js-start-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/start" method="post">
-              <button class="btn btn-primary" type="submit">Start Stage</button>
-            </form>
-            <form class="js-stop-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/stop" method="post">
-              <button class="btn btn-outline-danger" type="submit">Stop Stage</button>
-            </form>
+            {% if stage.can_start %}
+              <form class="js-start-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/start" method="post">
+                <button class="btn btn-primary" type="submit">Start Stage</button>
+              </form>
+            {% endif %}
+            {% if stage.can_stop %}
+              <form class="js-stop-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/stop" method="post">
+                <button class="btn btn-outline-danger" type="submit">Stop Stage</button>
+              </form>
+            {% endif %}
           </div>
         </div>
         <div class="table-responsive">
@@ -391,6 +395,18 @@
                 </tr>`;
             })
             .join("");
+          const startStageButton = stage.can_start
+            ? `
+                <form class="js-start-stage" action="${basePath}/runs/${run.id}/stages/${stage.id}/start" method="post">
+                  <button class="btn btn-primary" type="submit">Start Stage</button>
+                </form>`
+            : "";
+          const stopStageButton = stage.can_stop
+            ? `
+                <form class="js-stop-stage" action="${basePath}/runs/${run.id}/stages/${stage.id}/stop" method="post">
+                  <button class="btn btn-outline-danger" type="submit">Stop Stage</button>
+                </form>`
+            : "";
           const splitHtml = splitDetails.length
             ? `
               <div class="card-body">
@@ -446,12 +462,8 @@
               <div class="card-header">
                 <div class="card-title">${stage.name}</div>
                 <div class="card-actions d-flex gap-2 align-items-center">
-                  <form class="js-start-stage" action="${basePath}/runs/${run.id}/stages/${stage.id}/start" method="post">
-                    <button class="btn btn-primary" type="submit">Start Stage</button>
-                  </form>
-                  <form class="js-stop-stage" action="${basePath}/runs/${run.id}/stages/${stage.id}/stop" method="post">
-                    <button class="btn btn-outline-danger" type="submit">Stop Stage</button>
-                  </form>
+                  ${startStageButton}
+                  ${stopStageButton}
                 </div>
               </div>
               <div class="table-responsive">
