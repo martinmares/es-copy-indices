@@ -1200,6 +1200,7 @@ struct CreateRunForm {
     alias_suffix: Option<String>,
     mode: Option<String>,
     backup_id: Option<String>,
+    restore_map: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     selected_indices: Vec<String>,
 }
@@ -1220,6 +1221,73 @@ struct BackupRunSummary {
 struct BackupListResponse {
     backup_root: Option<String>,
     backups: Vec<BackupRunSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RestoreMapping {
+    backup: String,
+    target: String,
+}
+
+fn parse_restore_map(value: &str) -> Result<Vec<RestoreMapping>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str::<Vec<RestoreMapping>>(trimmed)
+        .map_err(|err| format!("Invalid restore mapping JSON: {}", err))
+}
+
+fn apply_restore_mapping(
+    template: &TemplateConfig,
+    mappings: &[RestoreMapping],
+) -> Result<TemplateConfig, String> {
+    let mut indices = Vec::new();
+    let mut seen = HashSet::new();
+
+    for mapping in mappings {
+        let backup = mapping.backup.trim();
+        let target = mapping.target.trim();
+        if backup.is_empty() || target.is_empty() {
+            continue;
+        }
+        if !seen.insert(target.to_string()) {
+            continue;
+        }
+        let Some(template_index) = template
+            .indices
+            .iter()
+            .find(|index| index.name == target)
+        else {
+            return Err(format!("Restore mapping target not found in template: {}", target));
+        };
+
+        let mut index = template_index.clone();
+        index.name = backup.to_string();
+        index.dest_name = Some(target.to_string());
+        index.use_dest_name_as_is = false;
+        index.use_alias_name_as_is = false;
+        index.use_src_prefix = false;
+        index.use_from_suffix = false;
+        index.use_dst_prefix = true;
+        if index.alias_enabled {
+            index.alias_name = Some(target.to_string());
+        }
+        indices.push(index);
+    }
+
+    if indices.is_empty() {
+        return Err("Restore mapping is empty".to_string());
+    }
+
+    Ok(TemplateConfig {
+        id: template.id.clone(),
+        name: template.name.clone(),
+        path: template.path.clone(),
+        number_of_replicas: template.number_of_replicas,
+        indices,
+        tenants: template.tenants.clone(),
+    })
 }
 
 fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -1361,6 +1429,13 @@ async fn create_run(
             .collect();
         if filtered.is_empty() { None } else { Some(filtered) }
     };
+    let restore_map = match form.restore_map.as_deref() {
+        Some(value) => match parse_restore_map(value) {
+            Ok(map) => Some(map),
+            Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+        },
+        None => None,
+    };
 
     let (src_endpoint, dst_endpoint, run_mode) = match mode.as_str() {
         "backup" => {
@@ -1482,12 +1557,31 @@ async fn create_run(
                 )
                     .into_response();
             }
+            if restore_map.as_ref().map_or(true, |map| map.is_empty()) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "restore_map is required for restore runs",
+                )
+                    .into_response();
+            }
         }
     }
 
+    let template_for_run = if run_mode == RunMode::Restore {
+        match restore_map.as_ref() {
+            Some(map) => match apply_restore_mapping(&template, map) {
+                Ok(mapped) => mapped,
+                Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+            },
+            None => template.clone(),
+        }
+    } else {
+        template.clone()
+    };
+
     match create_run_state_with_filter(
         &state,
-        &template,
+        &template_for_run,
         &src_endpoint,
         &dst_endpoint,
         dry_run,
