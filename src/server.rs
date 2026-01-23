@@ -4857,10 +4857,22 @@ async fn generate_date_intervals_from_backup(
         return Err("percentile ranges shorter than expected".to_string());
     }
 
-    Ok(ranges
+    let mut ranges = ranges
         .into_iter()
         .take(split.number_of_parts as usize)
-        .collect())
+        .collect::<Vec<_>>();
+    if let Some(docs_total) = metadata.docs_total {
+        if docs_total > 0 && split.number_of_parts > 0 {
+        let parts = split.number_of_parts as u64;
+        let base = docs_total / parts;
+        let remainder = docs_total % parts;
+        for (idx, range) in ranges.iter_mut().enumerate() {
+            let extra = if (idx as u64) < remainder { 1 } else { 0 };
+            range.doc_count = Some(base + extra);
+        }
+        }
+    }
+    Ok(ranges)
 }
 
 fn quantile_from_centroids(centroids: &[backup::QuantileCentroid], percent: f64) -> Option<f64> {
