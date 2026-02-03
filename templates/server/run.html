@@ -4,6 +4,15 @@
 
 {% block head_extra %}
   <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/material-darker.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.css">
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/toml/toml.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/searchcursor.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/search.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/jump-to-line.js"></script>
 {% endblock %}
 
 {% block styles %}
@@ -56,6 +65,72 @@
       border-radius: 6px;
       padding: 6px;
     }
+    .config-editor-list {
+      max-height: 520px;
+      overflow: auto;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 4px;
+    }
+    .config-file-item {
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      color: #e6edf7;
+      font-weight: 600;
+      font-size: 13px;
+      padding: 6px 10px;
+      border-radius: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    .config-file-item:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .config-file-item.active {
+      background: rgba(59, 130, 246, 0.25);
+      color: #ffffff;
+    }
+    .config-editor-list .list-group-item {
+      cursor: pointer;
+    }
+    .config-editor-list .list-group-item.active {
+      background: rgba(74, 144, 226, 0.2);
+      border-color: rgba(74, 144, 226, 0.6);
+      color: #dbeafe;
+    }
+    .config-editor-pane {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    #configEditorModal .config-editor-pane .CodeMirror {
+      height: 100%;
+    }
+    #configEditorModal .modal-dialog {
+      max-width: 90vw;
+    }
+    #configEditorModal .modal-content {
+      height: 92vh;
+    }
+    #configEditorModal .modal-body {
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    #configEditorModal .modal-body .row {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    #configEditorModal .config-editor-list,
+    #configEditorModal .config-editor-pane {
+      height: 100%;
+      min-height: 0;
+    }
   </style>
 {% endblock %}
 
@@ -77,8 +152,14 @@
         <div class="btn-list">
           <a class="btn btn-outline-secondary" href="{{ base_path }}/runs/{{ run.id }}/export">Export</a>
           <button class="btn btn-outline-warning" type="button" id="retryFailedBtn">Retry Failed</button>
+          <button class="btn btn-outline-primary" type="button" id="editConfigsBtn" {% if !run.can_edit_configs %}disabled{% endif %}>
+            Edit configs
+          </button>
         </div>
         <div class="text-secondary small mt-2 d-none" id="retryFailedStatus"></div>
+        {% if !run.can_edit_configs %}
+          <div class="text-secondary small mt-1">Configs can be edited only before jobs start.</div>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -257,12 +338,44 @@
       </div>
     {% endfor %}
   </div>
+
+  <div class="modal modal-blur fade" id="configEditorModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit configs</h5>
+          <button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row">
+            <div class="col-md-4">
+              <div class="text-secondary small mb-2">Files</div>
+              <div class="config-editor-list" id="configFileList"></div>
+            </div>
+            <div class="col-md-8">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="text-secondary small" id="configFileMeta">Select a file to edit.</div>
+                <div class="text-secondary small" id="configEditorStatus"></div>
+              </div>
+              <div class="config-editor-pane" id="configEditorPane"></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Close</button>
+          <button class="btn btn-primary" type="button" id="configSaveBtn" disabled>Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
 {% endblock %}
 
 {% block scripts %}
   <script>
     const scrollKey = "es-copy-scroll";
-    const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+    window.__basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+    const basePath = window.__basePath || "";
+    const editorBasePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
     const retryFailedBtn = document.getElementById("retryFailedBtn");
     const retryFailedStatus = document.getElementById("retryFailedStatus");
     const saved = sessionStorage.getItem(scrollKey);
@@ -554,5 +667,136 @@
         }
       } catch (_) {}
     };
+  </script>
+  <script>
+    const editConfigsBtn = document.getElementById("editConfigsBtn");
+    const configModalEl = document.getElementById("configEditorModal");
+    const configFileList = document.getElementById("configFileList");
+    const configFileMeta = document.getElementById("configFileMeta");
+    const configEditorPane = document.getElementById("configEditorPane");
+    const configSaveBtn = document.getElementById("configSaveBtn");
+    const configEditorStatus = document.getElementById("configEditorStatus");
+    const runId = "{{ run.id }}";
+    const configBase = `${window.__basePath || ""}/runs/${runId}/configs`;
+    let editorView = null;
+    let currentFile = null;
+    let editable = {% if run.can_edit_configs %}true{% else %}false{% endif %};
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function setStatus(message, type = "muted") {
+      configEditorStatus.className = `text-${type} small`;
+      configEditorStatus.textContent = message;
+    }
+
+    function setMeta(message) {
+      configFileMeta.textContent = message;
+    }
+
+    function ensureEditor(content) {
+      if (editorView) {
+        editorView.setValue(content);
+        editorView.setOption("readOnly", !editable);
+        return;
+      }
+      editorView = CodeMirror(configEditorPane, {
+        value: content,
+        mode: "toml",
+        theme: "material-darker",
+        lineNumbers: true,
+        lineWrapping: true,
+        readOnly: !editable,
+      });
+    }
+
+    async function loadConfigList() {
+      configFileList.innerHTML = "";
+      setMeta("Loading...");
+      setStatus("");
+      const response = await fetch(configBase);
+      if (!response.ok) {
+        setMeta("Failed to load config list.");
+        return;
+      }
+      const data = await response.json();
+      editable = data.editable;
+      if (!editable) {
+        setStatus("Read-only: jobs already started.", "warning");
+      }
+      const files = data.files || [];
+      if (!files.length) {
+        setMeta("No config files found.");
+        return;
+      }
+      setMeta("Select a file to edit.");
+      files.forEach((file, index) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "config-file-item";
+        item.dataset.fileName = file.name;
+        item.textContent = file.name;
+        item.title = file.name;
+        item.addEventListener("click", () => selectConfigFile(file, item));
+        configFileList.appendChild(item);
+        if (index === 0) {
+          selectConfigFile(file, item);
+        }
+      });
+    }
+
+    async function selectConfigFile(file, itemEl) {
+      const name = file.name;
+      currentFile = name;
+      configSaveBtn.disabled = !editable;
+      document.querySelectorAll(".config-editor-list .config-file-item").forEach((el) => {
+        el.classList.toggle("active", el === itemEl);
+      });
+      setMeta(`Editing ${name}`);
+      setStatus("Loading...");
+      const response = await fetch(`${configBase}/${encodeURIComponent(name)}`);
+      if (!response.ok) {
+        setStatus("Failed to load config.", "danger");
+        return;
+      }
+      const content = await response.text();
+      ensureEditor(content);
+      setStatus("");
+    }
+
+    async function saveCurrentConfig() {
+      if (!currentFile || !editorView || !editable) {
+        return;
+      }
+      setStatus("Saving...");
+      const response = await fetch(`${configBase}/${encodeURIComponent(currentFile)}`, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: editorView.getValue(),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        setStatus(message || "Failed to save.", "danger");
+        return;
+      }
+      setStatus("Saved.", "success");
+      setTimeout(() => setStatus(""), 1500);
+    }
+
+    if (editConfigsBtn && configModalEl) {
+      editConfigsBtn.addEventListener("click", () => {
+        const modal = bootstrap.Modal.getOrCreateInstance(configModalEl);
+        modal.show();
+        loadConfigList();
+      });
+    }
+
+    if (configSaveBtn) {
+      configSaveBtn.addEventListener("click", () => saveCurrentConfig());
+    }
   </script>
 {% endblock %}

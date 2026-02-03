@@ -3,6 +3,7 @@ use axum::extract::{Form, Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Sse};
 use axum::Json;
+use axum::body::Bytes;
 use axum::routing::{get, post};
 use axum::Router;
 use crate::backup;
@@ -787,6 +788,7 @@ struct RunView {
     alias_suffix: Option<String>,
     wizard: Option<WizardSnapshot>,
     run_mode: RunMode,
+    can_edit_configs: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -1014,6 +1016,11 @@ pub async fn run() {
         )
         .route("/runs/{run_id}", get(run_view))
         .route("/runs/{run_id}/stream", get(run_stream))
+        .route("/runs/{run_id}/configs", get(run_configs_list))
+        .route(
+            "/runs/{run_id}/configs/{file_name}",
+            get(run_config_fetch).post(run_config_save),
+        )
         .route("/runs/{run_id}/delete", post(delete_run))
         .route("/runs/{run_id}/export", get(export_run))
         .route("/runs/{run_id}/retry-failed", post(retry_failed))
@@ -2183,6 +2190,155 @@ async fn run_view(
         }
         None => (StatusCode::NOT_FOUND, "Run not found").into_response(),
     }
+}
+
+#[derive(Serialize)]
+struct RunConfigEntry {
+    name: String,
+    size_bytes: u64,
+    modified: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RunConfigList {
+    files: Vec<RunConfigEntry>,
+    editable: bool,
+}
+
+fn config_file_name_safe(name: &str) -> bool {
+    if name.is_empty() || name.contains("..") || name.contains('/') || name.contains('\\') {
+        return false;
+    }
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("toml"))
+        .unwrap_or(false)
+}
+
+async fn run_configs_list(
+    State(state): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    let runs = state.runs.read().await;
+    let run = match runs.runs.get(&run_id) {
+        Some(run) => run,
+        None => return (StatusCode::NOT_FOUND, "Run not found").into_response(),
+    };
+    let editable = run
+        .jobs
+        .values()
+        .all(|job| matches!(job.status, JobStatus::Pending));
+    drop(runs);
+
+    let configs_dir = state.runs_dir.join(&run_id).join("configs");
+    let mut entries = Vec::new();
+    let mut read_dir = match tokio::fs::read_dir(&configs_dir).await {
+        Ok(dir) => dir,
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                return Json(RunConfigList {
+                    files: entries,
+                    editable,
+                })
+                .into_response();
+            }
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read configs").into_response();
+        }
+    };
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        let path = entry.path();
+        if path.is_file() {
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !config_file_name_safe(name) {
+                continue;
+            }
+            let metadata = match entry.metadata().await {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
+            let modified = metadata
+                .modified()
+                .ok()
+                .map(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339());
+            entries.push(RunConfigEntry {
+                name: name.to_string(),
+                size_bytes: metadata.len(),
+                modified,
+            });
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(RunConfigList {
+        files: entries,
+        editable,
+    })
+    .into_response()
+}
+
+async fn run_config_fetch(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, file_name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if !config_file_name_safe(&file_name) {
+        return (StatusCode::BAD_REQUEST, "Invalid file name").into_response();
+    }
+    let runs = state.runs.read().await;
+    if !runs.runs.contains_key(&run_id) {
+        return (StatusCode::NOT_FOUND, "Run not found").into_response();
+    }
+    drop(runs);
+    let path = state
+        .runs_dir
+        .join(&run_id)
+        .join("configs")
+        .join(&file_name);
+    match tokio::fs::read_to_string(path).await {
+        Ok(content) => (StatusCode::OK, content).into_response(),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, "Config not found").into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read config").into_response(),
+    }
+}
+
+async fn run_config_save(
+    State(state): State<Arc<AppState>>,
+    Path((run_id, file_name)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !config_file_name_safe(&file_name) {
+        return (StatusCode::BAD_REQUEST, "Invalid file name").into_response();
+    }
+    let runs = state.runs.read().await;
+    let run = match runs.runs.get(&run_id) {
+        Some(run) => run,
+        None => return (StatusCode::NOT_FOUND, "Run not found").into_response(),
+    };
+    let editable = run
+        .jobs
+        .values()
+        .all(|job| matches!(job.status, JobStatus::Pending));
+    drop(runs);
+    if !editable {
+        return (StatusCode::CONFLICT, "Run already started").into_response();
+    }
+    let path = state
+        .runs_dir
+        .join(&run_id)
+        .join("configs")
+        .join(&file_name);
+    if let Some(parent) = path.parent() {
+        if let Err(_) = tokio::fs::create_dir_all(parent).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save config").into_response();
+        }
+    }
+    if let Err(_) = tokio::fs::write(path, body).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save config").into_response();
+    }
+    (StatusCode::OK, "OK").into_response()
 }
 
 async fn job_view(
@@ -3696,6 +3852,10 @@ async fn build_jobs_list(state: &Arc<AppState>) -> Vec<JobListEntry> {
 async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> {
     let runs = state.runs.read().await;
     let run = runs.runs.get(run_id)?;
+    let can_edit_configs = run
+        .jobs
+        .values()
+        .all(|job| matches!(job.status, JobStatus::Pending));
     let mut stages = Vec::new();
     for stage in &run.stages {
         let mut jobs = Vec::new();
@@ -3769,6 +3929,7 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
         alias_suffix: run.alias_suffix.clone(),
         wizard: run.wizard.clone(),
         run_mode: run.run_mode.clone(),
+        can_edit_configs,
     })
 }
 
