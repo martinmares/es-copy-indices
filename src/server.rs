@@ -15,6 +15,7 @@ use serde_json::json;
 use serde::de::{self, Deserializer};
 use libc::{kill, SIGTERM};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1117,9 +1118,18 @@ async fn backups_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         if !indices_path.is_file() {
             continue;
         }
-        let catalog = backup::load_catalog(&indices_path);
+        let mut catalog = backup::load_catalog(&indices_path);
         if catalog.indices.is_empty() {
             continue;
+        }
+        for entry in &mut catalog.indices {
+            if entry.alias_name.is_some() {
+                continue;
+            }
+            let metadata_path = path.join(&entry.dir).join("metadata.json");
+            if let Ok(metadata) = backup::read_json_file::<backup::BackupMetadata>(&metadata_path) {
+                entry.alias_name = metadata.alias_name;
+            }
         }
         let index_count = catalog.indices.len();
         let docs_total = catalog
@@ -1129,12 +1139,16 @@ async fn backups_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             .sum::<u64>();
         let created_at = catalog.indices.first().map(|item| item.created_at.clone());
         let mut source = None;
+        let mut source_prefix = None;
         let mut tenants = Vec::new();
         let run_path = state.runs_dir.join(&run_id).join("run.json");
         if let Ok(content) = std::fs::read_to_string(run_path) {
             if let Ok(run) = serde_json::from_str::<RunPersist>(&content) {
                 if !run.src_endpoint.name.is_empty() {
                     source = Some(run.src_endpoint.name);
+                }
+                if !run.src_endpoint.prefix.is_empty() {
+                    source_prefix = Some(run.src_endpoint.prefix);
                 }
                 if !run.template.tenants.is_empty() {
                     tenants = run.template.tenants;
@@ -1154,6 +1168,7 @@ async fn backups_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             id: run_id,
             label,
             source,
+            source_prefix,
             created_at,
             index_count,
             docs_total,
@@ -1212,6 +1227,7 @@ struct BackupRunSummary {
     id: String,
     label: String,
     source: Option<String>,
+    source_prefix: Option<String>,
     created_at: Option<String>,
     index_count: usize,
     docs_total: u64,
@@ -1229,6 +1245,8 @@ struct BackupListResponse {
 struct RestoreMapping {
     backup: String,
     target: String,
+    alias: Option<String>,
+    template: Option<String>,
 }
 
 fn parse_restore_map(value: &str) -> Result<Vec<RestoreMapping>, String> {
@@ -1240,9 +1258,39 @@ fn parse_restore_map(value: &str) -> Result<Vec<RestoreMapping>, String> {
         .map_err(|err| format!("Invalid restore mapping JSON: {}", err))
 }
 
+fn input_index_from_backup_metadata(
+    meta: &backup::BackupMetadata,
+    template: &TemplateConfig,
+) -> InputIndex {
+    InputIndex {
+        name: meta.index_name.clone(),
+        buffer_size: meta.buffer_size,
+        copy_content: meta.copy_content,
+        copy_mapping: meta.copy_mapping,
+        delete_if_exists: meta.delete_if_exists,
+        routing_field: meta.routing_field.clone(),
+        number_of_shards: meta.original_number_of_shards,
+        number_of_replicas: template
+            .number_of_replicas
+            .or(meta.original_number_of_replicas),
+        dest_name: None,
+        alias_name: None,
+        use_dest_name_as_is: false,
+        use_alias_name_as_is: false,
+        alias_enabled: meta.alias_name.is_some(),
+        alias_remove_if_exists: Some(meta.alias_remove_if_exists),
+        use_src_prefix: false,
+        use_dst_prefix: true,
+        use_from_suffix: false,
+        split: None,
+        custom: None,
+    }
+}
+
 fn apply_restore_mapping(
     template: &TemplateConfig,
     mappings: &[RestoreMapping],
+    backup_meta: &HashMap<String, backup::BackupMetadata>,
 ) -> Result<TemplateConfig, String> {
     let mut indices = Vec::new();
     let mut seen = HashSet::new();
@@ -1254,17 +1302,41 @@ fn apply_restore_mapping(
             continue;
         }
         if !seen.insert(target.to_string()) {
-            continue;
+            return Err(format!("Duplicate restore target: {}", target));
         }
-        let Some(template_index) = template
+        let template_key = mapping
+            .template
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(target);
+        let template_index = template
             .indices
             .iter()
-            .find(|index| index.name == target)
-        else {
-            return Err(format!("Restore mapping target not found in template: {}", target));
-        };
+            .find(|index| index.name == template_key)
+            .cloned();
 
-        let mut index = template_index.clone();
+        let mut index = if let Some(template_index) = template_index {
+            template_index
+        } else if mapping
+            .alias
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Err(format!(
+                "Restore mapping target not found in template: {}",
+                template_key
+            ));
+        } else if let Some(meta) = backup_meta.get(backup) {
+            input_index_from_backup_metadata(meta, template)
+        } else {
+            return Err(format!(
+                "Missing backup metadata for restore mapping: {}",
+                backup
+            ));
+        };
         index.name = backup.to_string();
         index.dest_name = Some(target.to_string());
         index.use_dest_name_as_is = false;
@@ -1273,7 +1345,12 @@ fn apply_restore_mapping(
         index.use_from_suffix = false;
         index.use_dst_prefix = true;
         if index.alias_enabled {
-            index.alias_name = Some(target.to_string());
+            let alias_base = mapping.alias.as_deref().map(str::trim).unwrap_or("");
+            if !alias_base.is_empty() {
+                index.alias_name = Some(alias_base.to_string());
+            } else {
+                index.alias_name = Some(target.to_string());
+            }
         }
         indices.push(index);
     }
@@ -1290,6 +1367,57 @@ fn apply_restore_mapping(
         indices,
         tenants: template.tenants.clone(),
     })
+}
+
+fn load_backup_metadata_map(
+    backup_dir: &std::path::Path,
+) -> HashMap<String, backup::BackupMetadata> {
+    let mut map = HashMap::new();
+    let catalog_path = backup_dir.join("indices.json");
+    if catalog_path.exists() {
+        let catalog = backup::load_catalog(&catalog_path);
+        for entry in catalog.indices {
+            let metadata_path = backup_dir.join(&entry.dir).join("metadata.json");
+            if let Ok(meta) = backup::read_json_file::<backup::BackupMetadata>(&metadata_path) {
+                map.insert(entry.name.clone(), meta.clone());
+                if meta.index_name != entry.name {
+                    map.entry(meta.index_name.clone()).or_insert_with(|| meta.clone());
+                }
+                if let Some(name) = meta.name_of_copy.as_deref() {
+                    map.entry(name.to_string()).or_insert_with(|| meta.clone());
+                }
+                if let Some(alias) = meta.alias_name.as_deref() {
+                    map.entry(alias.to_string()).or_insert_with(|| meta.clone());
+                }
+            }
+        }
+    }
+
+    if map.is_empty() {
+        if let Ok(entries) = fs::read_dir(backup_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let metadata_path = path.join("metadata.json");
+                if !metadata_path.is_file() {
+                    continue;
+                }
+                if let Ok(meta) = backup::read_json_file::<backup::BackupMetadata>(&metadata_path) {
+                    map.insert(meta.index_name.clone(), meta.clone());
+                    if let Some(name) = meta.name_of_copy.as_deref() {
+                        map.entry(name.to_string()).or_insert_with(|| meta.clone());
+                    }
+                    if let Some(alias) = meta.alias_name.as_deref() {
+                        map.entry(alias.to_string()).or_insert_with(|| meta.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    map
 }
 
 fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -1418,8 +1546,12 @@ async fn create_run(
         None => return (StatusCode::BAD_REQUEST, "Unknown template").into_response(),
     };
     let dry_run = form.dry_run.is_some();
-    let copy_suffix_override = form.index_copy_suffix.map(|value| value.trim().to_string());
-    let alias_suffix_override = form.alias_suffix.map(|value| value.trim().to_string());
+    let copy_suffix_override = form
+        .index_copy_suffix
+        .map(|value| value.trim().to_string());
+    let alias_suffix_override = form
+        .alias_suffix
+        .map(|value| value.trim().to_string());
     let selected_indices = if form.selected_indices.is_empty() {
         None
     } else {
@@ -1431,20 +1563,14 @@ async fn create_run(
             .collect();
         if filtered.is_empty() { None } else { Some(filtered) }
     };
-    let mut restore_map = match form.restore_map.as_deref() {
+    let restore_map = match form.restore_map.as_deref() {
         Some(value) => match parse_restore_map(value) {
             Ok(map) => Some(map),
             Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
         },
         None => None,
     };
-    if mode == "restore" {
-        if let (Some(map), Some(selected)) = (restore_map.as_mut(), selected_indices.as_ref()) {
-            map.retain(|entry| selected.contains(entry.target.trim()));
-        }
-    }
-
-    let (src_endpoint, dst_endpoint, run_mode) = match mode.as_str() {
+    let (src_endpoint, dst_endpoint, run_mode, restore_backup_dir) = match mode.as_str() {
         "backup" => {
             let src_endpoint = match endpoint_by_id(&state, &form.src_endpoint_id) {
                 Some(endpoint) => endpoint.clone(),
@@ -1462,7 +1588,12 @@ async fn create_run(
                         .into_response()
                 }
             };
-            (src_endpoint, backup_endpoint_config(&backup_root), RunMode::Backup)
+            (
+                src_endpoint,
+                backup_endpoint_config(&backup_root),
+                RunMode::Backup,
+                None,
+            )
         }
         "restore" => {
             let dst_endpoint = match endpoint_by_id(&state, &form.dst_endpoint_id) {
@@ -1502,8 +1633,13 @@ async fn create_run(
                 )
                     .into_response();
             }
-            let backup_dir = backup_dir.to_string_lossy().to_string();
-            (backup_endpoint_config(&backup_dir), dst_endpoint, RunMode::Restore)
+            let backup_dir_string = backup_dir.to_string_lossy().to_string();
+            (
+                backup_endpoint_config(&backup_dir_string),
+                dst_endpoint,
+                RunMode::Restore,
+                Some(backup_dir),
+            )
         }
         _ => {
             let src_endpoint = match endpoint_by_id(&state, &form.src_endpoint_id) {
@@ -1520,7 +1656,7 @@ async fn create_run(
                         .into_response()
                 }
             };
-            (src_endpoint, dst_endpoint, RunMode::Copy)
+            (src_endpoint, dst_endpoint, RunMode::Copy, None)
         }
     };
 
@@ -1574,9 +1710,18 @@ async fn create_run(
         }
     }
 
+    let backup_meta_map = if run_mode == RunMode::Restore {
+        restore_backup_dir
+            .as_ref()
+            .map(|path| load_backup_metadata_map(path))
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
     let template_for_run = if run_mode == RunMode::Restore {
         match restore_map.as_ref() {
-            Some(map) => match apply_restore_mapping(&template, map) {
+            Some(map) => match apply_restore_mapping(&template, map, &backup_meta_map) {
                 Ok(mapped) => mapped,
                 Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
             },
@@ -3705,12 +3850,14 @@ async fn create_run_state_from_stages(
         .map_err(|e| e.to_string())?;
 
     let copy_suffix = if let Some(raw) = copy_suffix_override {
-        if raw.is_empty() { None } else { Some(raw) }
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
     } else {
         state.copy_suffix.clone()
     };
     let alias_suffix = if let Some(raw) = alias_suffix_override {
-        if raw.is_empty() { None } else { Some(raw) }
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
     } else {
         state.alias_suffix.clone()
     };

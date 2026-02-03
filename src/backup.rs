@@ -21,10 +21,12 @@ pub struct BackupIndexEntry {
     pub name: String,
     pub dir: String,
     pub created_at: String,
+    #[serde(default)]
+    pub alias_name: Option<String>,
     pub docs_total: Option<u64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BackupMetadata {
     pub created_at: String,
     pub from_endpoint: String,

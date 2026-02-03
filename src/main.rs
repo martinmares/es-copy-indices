@@ -367,6 +367,7 @@ async fn main() {
 
     for index in config.get_indices() {
         let mut indices_names: Vec<String> = vec![];
+        let mut alias_expanded = false;
         // if index.is_multiple() {
         //     index_names.push(index.get_name().clone());
         //     info!("Copy multiple indices! ({:?})", index_names);
@@ -432,12 +433,41 @@ async fn main() {
                 indices_names.iter().take(5).collect::<Vec<_>>()
             );
             // thread::sleep(Duration::from_secs(120));
+        } else if !from_backup {
+            if let Some(alias_indices) = source_es_client
+                .as_mut()
+                .unwrap()
+                .resolve_alias_indices(&index.get_name())
+                .await
+            {
+                if alias_indices.len() > 1 {
+                    alias_expanded = true;
+                    indices_names = alias_indices;
+                    info!(
+                        "Alias {} expands to indices ... {:?} ...",
+                        index.get_name(),
+                        indices_names.iter().take(5).collect::<Vec<_>>()
+                    );
+                } else {
+                    indices_names.push(index.get_name().clone());
+                }
+            } else {
+                indices_names.push(index.get_name().clone());
+            }
         } else {
             indices_names.push(index.get_name().clone());
         }
 
         for index_name in &indices_names {
             if index.is_multiple() {
+                index_name_of_copy = index_name;
+            } else if alias_expanded {
+                if index.get_name_of_copy().is_some() {
+                    warn!(
+                        "Alias {} expands to multiple indices; ignoring explicit name_of_copy and using source index name",
+                        index.get_name()
+                    );
+                }
                 index_name_of_copy = index_name;
             }
 
@@ -585,6 +615,7 @@ async fn main() {
                     name: index_name.to_string(),
                     dir: index_name.to_string(),
                     created_at: Utc::now().to_rfc3339(),
+                    alias_name: metadata.alias_name.clone(),
                     docs_total: metadata.docs_total,
                 };
                 if let Err(err) =

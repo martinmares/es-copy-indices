@@ -218,10 +218,34 @@ impl EsClient {
         let json_value: serde_json::Value = serde_json::from_str(&resp).ok()?;
         let obj = json_value.as_object()?;
         if obj.keys().len() != 1 {
+            warn!(
+                "Mappings response for {} contains {} entries, selecting best match",
+                index_name,
+                obj.keys().len()
+            );
+        }
+        if let Some(value) = obj.get(index_name) {
+            return Some(value.clone());
+        }
+        obj.values().next().cloned()
+    }
+
+    pub async fn resolve_alias_indices(&mut self, alias_name: &str) -> Option<Vec<String>> {
+        let resp = self
+            .call_get(&format!("/_alias/{}", alias_name), &vec![], &vec![])
+            .await?;
+
+        let json_value: serde_json::Value = serde_json::from_str(&resp).ok()?;
+        let obj = json_value.as_object()?;
+        if obj.is_empty() || obj.contains_key("error") || obj.contains_key("status") {
             return None;
         }
-        let key = obj.keys().next()?;
-        obj.get(key).cloned()
+        let indices: Vec<String> = obj.keys().cloned().collect();
+        if indices.is_empty() {
+            None
+        } else {
+            Some(indices)
+        }
     }
 
     pub async fn fetch_settings(
@@ -234,10 +258,17 @@ impl EsClient {
         let json_value: serde_json::Value = serde_json::from_str(&resp).ok()?;
         let obj = json_value.as_object()?;
         if obj.keys().len() != 1 {
-            return None;
+            warn!(
+                "Settings response for {} contains {} entries, selecting best match",
+                index_name,
+                obj.keys().len()
+            );
         }
-        let key = obj.keys().next()?;
-        let mut value = obj.get(key)?.clone();
+        let mut value = if let Some(val) = obj.get(index_name) {
+            val.clone()
+        } else {
+            obj.values().next()?.clone()
+        };
         let mut original_shards: Option<u64> = None;
         let mut original_replicas: Option<u64> = None;
         if let Some(settings_val) = value.get_mut("settings") {
@@ -1366,13 +1397,13 @@ impl EsClient {
 
             debug!("Indices with same alias: {:#?}", indices_with_same_alias);
 
-            if indices_with_same_alias.len() > 0 {
+            if !indices_with_same_alias.is_empty() {
                 if index.is_alias_remove_if_exists() {
                     warn!(
                         "Removing alias is enabled by config, refences found {:?}!",
                         indices_with_same_alias
                     );
-                    for index_with_same_alias in indices_with_same_alias {
+                    for index_with_same_alias in &indices_with_same_alias {
                         info!(
                             "Add action \"remove\" alias \"{}\" for \"{}\"",
                             alias_name, index_with_same_alias
@@ -1385,19 +1416,29 @@ impl EsClient {
                     }
                 } else {
                     warn!("Removing alias is disabled by config!");
-                    return self;
                 }
             }
 
-            info!(
-                "Add action \"add\" alias \"{}\" for \"{}\"",
-                alias_name, index_name_of_copy
-            );
-            let action = format!(
-                "{{ \"add\": {{ \"index\": \"{}\", \"alias\": \"{}\" }} }}",
-                index_name_of_copy, alias_name
-            );
-            actions.push(action);
+            if indices_with_same_alias.contains(&index_name_of_copy.to_string()) {
+                debug!(
+                    "Alias \"{}\" already points to \"{}\", skipping add action",
+                    alias_name, index_name_of_copy
+                );
+            } else {
+                info!(
+                    "Add action \"add\" alias \"{}\" for \"{}\"",
+                    alias_name, index_name_of_copy
+                );
+                let action = format!(
+                    "{{ \"add\": {{ \"index\": \"{}\", \"alias\": \"{}\" }} }}",
+                    index_name_of_copy, alias_name
+                );
+                actions.push(action);
+            }
+
+            if actions.is_empty() {
+                return self;
+            }
 
             let _ = self
                 .call_post(

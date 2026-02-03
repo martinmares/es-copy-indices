@@ -501,7 +501,7 @@
                   {% endfor %}
                 </select>
               </div>
-              <div class="col-12">
+              <div class="col-12" id="backupIndexSelectGroup">
                 <div class="d-flex align-items-center justify-content-between">
                   <label class="form-label mb-0">Select indices (optional)</label>
                   <label class="form-check form-check-inline">
@@ -534,8 +534,14 @@
             </div>
             <div class="mt-4 d-none" id="restoreMappingSection">
               <div class="d-flex align-items-center justify-content-between mb-2">
-                <h4 class="mb-0">Index mapping</h4>
-                <span class="text-secondary small">Map backup indices to restore targets.</span>
+                <div>
+                  <h4 class="mb-0">Index mapping</h4>
+                  <span class="text-secondary small">Map backup indices to restore targets.</span>
+                </div>
+                <label class="form-check form-check-inline mb-0">
+                  <input class="form-check-input" type="checkbox" id="restoreOnlyAliased">
+                  <span class="form-check-label">Only aliased</span>
+                </label>
               </div>
               <div class="table-responsive">
                 <table class="table table-vcenter table-sm" id="restoreMappingTable">
@@ -1137,6 +1143,7 @@
     const restoreMappingSection = document.getElementById("restoreMappingSection");
     const restoreMappingTable = document.getElementById("restoreMappingTable");
     const restoreMappingEmpty = document.getElementById("restoreMappingEmpty");
+    const restoreOnlyAliased = document.getElementById("restoreOnlyAliased");
     const restoreMapInput = document.getElementById("restoreMapInput");
     const restoreSuffixGroup = document.getElementById("restoreSuffixGroup");
     const restoreAliasSuffixGroup = document.getElementById("restoreAliasSuffixGroup");
@@ -1630,10 +1637,13 @@
       renderRestoreMapping(backup);
     }
 
-    function normalizeBackupName(name, prefix) {
+    function normalizeBackupName(name, prefix, sourcePrefix) {
       let value = name || "";
       if (prefix && value.startsWith(prefix)) {
         value = value.slice(prefix.length);
+      }
+      if (sourcePrefix && value.startsWith(sourcePrefix)) {
+        value = value.slice(sourcePrefix.length);
       }
       value = value.replace(/-?(test-)?backup$/i, "");
       value = value.replace(/-?copy$/i, "");
@@ -1647,6 +1657,13 @@
       if (!tbody) return;
       const template = templates.find((item) => item.id === backupTemplateSelect?.value);
       const targets = template?.indices ?? [];
+      const aliasCounts = backup.indices.reduce((acc, item) => {
+        const alias = item.alias_name || "";
+        if (alias) {
+          acc[alias] = (acc[alias] || 0) + 1;
+        }
+        return acc;
+      }, {});
       if (!backup?.indices?.length || !targets.length) {
         tbody.innerHTML = `<tr><td colspan="3" class="text-secondary">No indices to map.</td></tr>`;
         restoreMappingSection.classList.add("d-none");
@@ -1654,6 +1671,7 @@
         return;
       }
       const dstPrefix = endpoints.find((item) => item.id === backupDstEndpointSelect?.value)?.prefix || "";
+      const srcPrefix = backup.source_prefix || "";
       restoreMappingSection.classList.remove("d-none");
       restoreMappingEmpty?.classList.add("d-none");
       tbody.innerHTML = backup.indices
@@ -1662,15 +1680,21 @@
           const options = targets
             .map((target) => `<option value="${target.name}">${target.name}</option>`)
             .join("");
+          const isAliasGroup = item.alias_name && aliasCounts[item.alias_name] > 1;
           return `
-            <tr data-backup-index="${item.name}" data-row="${idx}">
-              <td>${item.name}</td>
+            <tr data-backup-index="${item.name}" data-backup-alias="${isAliasGroup ? item.alias_name : ""}" data-row="${idx}">
+              <td>
+                ${item.name}
+                ${isAliasGroup ? `<span class="badge bg-azure-lt text-azure ms-2" title="Alias attached to multiple backup indices. Will be recreated on restore.">alias: ${item.alias_name}</span>` : ""}
+              </td>
               <td class="text-end">${docs}</td>
               <td>
-                <select class="form-select form-select-sm restore-target-select">
-                  <option value="">Skip</option>
-                  ${options}
-                </select>
+                ${isAliasGroup
+                  ? `<input class="form-control form-control-sm restore-target-input" type="text" value="">`
+                  : `<select class="form-select form-select-sm restore-target-select">
+                      <option value="">Skip</option>
+                      ${options}
+                    </select>`}
               </td>
             </tr>`;
         })
@@ -1678,17 +1702,44 @@
       const rows = tbody.querySelectorAll("tr");
       rows.forEach((row) => {
         const backupName = row.dataset.backupIndex || "";
+        const alias = row.dataset.backupAlias || "";
         const select = row.querySelector(".restore-target-select");
-        if (!select) return;
-        const normalized = normalizeBackupName(backupName, dstPrefix);
+        const input = row.querySelector(".restore-target-input");
+        const normalized = normalizeBackupName(backupName, dstPrefix, srcPrefix);
         const match = targets.find((target) => target.name === normalized);
         if (match) {
+          row.dataset.templateTarget = match.name;
+        } else {
+          row.dataset.templateTarget = "";
+        }
+        if (input) {
+          input.value = match ? match.name : backupName;
+        } else if (select && match) {
           select.value = match.name;
         }
       });
       if (restoreMapInput) {
         restoreMapInput.value = "";
       }
+      applyRestoreAliasFilter();
+    }
+
+    function applyRestoreAliasFilter() {
+      if (!restoreMappingTable) return;
+      const rows = restoreMappingTable.querySelectorAll("tbody tr");
+      const onlyAliased = restoreOnlyAliased?.checked;
+      rows.forEach((row) => {
+        if (!onlyAliased) {
+          row.classList.remove("d-none");
+          return;
+        }
+        const alias = row.dataset.backupAlias || "";
+        if (alias.trim()) {
+          row.classList.remove("d-none");
+        } else {
+          row.classList.add("d-none");
+        }
+      });
     }
 
     function updateBackupSelectedCount() {
@@ -1713,12 +1764,13 @@
       if (backupDirLabel) {
         backupDirLabel.textContent = "Backup directory";
       }
-      if (backupDirGroup) backupDirGroup.classList.toggle("d-none", mode === "restore");
-      if (restoreFromGroup) restoreFromGroup.classList.toggle("d-none", mode !== "restore");
-      if (restoreSuffixGroup) restoreSuffixGroup.classList.toggle("d-none", mode !== "restore");
-      if (restoreAliasSuffixGroup) restoreAliasSuffixGroup.classList.toggle("d-none", mode !== "restore");
-      if (backupSrcGroup) backupSrcGroup.classList.toggle("d-none", mode === "restore");
-      if (backupDstGroup) backupDstGroup.classList.toggle("d-none", mode === "backup");
+              if (backupDirGroup) backupDirGroup.classList.toggle("d-none", mode === "restore");
+              if (restoreFromGroup) restoreFromGroup.classList.toggle("d-none", mode !== "restore");
+              if (restoreSuffixGroup) restoreSuffixGroup.classList.toggle("d-none", mode !== "restore");
+              if (restoreAliasSuffixGroup) restoreAliasSuffixGroup.classList.toggle("d-none", mode !== "restore");
+              if (backupSrcGroup) backupSrcGroup.classList.toggle("d-none", mode === "restore");
+              if (backupDstGroup) backupDstGroup.classList.toggle("d-none", mode === "backup");
+              if (backupIndexSelectGroup) backupIndexSelectGroup.classList.toggle("d-none", mode === "restore");
       if (backupSrcEndpointSelect) backupSrcEndpointSelect.required = mode === "backup";
       if (backupDstEndpointSelect) backupDstEndpointSelect.required = mode === "restore";
       if (backupRestoreSpinner) backupRestoreSpinner.classList.add("d-none");
@@ -1863,6 +1915,7 @@
       }
     });
     restoreFromSelect?.addEventListener("change", updateRestoreDetails);
+    restoreOnlyAliased?.addEventListener("change", applyRestoreAliasFilter);
     backupDstEndpointSelect?.addEventListener("change", () => {
       if (backupModeInput?.value === "restore") {
         updateRestoreDetails();
@@ -1937,11 +1990,20 @@
         const mappings = [];
         rows.forEach((row) => {
           const backupName = row.dataset.backupIndex;
+          const backupAlias = row.dataset.backupAlias || "";
           const select = row.querySelector(".restore-target-select");
-          if (!backupName || !select || !select.value) {
+          const input = row.querySelector(".restore-target-input");
+          const targetValue = input ? input.value.trim() : select?.value;
+          if (!backupName || !targetValue) {
             return;
           }
-          mappings.push({ backup: backupName, target: select.value });
+          const templateTarget = row.dataset.templateTarget || "";
+          mappings.push({
+            backup: backupName,
+            target: targetValue,
+            alias: backupAlias,
+            template: templateTarget,
+          });
         });
         if (!mappings.length) {
           if (backupRestoreError) {
@@ -1963,21 +2025,23 @@
       if (backupDstEndpointSelect?.value) payload.append("dst_endpoint_id", backupDstEndpointSelect.value);
       if (backupModeInput?.value === "restore" && restoreFromSelect?.value) {
         payload.append("backup_id", restoreFromSelect.value);
-        if (restoreCopySuffix?.value) payload.append("index_copy_suffix", restoreCopySuffix.value);
-        if (restoreAliasSuffix?.value) payload.append("alias_suffix", restoreAliasSuffix.value);
+        if (restoreCopySuffix) payload.append("index_copy_suffix", restoreCopySuffix.value);
+        if (restoreAliasSuffix) payload.append("alias_suffix", restoreAliasSuffix.value);
         if (restoreMapInput?.value) payload.append("restore_map", restoreMapInput.value);
       }
       if (backupTemplateSelect?.value) payload.append("template_id", backupTemplateSelect.value);
       if (backupRestoreForm.querySelector("input[name=\"dry_run\"]")?.checked) {
         payload.append("dry_run", "1");
       }
-      const selected = backupIndicesTable
-        ? Array.from(backupIndicesTable.querySelectorAll(".backup-index-check:checked"))
-          .map((el) => el.value)
-          .filter((value) => value && value.trim().length > 0)
-        : [];
-      if (selected.length) {
-        payload.append("selected_indices", selected.join("\n"));
+      if (backupModeInput?.value === "backup") {
+        const selected = backupIndicesTable
+          ? Array.from(backupIndicesTable.querySelectorAll(".backup-index-check:checked"))
+            .map((el) => el.value)
+            .filter((value) => value && value.trim().length > 0)
+          : [];
+        if (selected.length) {
+          payload.append("selected_indices", selected.join("\n"));
+        }
       }
       try {
         const response = await fetch(`${basePath}/runs`, {
