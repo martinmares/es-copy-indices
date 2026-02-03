@@ -1071,7 +1071,7 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     };
     let template = IndexTemplate {
         runs,
-        base_path: state.base_path.clone(),
+        base_path: template_base_path(state.as_ref()),
         active_nav: "dashboard".to_string(),
         endpoints: build_endpoint_views(&state),
         templates: build_template_views(&state),
@@ -1193,7 +1193,7 @@ async fn backups_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn config_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let template = ConfigTemplate {
-        base_path: state.base_path.clone(),
+        base_path: template_base_path(state.as_ref()),
         endpoints: build_endpoint_views(&state),
         templates: build_template_views(&state),
         active_nav: "config".to_string(),
@@ -2182,7 +2182,7 @@ async fn run_view(
         Some(run) => {
             let template = RunTemplate {
                 run,
-                base_path: state.base_path.clone(),
+                base_path: template_base_path(state.as_ref()),
                 active_nav: "dashboard".to_string(),
             };
             Html(render_template(&template))
@@ -2350,7 +2350,7 @@ async fn job_view(
             let template = JobTemplate {
                 run_id,
                 job,
-                base_path: state.base_path.clone(),
+                base_path: template_base_path(state.as_ref()),
                 active_nav: "dashboard".to_string(),
             };
             Html(render_template(&template))
@@ -2453,7 +2453,7 @@ async fn status_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     };
 
     let template = StatusTemplate {
-        base_path: state.base_path.clone(),
+        base_path: template_base_path(state.as_ref()),
         summary,
         active_nav: "status".to_string(),
     };
@@ -2518,7 +2518,7 @@ async fn runs_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 async fn jobs_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_options(&state).await;
     let template = JobsTemplate {
-        base_path: state.base_path.clone(),
+        base_path: template_base_path(state.as_ref()),
         runs,
         runs_json: runs_json(&state).await,
         active_nav: "jobs".to_string(),
@@ -3518,6 +3518,14 @@ fn build_metrics_summary(sample: Option<&MetricsSample>) -> MetricsSummary {
 
 fn mem_to_mb(value: u64) -> u64 {
     value / 1024 / 1024
+}
+
+fn template_base_path(state: &AppState) -> String {
+    if state.base_path == "/" {
+        String::new()
+    } else {
+        state.base_path.clone()
+    }
 }
 
 fn render_template<T: Template>(template: &T) -> String {

@@ -1,17 +1,17 @@
 [package]
 name = "es-copy-indices"
-version = "1.8.0"
+version = "1.8.1"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-askama = { version = "0.15.1", default-features = false, features = ["config", "derive"] }
+askama = { version = "0.15.4", default-features = false, features = ["config", "derive"] }
 walkdir = "2.5.0"
 zip = "7.2.0"
 axum = { version = "0.8.8", features = ["macros"] }
 chrono = { version = "0.4.43", features = ["serde"] }
-clap = { version = "4.5.54", features = ["cargo", "derive", "env"] }
+clap = { version = "4.5.57", features = ["cargo", "derive", "env"] }
 human_bytes = { version = "0.4.3", features = ["fast"] }
 logging_timer = "1.1.1"
 memory-stats = "1.2.0"
@@ -21,7 +21,7 @@ semver = "1.0.27"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_with = "3.16.1"
-sysinfo = "0.37.2"
+sysinfo = "0.38.0"
 tokio = { version = "1.49.0", features = ["full"] }
 tokio-retry = "0.3.0"
 tokio-stream = { version = "0.1.18", features = ["sync"] }
