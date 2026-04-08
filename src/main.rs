@@ -221,6 +221,23 @@ fn parse_range_bound(value: &serde_json::Value) -> Option<f64> {
     }
 }
 
+fn build_expanded_index_name(
+    source_alias_name: &str,
+    source_index_name: &str,
+    target_base: &str,
+    expansion_ordinal: usize,
+) -> String {
+    if let Some(remainder) = source_index_name.strip_prefix(source_alias_name) {
+        format!("{}{}", target_base, remainder)
+    } else {
+        warn!(
+            "Expanded source index {} does not start with alias base {}; using fallback target name",
+            source_index_name, source_alias_name
+        );
+        format!("{}__expanded_{:06}", target_base, expansion_ordinal + 1)
+    }
+}
+
 fn doc_has_field(source: &serde_json::Value, field: &str) -> bool {
     if field.starts_with('/') {
         return source
@@ -415,8 +432,8 @@ async fn main() {
         };
 
         let mut index_name_of_copy = match index.get_name_of_copy() {
-            Some(name) => name,
-            None => index.get_name(),
+            Some(name) => name.clone(),
+            None => index.get_name().clone(),
         };
 
         if index.is_multiple() {
@@ -458,17 +475,18 @@ async fn main() {
             indices_names.push(index.get_name().clone());
         }
 
-        for index_name in &indices_names {
+        let alias_target_base = index_name_of_copy.clone();
+
+        for (expanded_idx, index_name) in indices_names.iter().enumerate() {
             if index.is_multiple() {
-                index_name_of_copy = index_name;
+                index_name_of_copy = index_name.clone();
             } else if alias_expanded {
-                if index.get_name_of_copy().is_some() {
-                    warn!(
-                        "Alias {} expands to multiple indices; ignoring explicit name_of_copy and using source index name",
-                        index.get_name()
-                    );
-                }
-                index_name_of_copy = index_name;
+                index_name_of_copy = build_expanded_index_name(
+                    index.get_name(),
+                    index_name,
+                    &alias_target_base,
+                    expanded_idx,
+                );
             }
 
             if to_backup {
@@ -801,7 +819,7 @@ async fn main() {
                             destination_es_client.as_mut().unwrap(),
                             &index,
                             index_name,
-                            index_name_of_copy,
+                            &index_name_of_copy,
                         )
                         .await;
                 } else if index.is_custom_mapping() {
@@ -815,7 +833,7 @@ async fn main() {
                         .copy_custom_mappings_to(
                             destination_es_client.as_mut().unwrap(),
                             &index,
-                            index_name_of_copy,
+                            &index_name_of_copy,
                         )
                         .await;
                 }
@@ -860,7 +878,7 @@ async fn main() {
                         .copy_content_to(
                             destination_es_client.as_mut().unwrap(),
                             &index,
-                            index_name_of_copy,
+                            &index_name_of_copy,
                             &mut audit_builder,
                         )
                         .await;
