@@ -315,6 +315,34 @@ impl EsClient {
         }
     }
 
+    pub async fn count_docs(&mut self, index: &Index, index_name: &String) -> Option<u64> {
+        let q_query = match index.get_custom() {
+            Some(custom) => match custom.get_query() {
+                Some(query) => query,
+                _ => DEFAULT_QUERY,
+            },
+            _ => DEFAULT_QUERY,
+        };
+
+        let body = format!("{{ \"query\": {} }}", q_query);
+        let resp = self
+            .call_post(
+                &(match index.get_custom_doc_type() {
+                    Some(doc_type) => format!("/{}/{}/_count", index_name, doc_type),
+                    _ => format!("/{}/_count", index_name),
+                }),
+                &vec![],
+                &vec![("Content-Type".to_string(), "application/json".to_string())],
+                &body,
+            )
+            .await;
+
+        let (_status, value, _err) = resp;
+        let value = value?;
+        let json_value: serde_json::Value = serde_json::from_str(&value).ok()?;
+        json_value.get("count").and_then(|v| v.as_u64())
+    }
+
     pub async fn fetch_settings(
         &mut self,
         index_name: &str,
@@ -1440,15 +1468,11 @@ impl EsClient {
     pub async fn create_alias(
         &mut self,
         index: &Index,
+        index_name_of_copy: &str,
         source_alias_is_write_index: Option<bool>,
     ) -> &Self {
         if index.is_alias() {
             let alias_name = index.get_alias_name().unwrap();
-            let index_name = index.get_name();
-            let index_name_of_copy = match index.get_name_of_copy() {
-                Some(name) => name,
-                None => index_name,
-            };
 
             let resp = self
                 .call_get(&format!("/_alias/{}", alias_name), &vec![], &vec![])

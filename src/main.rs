@@ -483,6 +483,22 @@ async fn main() {
         }
 
         let alias_target_base = index_name_of_copy.clone();
+        let alias_expanded_total_docs = if alias_expanded && index.is_copy_content() {
+            let mut total_docs = 0u64;
+            for index_name in &indices_names {
+                let count = source_es_client
+                    .as_mut()
+                    .unwrap()
+                    .count_docs(index, index_name)
+                    .await
+                    .unwrap_or(0);
+                total_docs = total_docs.saturating_add(count);
+            }
+            Some(total_docs)
+        } else {
+            None
+        };
+        let mut alias_expanded_processed_docs = 0u64;
 
         for (expanded_idx, index_name) in indices_names.iter().enumerate() {
             if index.is_multiple() {
@@ -579,14 +595,32 @@ async fn main() {
                     while source_es_client.as_mut().unwrap().has_docs() {
                         let total = source_es_client.as_mut().unwrap().get_total_size();
                         let counter = source_es_client.as_mut().unwrap().get_docs_counter();
-                        let percent = if total > 0 {
-                            (counter as f64 / total as f64) * 100.00
-                        } else {
-                            0.00
-                        };
+                        let (display_name, display_counter, display_total, percent) =
+                            if let Some(expanded_total) = alias_expanded_total_docs {
+                                let overall_counter =
+                                    alias_expanded_processed_docs.saturating_add(counter);
+                                let percent = if expanded_total > 0 {
+                                    (overall_counter as f64 / expanded_total as f64) * 100.00
+                                } else {
+                                    0.00
+                                };
+                                (
+                                    index.get_name().as_str(),
+                                    overall_counter,
+                                    expanded_total,
+                                    percent,
+                                )
+                            } else {
+                                let percent = if total > 0 {
+                                    (counter as f64 / total as f64) * 100.00
+                                } else {
+                                    0.00
+                                };
+                                (index_name.as_str(), counter, total, percent)
+                            };
                         info!(
                             "Iterate {} - docs {}/{} ({:.2} %)",
-                            index_name, counter, total, percent
+                            display_name, display_counter, display_total, percent
                         );
                         if let Some(docs) = source_es_client.as_mut().unwrap().get_docs() {
                             for doc in docs {
@@ -615,7 +649,10 @@ async fn main() {
                             .scroll_next(index)
                             .await;
                     }
-                    metadata.docs_total = Some(source_es_client.as_mut().unwrap().get_total_size());
+                    let current_total = source_es_client.as_mut().unwrap().get_total_size();
+                    alias_expanded_processed_docs =
+                        alias_expanded_processed_docs.saturating_add(current_total);
+                    metadata.docs_total = Some(current_total);
                     source_es_client.as_mut().unwrap().scroll_stop().await;
                     if let Err(err) = writer.finish() {
                         panic!("Failed to finish backup chunk: {:?}", err);
@@ -807,7 +844,7 @@ async fn main() {
                 destination_es_client
                     .as_mut()
                     .unwrap()
-                    .create_alias(index, metadata.alias_is_write_index)
+                    .create_alias(index, dest_name, metadata.alias_is_write_index)
                     .await;
 
                 info!("Restore completed for {}", index_name);
@@ -870,13 +907,33 @@ async fn main() {
                 while source_es_client.as_mut().unwrap().has_docs() {
                     let total = source_es_client.as_mut().unwrap().get_total_size();
                     let counter = source_es_client.as_mut().unwrap().get_docs_counter();
+                    let (display_name, display_counter, display_total, display_percent) =
+                        if let Some(expanded_total) = alias_expanded_total_docs {
+                            let overall_counter =
+                                alias_expanded_processed_docs.saturating_add(counter);
+                            let percent = if expanded_total > 0 {
+                                (overall_counter as f64 / expanded_total as f64) * 100.00
+                            } else {
+                                0.00
+                            };
+                            (
+                                index.get_name().as_str(),
+                                overall_counter,
+                                expanded_total,
+                                percent,
+                            )
+                        } else {
+                            (
+                                index_name.as_str(),
+                                counter,
+                                total,
+                                (counter as f64 / total as f64) * 100.00,
+                            )
+                        };
 
                     info!(
                         "Iterate {} - docs {}/{} ({:.2} %)",
-                        index_name,
-                        counter,
-                        total,
-                        (counter as f64 / total as f64) * 100.00
+                        display_name, display_counter, display_total, display_percent
                     );
 
                     // pre create parent->child docs and post bulk insert docs
@@ -900,6 +957,9 @@ async fn main() {
 
                     memory_stats!();
                 }
+                let current_total = source_es_client.as_mut().unwrap().get_total_size();
+                alias_expanded_processed_docs =
+                    alias_expanded_processed_docs.saturating_add(current_total);
                 source_es_client.as_mut().unwrap().scroll_stop().await;
             } else {
                 warn!(
@@ -911,7 +971,11 @@ async fn main() {
             destination_es_client
                 .as_mut()
                 .unwrap()
-                .create_alias(index, alias_write_indices.get(index_name).copied())
+                .create_alias(
+                    index,
+                    &index_name_of_copy,
+                    alias_write_indices.get(index_name).copied(),
+                )
                 .await;
 
             memory_stats!();

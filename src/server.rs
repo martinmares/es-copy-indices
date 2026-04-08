@@ -5068,14 +5068,27 @@ async fn generate_date_intervals(
         });
     }
 
-    if ranges.len() < split.number_of_parts as usize {
-        return Err("percentile ranges shorter than expected".to_string());
+    let requested_parts = split.number_of_parts as usize;
+    let available_parts = ranges.len();
+    if available_parts == 0 {
+        return Err(format!(
+            "no percentile ranges available for {} split on field {}",
+            index.name, split.field_name
+        ));
+    }
+    if available_parts < requested_parts {
+        warn!(
+            "Requested {} split parts for {} on field {}, but only {} percentile ranges were available; using {}",
+            requested_parts,
+            index.name,
+            split.field_name,
+            available_parts,
+            available_parts
+        );
     }
 
-    let mut ranges: Vec<SplitRange> = ranges
-        .into_iter()
-        .take(split.number_of_parts as usize)
-        .collect();
+    let actual_parts = requested_parts.min(available_parts);
+    let mut ranges: Vec<SplitRange> = ranges.into_iter().take(actual_parts).collect();
 
     let range_specs = ranges
         .iter()
@@ -5207,23 +5220,36 @@ async fn generate_date_intervals_from_backup(
         });
     }
 
-    if ranges.len() < split.number_of_parts as usize {
-        return Err("percentile ranges shorter than expected".to_string());
+    let requested_parts = split.number_of_parts as usize;
+    let available_parts = ranges.len();
+    if available_parts == 0 {
+        return Err(format!(
+            "no percentile ranges available in backup metadata for {} split on field {}",
+            index.name, split.field_name
+        ));
+    }
+    if available_parts < requested_parts {
+        warn!(
+            "Requested {} restore split parts for {} on field {}, but only {} percentile ranges were available; using {}",
+            requested_parts,
+            index.name,
+            split.field_name,
+            available_parts,
+            available_parts
+        );
     }
 
-    let mut ranges = ranges
-        .into_iter()
-        .take(split.number_of_parts as usize)
-        .collect::<Vec<_>>();
+    let actual_parts = requested_parts.min(available_parts);
+    let mut ranges = ranges.into_iter().take(actual_parts).collect::<Vec<_>>();
     if let Some(docs_total) = metadata.docs_total {
-        if docs_total > 0 && split.number_of_parts > 0 {
-        let parts = split.number_of_parts as u64;
-        let base = docs_total / parts;
-        let remainder = docs_total % parts;
-        for (idx, range) in ranges.iter_mut().enumerate() {
-            let extra = if (idx as u64) < remainder { 1 } else { 0 };
-            range.doc_count = Some(base + extra);
-        }
+        if docs_total > 0 && actual_parts > 0 {
+            let parts = actual_parts as u64;
+            let base = docs_total / parts;
+            let remainder = docs_total % parts;
+            for (idx, range) in ranges.iter_mut().enumerate() {
+                let extra = if (idx as u64) < remainder { 1 } else { 0 };
+                range.doc_count = Some(base + extra);
+            }
         }
     }
     Ok(ranges)
