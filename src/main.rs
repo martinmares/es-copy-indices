@@ -385,6 +385,7 @@ async fn main() {
     for index in config.get_indices() {
         let mut indices_names: Vec<String> = vec![];
         let mut alias_expanded = false;
+        let mut alias_write_indices: HashMap<String, bool> = HashMap::new();
         // if index.is_multiple() {
         //     index_names.push(index.get_name().clone());
         //     info!("Copy multiple indices! ({:?})", index_names);
@@ -457,6 +458,12 @@ async fn main() {
                 .resolve_alias_indices(&index.get_name())
                 .await
             {
+                alias_write_indices = source_es_client
+                    .as_mut()
+                    .unwrap()
+                    .resolve_alias_write_indices(index.get_name())
+                    .await
+                    .unwrap_or_default();
                 if alias_indices.len() > 1 {
                     alias_expanded = true;
                     indices_names = alias_indices;
@@ -532,6 +539,7 @@ async fn main() {
                     index_name: index_name.to_string(),
                     name_of_copy: index.get_name_of_copy().clone(),
                     alias_name: index.get_alias_name(),
+                    alias_is_write_index: alias_write_indices.get(index_name).copied(),
                     alias_remove_if_exists: index.is_alias_remove_if_exists(),
                     routing_field: index.get_routing_field().clone(),
                     pre_create_doc_ids: index.is_pre_create_doc_ids(),
@@ -799,7 +807,7 @@ async fn main() {
                 destination_es_client
                     .as_mut()
                     .unwrap()
-                    .create_alias(index)
+                    .create_alias(index, metadata.alias_is_write_index)
                     .await;
 
                 info!("Restore completed for {}", index_name);
@@ -903,7 +911,7 @@ async fn main() {
             destination_es_client
                 .as_mut()
                 .unwrap()
-                .create_alias(index)
+                .create_alias(index, alias_write_indices.get(index_name).copied())
                 .await;
 
             memory_stats!();

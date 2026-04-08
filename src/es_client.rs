@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 // use std::time::Duration;
 // use chrono::{DateTime, Utc};
@@ -44,6 +44,41 @@ fn inject_auth(request_builder: RequestBuilder, endpoint: Endpoint) -> RequestBu
         request_builder.basic_auth(endpoint.get_username(), endpoint.get_password())
     } else {
         request_builder
+    }
+}
+
+fn derive_rollover_alias_target(
+    source_alias_name: &str,
+    source_index_name: &str,
+    target_index_name: &str,
+) -> Option<String> {
+    let remainder = source_index_name.strip_prefix(source_alias_name)?;
+    if remainder.is_empty() {
+        return None;
+    }
+    target_index_name
+        .strip_suffix(remainder)
+        .map(|base| base.to_string())
+}
+
+fn rewrite_rollover_alias(
+    index_settings: &mut Value,
+    source_alias_name: &str,
+    source_index_name: &str,
+    target_index_name: &str,
+) {
+    let Some(target_rollover_alias) =
+        derive_rollover_alias_target(source_alias_name, source_index_name, target_index_name)
+    else {
+        return;
+    };
+
+    if let Some(lifecycle) = index_settings.get_mut("lifecycle").and_then(|v| v.as_object_mut()) {
+        if let Some(rollover_alias) = lifecycle.get_mut("rollover_alias") {
+            if rollover_alias.as_str() == Some(source_alias_name) {
+                *rollover_alias = Value::String(target_rollover_alias);
+            }
+        }
     }
 }
 
@@ -245,6 +280,38 @@ impl EsClient {
             None
         } else {
             Some(indices)
+        }
+    }
+
+    pub async fn resolve_alias_write_indices(
+        &mut self,
+        alias_name: &str,
+    ) -> Option<HashMap<String, bool>> {
+        let resp = self
+            .call_get(&format!("/_alias/{}", alias_name), &vec![], &vec![])
+            .await?;
+
+        let json_value: serde_json::Value = serde_json::from_str(&resp).ok()?;
+        let obj = json_value.as_object()?;
+        if obj.is_empty() || obj.contains_key("error") || obj.contains_key("status") {
+            return None;
+        }
+
+        let mut result = HashMap::new();
+        for (index_name, index_value) in obj {
+            let is_write_index = index_value
+                .get("aliases")
+                .and_then(|aliases| aliases.get(alias_name))
+                .and_then(|alias| alias.get("is_write_index"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            result.insert(index_name.clone(), is_write_index);
+        }
+
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
         }
     }
 
@@ -1258,6 +1325,12 @@ impl EsClient {
                                             "number_of_replicas".to_string(),
                                             index.get_number_of_replicas().into(),
                                         );
+                                        rewrite_rollover_alias(
+                                            index_val,
+                                            index.get_name(),
+                                            index_name,
+                                            index_name_of_copy,
+                                        );
                                     }
                                 }
                                 settings = Some(fixed_value);
@@ -1364,7 +1437,11 @@ impl EsClient {
     }
 
     #[time("debug")]
-    pub async fn create_alias(&mut self, index: &Index) -> &Self {
+    pub async fn create_alias(
+        &mut self,
+        index: &Index,
+        source_alias_is_write_index: Option<bool>,
+    ) -> &Self {
         if index.is_alias() {
             let alias_name = index.get_alias_name().unwrap();
             let index_name = index.get_name();
@@ -1429,10 +1506,17 @@ impl EsClient {
                     "Add action \"add\" alias \"{}\" for \"{}\"",
                     alias_name, index_name_of_copy
                 );
-                let action = format!(
-                    "{{ \"add\": {{ \"index\": \"{}\", \"alias\": \"{}\" }} }}",
-                    index_name_of_copy, alias_name
-                );
+                let action = if let Some(is_write_index) = source_alias_is_write_index {
+                    format!(
+                        "{{ \"add\": {{ \"index\": \"{}\", \"alias\": \"{}\", \"is_write_index\": {} }} }}",
+                        index_name_of_copy, alias_name, is_write_index
+                    )
+                } else {
+                    format!(
+                        "{{ \"add\": {{ \"index\": \"{}\", \"alias\": \"{}\" }} }}",
+                        index_name_of_copy, alias_name
+                    )
+                };
                 actions.push(action);
             }
 
