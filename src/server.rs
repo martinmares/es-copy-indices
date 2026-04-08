@@ -14,6 +14,7 @@ use reqwest::Certificate;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde::de::{self, Deserializer};
+#[cfg(unix)]
 use libc::{kill, SIGTERM};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -3246,13 +3247,7 @@ async fn stop_job_internal(
     }
 
     if let Some(pid) = pid {
-        let result = unsafe { kill(pid as i32, SIGTERM) };
-        if result != 0 {
-            let err = std::io::Error::last_os_error();
-            if !is_not_found(&err) {
-                return Err(format!("Failed to stop job (pid={pid}): {}", err));
-            }
-        }
+        terminate_process(pid)?;
     }
 
     let _ = append_log_line(
@@ -3272,6 +3267,39 @@ async fn stop_job_internal(
     state.queue_notify.notify_one();
 
     Ok(stop_message)
+}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let result = unsafe { kill(pid as i32, SIGTERM) };
+    if result != 0 {
+        let err = std::io::Error::last_os_error();
+        if !is_process_not_found(&err) {
+            return Err(format!("Failed to stop job (pid={pid}): {}", err));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let output = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output()
+        .map_err(|err| format!("Failed to invoke taskkill for pid={pid}: {err}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.contains("not found")
+            && !stderr.contains("There is no running instance")
+            && !stderr.contains("not recognized")
+        {
+            return Err(format!(
+                "Failed to stop job (pid={pid}): {}",
+                stderr.trim()
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn run_dry_job(
@@ -4449,6 +4477,16 @@ async fn save_run_snapshot(runs_dir: &PathBuf, run: RunPersist) -> Result<(), St
 
 fn is_not_found(err: &std::io::Error) -> bool {
     err.kind() == ErrorKind::NotFound || err.raw_os_error() == Some(2)
+}
+
+#[cfg(unix)]
+fn is_process_not_found(err: &std::io::Error) -> bool {
+    is_not_found(err) || err.raw_os_error() == Some(3)
+}
+
+#[cfg(windows)]
+fn is_process_not_found(err: &std::io::Error) -> bool {
+    is_not_found(err)
 }
 
 #[derive(Clone, Debug)]
