@@ -227,6 +227,8 @@ struct WizardDefaults {
     copy_content: bool,
     copy_mapping: bool,
     delete_if_exists: bool,
+    #[serde(default)]
+    routing_field: Option<String>,
     number_of_replicas: Option<u64>,
     number_of_shards: Option<u64>,
     alias_enabled: bool,
@@ -269,6 +271,8 @@ struct WizardOverrides {
     copy_mapping: Option<bool>,
     #[serde(default)]
     delete_if_exists: Option<bool>,
+    #[serde(default)]
+    routing_field: Option<String>,
     #[serde(default)]
     number_of_replicas: Option<u64>,
     #[serde(default)]
@@ -1805,6 +1809,10 @@ async fn create_run_wizard(
         let copy_content = overrides.copy_content.unwrap_or(defaults.copy_content);
         let copy_mapping = overrides.copy_mapping.unwrap_or(defaults.copy_mapping);
         let delete_if_exists = overrides.delete_if_exists.unwrap_or(defaults.delete_if_exists);
+        let routing_field = overrides
+            .routing_field
+            .clone()
+            .or(defaults.routing_field.clone());
         let number_of_replicas = overrides
             .number_of_replicas
             .or(defaults.number_of_replicas);
@@ -1831,7 +1839,7 @@ async fn create_run_wizard(
             copy_content,
             copy_mapping,
             delete_if_exists,
-            routing_field: None,
+            routing_field,
             number_of_shards,
             number_of_replicas,
             dest_name: Some(item.dest_base_name.clone()),
@@ -3687,6 +3695,10 @@ async fn mark_job_finished(
             return;
         }
         job.status = status;
+        if matches!(job.status, JobStatus::Succeeded) {
+            job.progress_percent = Some(100.0);
+            job.completed_line = true;
+        }
         job.exit_code = exit_code;
         job.finished_at = Some(now_string());
         run_snapshot(run)
@@ -3973,7 +3985,12 @@ async fn build_job_view(state: &Arc<AppState>, run_id: &str, job_id: &str) -> Op
     let runs = state.runs.read().await;
     let run = runs.runs.get(run_id)?;
     let job = run.jobs.get(job_id)?;
-    let eta_label = estimate_eta_label(&job.started_at, job.progress_percent);
+    let eta_label = match job.status {
+        JobStatus::Running | JobStatus::Queued => {
+            estimate_eta_label(&job.started_at, job.progress_percent)
+        }
+        _ => None,
+    };
     let progress_label = job
         .progress_percent
         .map(|value| format!("{:.2} %", value));

@@ -637,6 +637,10 @@
                     <input class="form-control" type="number" min="0" placeholder="inherit (dst)" id="defaultReplicas">
                   </div>
                   <div class="col-md-3">
+                    <label class="form-label">Routing field</label>
+                    <input class="form-control" type="text" placeholder="e.g. /joinField/parent" id="defaultRoutingField">
+                  </div>
+                  <div class="col-md-3">
                     <label class="form-label">Alias remove if exists</label>
                     <select class="form-select" id="defaultAliasRemove">
                       <option value="true">true</option>
@@ -927,6 +931,10 @@
                   <input class="form-control" type="number" min="0" placeholder="inherit" id="bulkOverrideReplicas">
                 </div>
                 <div class="col-md-3">
+                  <label class="form-label">Routing field</label>
+                  <input class="form-control" type="text" placeholder="inherit" id="bulkOverrideRoutingField">
+                </div>
+                <div class="col-md-3">
                   <label class="form-label">Alias remove if exists</label>
                   <select class="form-select" id="bulkOverrideAliasRemove">
                     <option value="inherit">inherit</option>
@@ -1041,6 +1049,10 @@
             <div class="col-md-3">
               <label class="form-label">Replicas</label>
               <input class="form-control" type="number" min="0" placeholder="inherit" id="editReplicas">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Routing field</label>
+              <input class="form-control" type="text" placeholder="inherit" id="editRoutingField">
             </div>
             <div class="col-md-3">
               <label class="form-label">Copy content</label>
@@ -1177,6 +1189,7 @@
     const defaultBufferSize = document.getElementById("defaultBufferSize");
     const defaultShards = document.getElementById("defaultShards");
     const defaultReplicas = document.getElementById("defaultReplicas");
+    const defaultRoutingField = document.getElementById("defaultRoutingField");
     const defaultCopyContent = document.getElementById("defaultCopyContent");
     const defaultCopyMapping = document.getElementById("defaultCopyMapping");
     const defaultDeleteIfExists = document.getElementById("defaultDeleteIfExists");
@@ -1221,6 +1234,7 @@
     const bulkOverrideBuffer = document.getElementById("bulkOverrideBuffer");
     const bulkOverrideShards = document.getElementById("bulkOverrideShards");
     const bulkOverrideReplicas = document.getElementById("bulkOverrideReplicas");
+    const bulkOverrideRoutingField = document.getElementById("bulkOverrideRoutingField");
     const bulkOverrideAliasRemove = document.getElementById("bulkOverrideAliasRemove");
     const bulkOverrideCopyContent = document.getElementById("bulkOverrideCopyContent");
     const bulkOverrideCopyMapping = document.getElementById("bulkOverrideCopyMapping");
@@ -1240,6 +1254,7 @@
     const editBufferSize = document.getElementById("editBufferSize");
     const editShards = document.getElementById("editShards");
     const editReplicas = document.getElementById("editReplicas");
+    const editRoutingField = document.getElementById("editRoutingField");
     const editCopyContent = document.getElementById("editCopyContent");
     const editCopyMapping = document.getElementById("editCopyMapping");
     const editDelete = document.getElementById("editDelete");
@@ -1447,6 +1462,7 @@
         copy_content: defaultCopyContent.checked,
         copy_mapping: defaultCopyMapping.checked,
         delete_if_exists: defaultDeleteIfExists.checked,
+        routing_field: defaultRoutingField.value.trim() || null,
         number_of_replicas: parseOptionalNumber(defaultReplicas.value),
         number_of_shards: parseOptionalNumber(defaultShards.value),
         alias_enabled: defaultAliasEnabled.checked,
@@ -2190,9 +2206,11 @@
       const buffer = parseOptionalNumber(bulkOverrideBuffer.value);
       const shards = parseOptionalNumber(bulkOverrideShards.value);
       const replicas = parseOptionalNumber(bulkOverrideReplicas.value);
+      const routingField = bulkOverrideRoutingField.value.trim();
       if (buffer !== null) overrides.buffer_size = buffer;
       if (shards !== null) overrides.number_of_shards = shards;
       if (replicas !== null) overrides.number_of_replicas = replicas;
+      if (routingField) overrides.routing_field = routingField;
       if (bulkOverrideAliasRemove.value !== "inherit") {
         overrides.alias_remove_if_exists = bulkOverrideAliasRemove.value === "true";
       }
@@ -2289,6 +2307,7 @@
       bulkOverrideBuffer.value = "";
       bulkOverrideShards.value = "";
       bulkOverrideReplicas.value = "";
+      bulkOverrideRoutingField.value = "";
       bulkOverrideAliasRemove.value = "inherit";
       bulkOverrideCopyContent.value = "inherit";
       bulkOverrideCopyMapping.value = "inherit";
@@ -2398,6 +2417,7 @@
       if (overrides.buffer_size !== undefined) parts.push(`buffer=${overrides.buffer_size}`);
       if (overrides.number_of_shards !== undefined) parts.push(`shards=${overrides.number_of_shards}`);
       if (overrides.number_of_replicas !== undefined) parts.push(`replicas=${overrides.number_of_replicas}`);
+      if (overrides.routing_field !== undefined) parts.push(`routing=${overrides.routing_field}`);
       if (overrides.copy_content !== undefined) parts.push(`content=${overrides.copy_content}`);
       if (overrides.copy_mapping !== undefined) parts.push(`mapping=${overrides.copy_mapping}`);
       if (overrides.delete_if_exists !== undefined) parts.push(`delete=${overrides.delete_if_exists}`);
@@ -2457,6 +2477,7 @@
         editBufferSize.value = item.overrides?.buffer_size ?? "";
         editShards.value = item.overrides?.number_of_shards ?? "";
         editReplicas.value = item.overrides?.number_of_replicas ?? "";
+        editRoutingField.value = item.overrides?.routing_field ?? "";
         editCopyContent.value = item.overrides?.copy_content !== undefined
           ? String(item.overrides.copy_content)
           : "inherit";
@@ -2485,9 +2506,11 @@
       const buffer = parseOptionalNumber(editBufferSize.value);
       const shards = parseOptionalNumber(editShards.value);
       const replicas = parseOptionalNumber(editReplicas.value);
+      const routingField = editRoutingField.value.trim();
       if (buffer !== null) overrides.buffer_size = buffer;
       if (shards !== null) overrides.number_of_shards = shards;
       if (replicas !== null) overrides.number_of_replicas = replicas;
+      if (routingField) overrides.routing_field = routingField;
       if (editAliasEnabled.value !== "inherit") overrides.alias_enabled = editAliasEnabled.value === "true";
       if (editAliasRemove.value !== "inherit") overrides.alias_remove_if_exists = editAliasRemove.value === "true";
       if (editCopyContent.value !== "inherit") overrides.copy_content = editCopyContent.value === "true";
