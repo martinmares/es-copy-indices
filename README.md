@@ -34,6 +34,17 @@ It will:
 5) restore into a new index,
 6) verify doc counts (including a routing parent/child test), then shut everything down.
 
+There is also a server-side Wizard Mode E2E test:
+
+```bash
+./integration/run-wizard-e2e.sh
+```
+
+It starts the web server against the same local ES nodes, creates a Wizard run through
+the HTTP API, verifies generated split TOML configs for `routing_field` and
+`write_existing`, starts the generated split stage, and checks that documents are
+copied into an existing destination write alias.
+
 ## Usage
 ```bash
 RUST_LOG=info ./target/release/es-copy-indices -c ./conf/main.toml

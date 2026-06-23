@@ -1,22 +1,23 @@
-use askama::Template;
-use axum::extract::{Form, Path, Query, State};
-use axum::http::{header, HeaderValue, StatusCode};
-use axum::response::{Html, IntoResponse, Redirect, Sse};
-use axum::Json;
-use axum::body::Bytes;
-use axum::routing::{get, post};
-use axum::Router;
 use crate::backup;
-use clap::Parser;
-use clap::ArgAction;
+use askama::Template;
+use axum::Json;
+use axum::Router;
+use axum::body::Bytes;
+use axum::extract::{Form, Path, Query, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{Html, IntoResponse, Redirect, Sse};
+use axum::routing::{get, post};
 use chrono::TimeZone;
+use clap::ArgAction;
+use clap::Parser;
+#[cfg(unix)]
+use libc::{SIGTERM, kill};
 use reqwest::Certificate;
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use serde::de::{self, Deserializer};
-#[cfg(unix)]
-use libc::{kill, SIGTERM};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::Infallible;
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
@@ -25,10 +26,9 @@ use std::time::Duration;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{broadcast, Mutex, Notify, RwLock};
-use std::convert::Infallible;
-use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
+use tokio::sync::{Mutex, Notify, RwLock, broadcast};
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 use tracing::{info, warn};
 use walkdir::WalkDir;
 use zip::write::FileOptions;
@@ -121,20 +121,24 @@ fn build_destination_queues(
 ) -> HashMap<String, DestinationQueue> {
     let mut queues = HashMap::new();
     for endpoint in endpoints {
-        queues.entry(endpoint.id.clone()).or_insert_with(|| DestinationQueue {
-            max_concurrent_jobs: default_max,
-            queue: VecDeque::new(),
-        });
+        queues
+            .entry(endpoint.id.clone())
+            .or_insert_with(|| DestinationQueue {
+                max_concurrent_jobs: default_max,
+                queue: VecDeque::new(),
+            });
     }
     queues
 }
 
 async fn ensure_destination_queue(state: &Arc<AppState>, destination_id: &str) {
     let mut queues = state.destination_queues.lock().await;
-    queues.entry(destination_id.to_string()).or_insert_with(|| DestinationQueue {
-        max_concurrent_jobs: state.default_max_concurrent_jobs,
-        queue: VecDeque::new(),
-    });
+    queues
+        .entry(destination_id.to_string())
+        .or_insert_with(|| DestinationQueue {
+            max_concurrent_jobs: state.default_max_concurrent_jobs,
+            queue: VecDeque::new(),
+        });
 }
 
 #[derive(Clone, Debug)]
@@ -229,6 +233,12 @@ struct WizardDefaults {
     delete_if_exists: bool,
     #[serde(default)]
     routing_field: Option<String>,
+    #[serde(default)]
+    write_existing: bool,
+    #[serde(default)]
+    split_field: Option<String>,
+    #[serde(default)]
+    split_parts: Option<u64>,
     number_of_replicas: Option<u64>,
     number_of_shards: Option<u64>,
     alias_enabled: bool,
@@ -273,6 +283,12 @@ struct WizardOverrides {
     delete_if_exists: Option<bool>,
     #[serde(default)]
     routing_field: Option<String>,
+    #[serde(default)]
+    write_existing: Option<bool>,
+    #[serde(default)]
+    split_field: Option<String>,
+    #[serde(default)]
+    split_parts: Option<u64>,
     #[serde(default)]
     number_of_replicas: Option<u64>,
     #[serde(default)]
@@ -1393,7 +1409,8 @@ fn load_backup_metadata_map(
             if let Ok(meta) = backup::read_json_file::<backup::BackupMetadata>(&metadata_path) {
                 map.insert(entry.name.clone(), meta.clone());
                 if meta.index_name != entry.name {
-                    map.entry(meta.index_name.clone()).or_insert_with(|| meta.clone());
+                    map.entry(meta.index_name.clone())
+                        .or_insert_with(|| meta.clone());
                 }
                 if let Some(name) = meta.name_of_copy.as_deref() {
                     map.entry(name.to_string()).or_insert_with(|| meta.clone());
@@ -1547,23 +1564,14 @@ async fn create_run(
     State(state): State<Arc<AppState>>,
     Form(form): Form<CreateRunForm>,
 ) -> impl IntoResponse {
-    let mode = form
-        .mode
-        .as_deref()
-        .unwrap_or("copy")
-        .trim()
-        .to_lowercase();
+    let mode = form.mode.as_deref().unwrap_or("copy").trim().to_lowercase();
     let template = match template_by_id(&state, &form.template_id) {
         Some(template) => template.clone(),
         None => return (StatusCode::BAD_REQUEST, "Unknown template").into_response(),
     };
     let dry_run = form.dry_run.is_some();
-    let copy_suffix_override = form
-        .index_copy_suffix
-        .map(|value| value.trim().to_string());
-    let alias_suffix_override = form
-        .alias_suffix
-        .map(|value| value.trim().to_string());
+    let copy_suffix_override = form.index_copy_suffix.map(|value| value.trim().to_string());
+    let alias_suffix_override = form.alias_suffix.map(|value| value.trim().to_string());
     let selected_indices = if form.selected_indices.is_empty() {
         None
     } else {
@@ -1573,7 +1581,11 @@ async fn create_run(
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .collect();
-        if filtered.is_empty() { None } else { Some(filtered) }
+        if filtered.is_empty() {
+            None
+        } else {
+            Some(filtered)
+        }
     };
     let restore_map = match form.restore_map.as_deref() {
         Some(value) => match parse_restore_map(value) {
@@ -1587,7 +1599,7 @@ async fn create_run(
             let src_endpoint = match endpoint_by_id(&state, &form.src_endpoint_id) {
                 Some(endpoint) => endpoint.clone(),
                 None => {
-                    return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response()
+                    return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response();
                 }
             };
             let backup_root = match &state.backup_dir {
@@ -1597,7 +1609,7 @@ async fn create_run(
                         StatusCode::BAD_REQUEST,
                         "backup_dir is not configured on the server",
                     )
-                        .into_response()
+                        .into_response();
                 }
             };
             (
@@ -1611,11 +1623,8 @@ async fn create_run(
             let dst_endpoint = match endpoint_by_id(&state, &form.dst_endpoint_id) {
                 Some(endpoint) => endpoint.clone(),
                 None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        "Unknown destination endpoint",
-                    )
-                        .into_response()
+                    return (StatusCode::BAD_REQUEST, "Unknown destination endpoint")
+                        .into_response();
                 }
             };
             let backup_root = match &state.backup_dir {
@@ -1625,15 +1634,10 @@ async fn create_run(
                         StatusCode::BAD_REQUEST,
                         "backup_dir is not configured on the server",
                     )
-                        .into_response()
+                        .into_response();
                 }
             };
-            let backup_id = form
-                .backup_id
-                .as_deref()
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            let backup_id = form.backup_id.as_deref().unwrap_or("").trim().to_string();
             if backup_id.is_empty() {
                 return (StatusCode::BAD_REQUEST, "backup_id is required").into_response();
             }
@@ -1656,16 +1660,15 @@ async fn create_run(
         _ => {
             let src_endpoint = match endpoint_by_id(&state, &form.src_endpoint_id) {
                 Some(endpoint) => endpoint.clone(),
-                None => return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response(),
+                None => {
+                    return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response();
+                }
             };
             let dst_endpoint = match endpoint_by_id(&state, &form.dst_endpoint_id) {
                 Some(endpoint) => endpoint.clone(),
                 None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        "Unknown destination endpoint",
-                    )
-                        .into_response()
+                    return (StatusCode::BAD_REQUEST, "Unknown destination endpoint")
+                        .into_response();
                 }
             };
             (src_endpoint, dst_endpoint, RunMode::Copy, None)
@@ -1766,8 +1769,9 @@ async fn create_run(
     )
     .await
     {
-        Ok(run_id) => Redirect::to(&with_base(&state, &format!("/runs/{}", run_id)))
-            .into_response(),
+        Ok(run_id) => {
+            Redirect::to(&with_base(&state, &format!("/runs/{}", run_id))).into_response()
+        }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create run: {}", err),
@@ -1796,7 +1800,7 @@ async fn create_run_wizard(
     let alias_suffix_override = None;
     let defaults = payload.defaults.clone();
 
-    let mut jobs = Vec::new();
+    let mut indices = Vec::new();
     for item in &payload.items {
         if item.source_name.trim().is_empty() || item.dest_base_name.trim().is_empty() {
             return (StatusCode::BAD_REQUEST, "Missing index name").into_response();
@@ -1806,22 +1810,61 @@ async fn create_run_wizard(
         if buffer_size == 0 {
             return (StatusCode::BAD_REQUEST, "buffer_size must be > 0").into_response();
         }
+        let write_existing = overrides.write_existing.unwrap_or(defaults.write_existing);
         let copy_content = overrides.copy_content.unwrap_or(defaults.copy_content);
-        let copy_mapping = overrides.copy_mapping.unwrap_or(defaults.copy_mapping);
-        let delete_if_exists = overrides.delete_if_exists.unwrap_or(defaults.delete_if_exists);
+        let copy_mapping = if write_existing {
+            false
+        } else {
+            overrides.copy_mapping.unwrap_or(defaults.copy_mapping)
+        };
+        let delete_if_exists = if write_existing {
+            false
+        } else {
+            overrides
+                .delete_if_exists
+                .unwrap_or(defaults.delete_if_exists)
+        };
         let routing_field = overrides
             .routing_field
             .clone()
             .or(defaults.routing_field.clone());
-        let number_of_replicas = overrides
-            .number_of_replicas
-            .or(defaults.number_of_replicas);
-        let number_of_shards = overrides
-            .number_of_shards
-            .or(defaults.number_of_shards);
-        let alias_enabled = overrides
-            .alias_enabled
-            .unwrap_or(defaults.alias_enabled && payload.alias.enabled);
+        let split_field = overrides
+            .split_field
+            .clone()
+            .or(defaults.split_field.clone())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let split_parts = overrides.split_parts.or(defaults.split_parts);
+        let split = match (split_field, split_parts) {
+            (Some(field_name), Some(number_of_parts)) if number_of_parts > 1 => Some(SplitConfig {
+                field_name,
+                number_of_parts,
+            }),
+            (Some(_), Some(_)) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "split_parts must be greater than 1 when split_field is set",
+                )
+                    .into_response();
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "split_field and split_parts must be set together",
+                )
+                    .into_response();
+            }
+            (None, None) => None,
+        };
+        let number_of_replicas = overrides.number_of_replicas.or(defaults.number_of_replicas);
+        let number_of_shards = overrides.number_of_shards.or(defaults.number_of_shards);
+        let alias_enabled = if write_existing {
+            false
+        } else {
+            overrides
+                .alias_enabled
+                .unwrap_or(defaults.alias_enabled && payload.alias.enabled)
+        };
         let alias_remove_if_exists = overrides
             .alias_remove_if_exists
             .unwrap_or(defaults.alias_remove_if_exists);
@@ -1851,29 +1894,33 @@ async fn create_run_wizard(
             use_src_prefix: false,
             use_dst_prefix: false,
             use_from_suffix: false,
-            split: None,
+            split,
             custom: None,
         };
-        jobs.push(JobPlan {
-            name: format!("{}-{}", DEFAULT_STAGE_NAME, item.source_name),
-            index,
-            date_from: None,
-            date_to: None,
-            leftover: false,
-            split_doc_count: None,
-        });
+        indices.push(index);
     }
 
-    let stages = vec![StagePlan {
-        name: DEFAULT_STAGE_NAME.to_string(),
-        jobs,
-    }];
     let mut wizard_tenants = src_endpoint.tenants.clone();
     for tenant in &dst_endpoint.tenants {
         if !wizard_tenants.iter().any(|value| value == tenant) {
             wizard_tenants.push(tenant.clone());
         }
     }
+    let template_config = TemplateConfig {
+        id: "wizard".to_string(),
+        name: "Wizard selection".to_string(),
+        path: PathBuf::new(),
+        number_of_replicas: defaults.number_of_replicas,
+        indices,
+        tenants: wizard_tenants.clone(),
+    };
+    let stages =
+        match plan_stages_filtered(&template_config, &state, &src_endpoint, None, RunMode::Copy)
+            .await
+        {
+            Ok(stages) => stages,
+            Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+        };
     let template_snapshot = TemplateSnapshot {
         id: "wizard".to_string(),
         name: "Wizard selection".to_string(),
@@ -1902,8 +1949,9 @@ async fn create_run_wizard(
     )
     .await
     {
-        Ok(run_id) => Redirect::to(&with_base(&state, &format!("/runs/{}", run_id)))
-            .into_response(),
+        Ok(run_id) => {
+            Redirect::to(&with_base(&state, &format!("/runs/{}", run_id))).into_response()
+        }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create run: {}", err),
@@ -1967,14 +2015,11 @@ async fn fetch_cat_indices(
     pattern: &str,
 ) -> Result<Vec<WizardSourceItem>, String> {
     let url = format!("{}/_cat/indices", endpoint.url);
-    let mut request = state
-        .client
-        .get(&url)
-        .query(&[
-            ("format", "json"),
-            ("h", "index,docs.count,store.size"),
-            ("index", pattern),
-        ]);
+    let mut request = state.client.get(&url).query(&[
+        ("format", "json"),
+        ("h", "index,docs.count,store.size"),
+        ("index", pattern),
+    ]);
     if let Some(auth) = &endpoint.auth {
         request = request.basic_auth(auth.username.clone(), auth.password.clone());
     }
@@ -1984,10 +2029,7 @@ async fn fetch_cat_indices(
         .await
         .map_err(|e| format!("Failed to list indices: {e}"))?;
     if !response.status().is_success() {
-        return Err(format!(
-            "Failed to list indices: {}",
-            response.status()
-        ));
+        return Err(format!("Failed to list indices: {}", response.status()));
     }
     let rows = response
         .json::<Vec<CatIndexRow>>()
@@ -2014,10 +2056,11 @@ async fn fetch_cat_aliases(
     pattern: &str,
 ) -> Result<Vec<WizardSourceItem>, String> {
     let url = format!("{}/_cat/aliases", endpoint.url);
-    let mut request = state
-        .client
-        .get(&url)
-        .query(&[("format", "json"), ("h", "alias,index"), ("name", pattern)]);
+    let mut request = state.client.get(&url).query(&[
+        ("format", "json"),
+        ("h", "alias,index"),
+        ("name", pattern),
+    ]);
     if let Some(auth) = &endpoint.auth {
         request = request.basic_auth(auth.username.clone(), auth.password.clone());
     }
@@ -2060,10 +2103,7 @@ async fn fetch_cat_aliases(
             .filter(|row| wildcard_match(&row.alias, pattern))
             .collect()
     } else {
-        return Err(format!(
-            "Failed to list aliases: {}",
-            response.status()
-        ));
+        return Err(format!("Failed to list aliases: {}", response.status()));
     };
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for row in rows {
@@ -2130,11 +2170,7 @@ async fn update_max_concurrent_jobs(
     if next < 0 {
         next = 0;
     }
-    let next_value = if next == 0 {
-        None
-    } else {
-        Some(next as usize)
-    };
+    let next_value = if next == 0 { None } else { Some(next as usize) };
     for queue in queues.values_mut() {
         queue.max_concurrent_jobs = next_value;
     }
@@ -2168,11 +2204,7 @@ async fn update_max_concurrent_jobs_for_endpoint(
     if next < 0 {
         next = 0;
     }
-    queue.max_concurrent_jobs = if next == 0 {
-        None
-    } else {
-        Some(next as usize)
-    };
+    queue.max_concurrent_jobs = if next == 0 { None } else { Some(next as usize) };
     let updated = queue.max_concurrent_jobs;
     drop(queues);
     state.queue_notify.notify_one();
@@ -2194,8 +2226,7 @@ async fn run_view(
                 base_path: template_base_path(state.as_ref()),
                 active_nav: "dashboard".to_string(),
             };
-            Html(render_template(&template))
-                .into_response()
+            Html(render_template(&template)).into_response()
         }
         None => (StatusCode::NOT_FOUND, "Run not found").into_response(),
     }
@@ -2362,8 +2393,7 @@ async fn job_view(
                 base_path: template_base_path(state.as_ref()),
                 active_nav: "dashboard".to_string(),
             };
-            Html(render_template(&template))
-                .into_response()
+            Html(render_template(&template)).into_response()
         }
         None => (StatusCode::NOT_FOUND, "Job not found").into_response(),
     }
@@ -2432,11 +2462,9 @@ async fn job_status_stream(
                     .get(&run_id)
                     .and_then(|run| run.jobs.get(&job_id))
                     .map(|job| {
-                        let progress_label = job
-                            .progress_percent
-                            .map(|value| format!("{:.2} %", value));
-                        let eta_label =
-                            estimate_eta_label(&job.started_at, job.progress_percent);
+                        let progress_label =
+                            job.progress_percent.map(|value| format!("{:.2} %", value));
+                        let eta_label = estimate_eta_label(&job.started_at, job.progress_percent);
                         (job.status.as_str().to_string(), progress_label, eta_label)
                     })
                     .unwrap_or_else(|| ("missing".to_string(), None, None))
@@ -2678,7 +2706,10 @@ async fn export_run(
         let mut zip = zip::ZipWriter::new(cursor);
         let options = FileOptions::<()>::default();
 
-        for entry in WalkDir::new(&run_dir_clone).into_iter().filter_map(Result::ok) {
+        for entry in WalkDir::new(&run_dir_clone)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             let path = entry.path();
             if path.is_dir() {
                 continue;
@@ -2714,14 +2745,14 @@ async fn export_run(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to export run: {err}"),
             )
-                .into_response()
+                .into_response();
         }
         Err(err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to export run: {err}"),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -2793,7 +2824,8 @@ async fn start_stage(
                 run_id_clone.clone(),
                 job_id.clone(),
             )
-            .await {
+            .await
+            {
                 warn!("Failed to start job {}: {}", job_id, err);
             }
         });
@@ -2822,7 +2854,11 @@ async fn start_job(
     if query.redirect.as_deref() == Some("run") {
         return Redirect::to(&with_base(&state, &format!("/runs/{}", run_id))).into_response();
     }
-    Redirect::to(&with_base(&state, &format!("/runs/{}/jobs/{}", run_id, job_id))).into_response()
+    Redirect::to(&with_base(
+        &state,
+        &format!("/runs/{}/jobs/{}", run_id, job_id),
+    ))
+    .into_response()
 }
 
 async fn stop_job(
@@ -2866,7 +2902,10 @@ async fn stop_stage(
     } else {
         (
             StatusCode::BAD_REQUEST,
-            format!("Stop requested for {stopped} job(s). Errors: {}", errors.join("; ")),
+            format!(
+                "Stop requested for {stopped} job(s). Errors: {}",
+                errors.join("; ")
+            ),
         )
             .into_response()
     }
@@ -2899,7 +2938,10 @@ async fn stop_run(
     } else {
         (
             StatusCode::BAD_REQUEST,
-            format!("Stop requested for {stopped} job(s). Errors: {}", errors.join("; ")),
+            format!(
+                "Stop requested for {stopped} job(s). Errors: {}",
+                errors.join("; ")
+            ),
         )
             .into_response()
     }
@@ -2967,7 +3009,14 @@ async fn start_job_runner(
             )
         };
         let snapshot = run_snapshot(run);
-        (config_path, stdout_path, stderr_path, snapshot, dry_run, queued)
+        (
+            config_path,
+            stdout_path,
+            stderr_path,
+            snapshot,
+            dry_run,
+            queued,
+        )
     };
     let runs_dir = state.runs_dir.clone();
     tokio::spawn(async move {
@@ -2976,7 +3025,13 @@ async fn start_job_runner(
         }
     });
     if queued {
-        enqueue_job(&state, run_id.clone(), job_id.clone(), destination_id.clone()).await;
+        enqueue_job(
+            &state,
+            run_id.clone(),
+            job_id.clone(),
+            destination_id.clone(),
+        )
+        .await;
         return Ok(());
     }
 
@@ -3062,7 +3117,9 @@ async fn enqueue_job(
 async fn remove_from_queue(state: &Arc<AppState>, run_id: &str, job_id: &str) {
     let mut queues = state.destination_queues.lock().await;
     for queue in queues.values_mut() {
-        queue.queue.retain(|job| !(job.run_id == run_id && job.job_id == job_id));
+        queue
+            .queue
+            .retain(|job| !(job.run_id == run_id && job.job_id == job_id));
     }
 }
 
@@ -3301,10 +3358,7 @@ fn terminate_process(pid: u32) -> Result<(), String> {
             && !stderr.contains("There is no running instance")
             && !stderr.contains("not recognized")
         {
-            return Err(format!(
-                "Failed to stop job (pid={pid}): {}",
-                stderr.trim()
-            ));
+            return Err(format!("Failed to stop job (pid={pid}): {}", stderr.trim()));
         }
     }
     Ok(())
@@ -3434,7 +3488,9 @@ async fn read_stream_lines(
 ) {
     let mut reader = BufReader::new(reader).lines();
     while let Ok(Some(line)) = reader.next_line().await {
-        if let Err(err) = append_log_line(&state, &run_id, &job_id, stream.clone(), &line, &log_path).await {
+        if let Err(err) =
+            append_log_line(&state, &run_id, &job_id, stream.clone(), &line, &log_path).await
+        {
             warn!("Failed to append log: {}", err);
         }
     }
@@ -3631,8 +3687,7 @@ fn start_metrics_sampler(
                     .values()
                     .flat_map(|run| run.jobs.values())
                     .filter(|job| matches!(job.status, JobStatus::Running))
-                    .count()
-                    ;
+                    .count();
                 let queued = guard
                     .runs
                     .values()
@@ -3742,16 +3797,8 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
                 jobs_queued,
                 jobs_failed,
                 jobs_succeeded,
-                src_name: run
-                    .src_endpoint
-                    .name
-                    .clone()
-                    .if_empty_then("unknown"),
-                dst_name: run
-                    .dst_endpoint
-                    .name
-                    .clone()
-                    .if_empty_then("unknown"),
+                src_name: run.src_endpoint.name.clone().if_empty_then("unknown"),
+                dst_name: run.dst_endpoint.name.clone().if_empty_then("unknown"),
                 dst_id: run.dst_endpoint.id.clone(),
                 template_name: run.template.name.clone().if_empty_then("unnamed"),
                 dry_run: run.dry_run,
@@ -3788,10 +3835,7 @@ async fn build_queue_limits(state: &Arc<AppState>) -> Vec<QueueLimitView> {
     let queues = state.destination_queues.lock().await;
     let mut views = Vec::new();
     for endpoint in &state.endpoints {
-        let (running, queued) = counts
-            .get(&endpoint.id)
-            .copied()
-            .unwrap_or((0, 0));
+        let (running, queued) = counts.get(&endpoint.id).copied().unwrap_or((0, 0));
         let max_concurrent_jobs = queues
             .get(&endpoint.id)
             .map(|queue| queue.max_concurrent_jobs)
@@ -3846,10 +3890,7 @@ async fn build_jobs_list(state: &Arc<AppState>) -> Vec<JobListEntry> {
             "{} - {} → {}",
             run.id, run.src_endpoint.name, run.dst_endpoint.name
         );
-        let run_env_label = format!(
-            "{} → {}",
-            run.src_endpoint.name, run.dst_endpoint.name
-        );
+        let run_env_label = format!("{} → {}", run.src_endpoint.name, run.dst_endpoint.name);
         let mut job_list: Vec<&JobState> = run.jobs.values().collect();
         job_list.sort_by(|a, b| a.name.cmp(&b.name));
         for job in job_list {
@@ -3951,7 +3992,10 @@ async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> 
             }
         }
         let can_start = jobs.iter().any(|job| {
-            matches!(job.status, JobStatus::Pending | JobStatus::Failed | JobStatus::Stopped)
+            matches!(
+                job.status,
+                JobStatus::Pending | JobStatus::Failed | JobStatus::Stopped
+            )
         });
         let can_stop = jobs
             .iter()
@@ -3991,9 +4035,7 @@ async fn build_job_view(state: &Arc<AppState>, run_id: &str, job_id: &str) -> Op
         }
         _ => None,
     };
-    let progress_label = job
-        .progress_percent
-        .map(|value| format!("{:.2} %", value));
+    let progress_label = job.progress_percent.map(|value| format!("{:.2} %", value));
     Some(JobView {
         id: job.id.clone(),
         name: job.name.clone(),
@@ -4065,13 +4107,21 @@ async fn create_run_state_from_stages(
 
     let copy_suffix = if let Some(raw) = copy_suffix_override {
         let trimmed = raw.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     } else {
         state.copy_suffix.clone()
     };
     let alias_suffix = if let Some(raw) = alias_suffix_override {
         let trimmed = raw.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     } else {
         state.alias_suffix.clone()
     };
@@ -4378,12 +4428,12 @@ async fn load_runs(state: &AppState) {
     if !queued.is_empty() {
         let mut queues = state.destination_queues.lock().await;
         for item in queued {
-            let queue = queues.entry(item.destination_id.clone()).or_insert_with(|| {
-                DestinationQueue {
+            let queue = queues
+                .entry(item.destination_id.clone())
+                .or_insert_with(|| DestinationQueue {
                     max_concurrent_jobs: state.default_max_concurrent_jobs,
                     queue: VecDeque::new(),
-                }
-            });
+                });
             if !queue
                 .queue
                 .iter()
@@ -4809,7 +4859,10 @@ fn file_timestamp() -> String {
     chrono::Utc::now().format("%Y%m%d-%H%M%S-%f").to_string()
 }
 
-fn estimate_eta_label(started_at: &Option<String>, progress_percent: Option<f64>) -> Option<String> {
+fn estimate_eta_label(
+    started_at: &Option<String>,
+    progress_percent: Option<f64>,
+) -> Option<String> {
     let started_at = started_at.as_ref()?;
     let progress = progress_percent?;
     if progress <= 0.0 || progress >= 100.0 {
@@ -4817,7 +4870,9 @@ fn estimate_eta_label(started_at: &Option<String>, progress_percent: Option<f64>
     }
     let parsed = chrono::DateTime::parse_from_rfc3339(started_at).ok()?;
     let started = parsed.with_timezone(&chrono::Utc);
-    let elapsed = chrono::Utc::now().signed_duration_since(started).num_seconds();
+    let elapsed = chrono::Utc::now()
+        .signed_duration_since(started)
+        .num_seconds();
     if elapsed <= 0 {
         return None;
     }
@@ -5025,11 +5080,7 @@ async fn generate_date_intervals(
         }
     });
 
-    let index_name = build_index_name(
-        &src_endpoint.prefix,
-        &index.name,
-        state.from_suffix.as_deref(),
-    );
+    let index_name = build_source_index_name(state, src_endpoint, index);
     let url = format!("{}/{}/_search", src_endpoint.url, index_name);
     let mut request = state.client.get(&url).json(&payload);
     if let Some(auth) = &src_endpoint.auth {
@@ -5096,11 +5147,7 @@ async fn generate_date_intervals(
     if available_parts < requested_parts {
         warn!(
             "Requested {} split parts for {} on field {}, but only {} percentile ranges were available; using {}",
-            requested_parts,
-            index.name,
-            split.field_name,
-            available_parts,
-            available_parts
+            requested_parts, index.name, split.field_name, available_parts, available_parts
         );
     }
 
@@ -5143,8 +5190,7 @@ async fn generate_date_intervals(
                         .and_then(|v| v.as_array())
                     {
                         for (idx, bucket) in buckets.iter().enumerate() {
-                            if let Some(count) = bucket.get("doc_count").and_then(|v| v.as_u64())
-                            {
+                            if let Some(count) = bucket.get("doc_count").and_then(|v| v.as_u64()) {
                                 if let Some(range) = ranges.get_mut(idx) {
                                     range.doc_count = Some(count);
                                 }
@@ -5185,9 +5231,8 @@ async fn generate_date_intervals_from_backup(
     let backup_dir = PathBuf::from(backup_dir);
     let index_dir = backup::resolve_index_dir(&backup_dir, &index.name)
         .map_err(|err| format!("Failed to resolve backup index directory: {err}"))?;
-    let metadata: backup::BackupMetadata =
-        backup::read_json_file(&index_dir.join("metadata.json"))
-            .map_err(|e| format!("Failed to read metadata.json: {e}"))?;
+    let metadata: backup::BackupMetadata = backup::read_json_file(&index_dir.join("metadata.json"))
+        .map_err(|e| format!("Failed to read metadata.json: {e}"))?;
 
     let field = metadata
         .quantile_field
@@ -5215,12 +5260,8 @@ async fn generate_date_intervals_from_backup(
     for percent in percents {
         let value = quantile_from_centroids(&centroids, percent as f64)
             .ok_or_else(|| format!("Failed to compute quantile {} for {}", percent, index.name))?;
-        let value = quantile_value_to_string(value).ok_or_else(|| {
-            format!(
-                "Failed to format quantile {} for {}",
-                percent, index.name
-            )
-        })?;
+        let value = quantile_value_to_string(value)
+            .ok_or_else(|| format!("Failed to format quantile {} for {}", percent, index.name))?;
         percentile_values.push(Some(value));
     }
 
@@ -5248,11 +5289,7 @@ async fn generate_date_intervals_from_backup(
     if available_parts < requested_parts {
         warn!(
             "Requested {} restore split parts for {} on field {}, but only {} percentile ranges were available; using {}",
-            requested_parts,
-            index.name,
-            split.field_name,
-            available_parts,
-            available_parts
+            requested_parts, index.name, split.field_name, available_parts, available_parts
         );
     }
 
@@ -5327,6 +5364,24 @@ fn build_index_name(prefix: &str, name: &str, suffix: Option<&str>) -> String {
     result
 }
 
+fn build_source_index_name(
+    state: &AppState,
+    src_endpoint: &EndpointConfig,
+    index: &InputIndex,
+) -> String {
+    let src_prefix = if index.use_src_prefix {
+        src_endpoint.prefix.as_str()
+    } else {
+        ""
+    };
+    let from_suffix = if index.use_from_suffix {
+        state.from_suffix.as_deref()
+    } else {
+        None
+    };
+    build_index_name(src_prefix, &index.name, from_suffix)
+}
+
 fn build_alias_name(prefix: &str, name: &str, suffix: Option<&str>) -> String {
     let mut result = format!("{}{}", prefix, name);
     if let Some(suffix) = suffix {
@@ -5364,11 +5419,7 @@ fn build_output_config(
         .timestamp
         .clone()
         .unwrap_or_else(|| chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string());
-    let number_of_shards = job
-        .index
-        .number_of_shards
-        .unwrap_or(1)
-        .max(1);
+    let number_of_shards = job.index.number_of_shards.unwrap_or(1).max(1);
     let number_of_replicas = job
         .index
         .number_of_replicas
@@ -5390,32 +5441,20 @@ fn build_output_config(
         None
     };
     let index_name = build_index_name(src_prefix, &job.index.name, from_suffix);
-    let dest_base_name = job
-        .index
-        .dest_name
-        .as_deref()
-        .unwrap_or(&job.index.name);
+    let dest_base_name = job.index.dest_name.as_deref().unwrap_or(&job.index.name);
     let name_of_copy = if job.index.use_dest_name_as_is {
         dest_base_name.to_string()
     } else {
         build_name_of_copy(dst_prefix, dest_base_name, &timestamp, copy_suffix)
     };
-    let alias_base_name = job
-        .index
-        .alias_name
-        .as_deref()
-        .unwrap_or(dest_base_name);
+    let alias_base_name = job.index.alias_name.as_deref().unwrap_or(dest_base_name);
     let alias_name = if job.index.use_alias_name_as_is {
         alias_base_name.to_string()
     } else {
         build_alias_name(dst_prefix, alias_base_name, alias_suffix)
     };
 
-    let mut custom_mapping = job
-        .index
-        .custom
-        .as_ref()
-        .and_then(|c| c.mapping.clone());
+    let mut custom_mapping = job.index.custom.as_ref().and_then(|c| c.mapping.clone());
     if custom_mapping.as_deref().unwrap_or("").is_empty() {
         custom_mapping = None;
     }
@@ -5440,8 +5479,7 @@ fn build_output_config(
             }
             custom_query = Some(format!(
                 "{{ \"bool\": {{ \"must\": [{{ \"match_all\": {{}} }}], \"filter\": [ {{ \"range\": {{ \"{}\": {{ {} }} }} }} ] }} }}",
-                split.field_name,
-                range
+                split.field_name, range
             ));
         }
     }
@@ -5482,7 +5520,10 @@ fn build_output_config(
             insecure: if state.insecure { Some(true) } else { None },
             basic_auth: src_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
                 username: escape_shell_value(&auth.username),
-                password: auth.password.as_ref().map(|value| escape_shell_value(value)),
+                password: auth
+                    .password
+                    .as_ref()
+                    .map(|value| escape_shell_value(value)),
             }),
             backup_dir: src_endpoint.backup_dir.clone(),
         },
@@ -5497,7 +5538,10 @@ fn build_output_config(
             insecure: if state.insecure { Some(true) } else { None },
             basic_auth: dst_endpoint.auth.as_ref().map(|auth| OutputBasicAuth {
                 username: escape_shell_value(&auth.username),
-                password: auth.password.as_ref().map(|value| escape_shell_value(value)),
+                password: auth
+                    .password
+                    .as_ref()
+                    .map(|value| escape_shell_value(value)),
             }),
             backup_dir: dst_endpoint.backup_dir.clone(),
         },
@@ -5672,7 +5716,11 @@ fn redact_line_for_key(line: &str, key: &str) -> String {
             break;
         };
 
-        let before = if match_idx == 0 { None } else { bytes.get(match_idx - 1) };
+        let before = if match_idx == 0 {
+            None
+        } else {
+            bytes.get(match_idx - 1)
+        };
         let after = bytes.get(match_idx + key_bytes.len());
         let before_ok = before.map_or(true, |b| !is_word_char(*b));
         let after_ok = after.map_or(true, |b| !is_word_char(*b));
@@ -5700,30 +5748,31 @@ fn redact_line_for_key(line: &str, key: &str) -> String {
             break;
         }
 
-        let (value_end, wrap_with_quotes, quote_char) = if bytes[value_start] == b'"' || bytes[value_start] == b'\'' {
-            let quote = bytes[value_start];
-            let mut end = value_start + 1;
-            while end < bytes.len() {
-                if bytes[end] == quote && bytes.get(end.wrapping_sub(1)) != Some(&b'\\') {
+        let (value_end, wrap_with_quotes, quote_char) =
+            if bytes[value_start] == b'"' || bytes[value_start] == b'\'' {
+                let quote = bytes[value_start];
+                let mut end = value_start + 1;
+                while end < bytes.len() {
+                    if bytes[end] == quote && bytes.get(end.wrapping_sub(1)) != Some(&b'\\') {
+                        break;
+                    }
+                    end += 1;
+                }
+                if end >= bytes.len() {
                     break;
                 }
-                end += 1;
-            }
-            if end >= bytes.len() {
-                break;
-            }
-            (end, true, quote as char)
-        } else {
-            let mut end = value_start;
-            while end < bytes.len() {
-                let b = bytes[end];
-                if b.is_ascii_whitespace() || b == b',' || b == b'}' || b == b']' {
-                    break;
+                (end, true, quote as char)
+            } else {
+                let mut end = value_start;
+                while end < bytes.len() {
+                    let b = bytes[end];
+                    if b.is_ascii_whitespace() || b == b',' || b == b'}' || b == b']' {
+                        break;
+                    }
+                    end += 1;
                 }
-                end += 1;
-            }
-            (end, false, '"')
-        };
+                (end, false, '"')
+            };
 
         let mut replaced = String::with_capacity(output.len() + REDACTED_VALUE.len());
         replaced.push_str(&output[..value_start]);

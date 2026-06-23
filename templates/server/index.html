@@ -641,6 +641,14 @@
                     <input class="form-control" type="text" placeholder="e.g. /joinField/parent" id="defaultRoutingField">
                   </div>
                   <div class="col-md-3">
+                    <label class="form-label">Split field</label>
+                    <input class="form-control" type="text" placeholder="e.g. whenInserted" id="defaultSplitField">
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Split parts</label>
+                    <input class="form-control" type="number" min="2" placeholder="none" id="defaultSplitParts">
+                  </div>
+                  <div class="col-md-3">
                     <label class="form-label">Alias remove if exists</label>
                     <select class="form-select" id="defaultAliasRemove">
                       <option value="true">true</option>
@@ -670,6 +678,17 @@
                       <input class="form-check-input" type="checkbox" id="defaultAliasEnabled" checked>
                       <span class="form-check-label">Create alias</span>
                     </label>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-check">
+                      <input class="form-check-input" type="checkbox" id="defaultWriteExisting">
+                      <span class="form-check-label">Write into existing index/alias</span>
+                    </label>
+                  </div>
+                  <div class="col-12">
+                    <div class="text-secondary small" id="defaultWriteExistingHint">
+                      When writing into an existing target, mapping creation, delete-if-exists and alias creation are disabled; shard and replica values do not change the existing target.
+                    </div>
                   </div>
                 </div>
               </div>
@@ -935,6 +954,14 @@
                   <input class="form-control" type="text" placeholder="inherit" id="bulkOverrideRoutingField">
                 </div>
                 <div class="col-md-3">
+                  <label class="form-label">Split field</label>
+                  <input class="form-control" type="text" placeholder="inherit" id="bulkOverrideSplitField">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Split parts</label>
+                  <input class="form-control" type="number" min="2" placeholder="inherit" id="bulkOverrideSplitParts">
+                </div>
+                <div class="col-md-3">
                   <label class="form-label">Alias remove if exists</label>
                   <select class="form-select" id="bulkOverrideAliasRemove">
                     <option value="inherit">inherit</option>
@@ -969,6 +996,14 @@
                 <div class="col-md-3">
                   <label class="form-label">Alias enabled</label>
                   <select class="form-select" id="bulkOverrideAliasEnabled">
+                    <option value="inherit">inherit</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">Write existing</label>
+                  <select class="form-select" id="bulkOverrideWriteExisting">
                     <option value="inherit">inherit</option>
                     <option value="true">true</option>
                     <option value="false">false</option>
@@ -1055,6 +1090,14 @@
               <input class="form-control" type="text" placeholder="inherit" id="editRoutingField">
             </div>
             <div class="col-md-3">
+              <label class="form-label">Split field</label>
+              <input class="form-control" type="text" placeholder="inherit" id="editSplitField">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Split parts</label>
+              <input class="form-control" type="number" min="2" placeholder="inherit" id="editSplitParts">
+            </div>
+            <div class="col-md-3">
               <label class="form-label">Copy content</label>
               <select class="form-select" id="editCopyContent">
                 <option value="inherit">inherit</option>
@@ -1073,6 +1116,14 @@
             <div class="col-md-3">
               <label class="form-label">Delete if exists</label>
               <select class="form-select" id="editDelete">
+                <option value="inherit">inherit</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Write existing</label>
+              <select class="form-select" id="editWriteExisting">
                 <option value="inherit">inherit</option>
                 <option value="true">true</option>
                 <option value="false">false</option>
@@ -1190,11 +1241,14 @@
     const defaultShards = document.getElementById("defaultShards");
     const defaultReplicas = document.getElementById("defaultReplicas");
     const defaultRoutingField = document.getElementById("defaultRoutingField");
+    const defaultSplitField = document.getElementById("defaultSplitField");
+    const defaultSplitParts = document.getElementById("defaultSplitParts");
     const defaultCopyContent = document.getElementById("defaultCopyContent");
     const defaultCopyMapping = document.getElementById("defaultCopyMapping");
     const defaultDeleteIfExists = document.getElementById("defaultDeleteIfExists");
     const defaultAliasEnabled = document.getElementById("defaultAliasEnabled");
     const defaultAliasRemove = document.getElementById("defaultAliasRemove");
+    const defaultWriteExisting = document.getElementById("defaultWriteExisting");
     const renamePattern = document.getElementById("renamePattern");
     const renameReplace = document.getElementById("renameReplace");
     const renamePrefix = document.getElementById("renamePrefix");
@@ -1235,11 +1289,14 @@
     const bulkOverrideShards = document.getElementById("bulkOverrideShards");
     const bulkOverrideReplicas = document.getElementById("bulkOverrideReplicas");
     const bulkOverrideRoutingField = document.getElementById("bulkOverrideRoutingField");
+    const bulkOverrideSplitField = document.getElementById("bulkOverrideSplitField");
+    const bulkOverrideSplitParts = document.getElementById("bulkOverrideSplitParts");
     const bulkOverrideAliasRemove = document.getElementById("bulkOverrideAliasRemove");
     const bulkOverrideCopyContent = document.getElementById("bulkOverrideCopyContent");
     const bulkOverrideCopyMapping = document.getElementById("bulkOverrideCopyMapping");
     const bulkOverrideDelete = document.getElementById("bulkOverrideDelete");
     const bulkOverrideAliasEnabled = document.getElementById("bulkOverrideAliasEnabled");
+    const bulkOverrideWriteExisting = document.getElementById("bulkOverrideWriteExisting");
     const bulkAddError = document.getElementById("bulkAddError");
     const bulkPreviewTable = document.getElementById("bulkPreviewTable");
     const editModal = document.getElementById("wizardEditModal");
@@ -1255,9 +1312,12 @@
     const editShards = document.getElementById("editShards");
     const editReplicas = document.getElementById("editReplicas");
     const editRoutingField = document.getElementById("editRoutingField");
+    const editSplitField = document.getElementById("editSplitField");
+    const editSplitParts = document.getElementById("editSplitParts");
     const editCopyContent = document.getElementById("editCopyContent");
     const editCopyMapping = document.getElementById("editCopyMapping");
     const editDelete = document.getElementById("editDelete");
+    const editWriteExisting = document.getElementById("editWriteExisting");
 
     const wizardState = {
       sources: [],
@@ -1463,6 +1523,9 @@
         copy_mapping: defaultCopyMapping.checked,
         delete_if_exists: defaultDeleteIfExists.checked,
         routing_field: defaultRoutingField.value.trim() || null,
+        write_existing: defaultWriteExisting.checked,
+        split_field: defaultSplitField.value.trim() || null,
+        split_parts: parseOptionalNumber(defaultSplitParts.value),
         number_of_replicas: parseOptionalNumber(defaultReplicas.value),
         number_of_shards: parseOptionalNumber(defaultShards.value),
         alias_enabled: defaultAliasEnabled.checked,
@@ -1487,6 +1550,24 @@
         prefix: aliasPrefix.value,
         suffix: aliasSuffixRule.value,
       };
+    }
+
+    function applyDefaultWriteExistingToggle() {
+      const enabled = defaultWriteExisting?.checked ?? false;
+      [defaultShards, defaultReplicas].forEach((el) => {
+        if (!el) return;
+        el.disabled = enabled;
+        el.closest(".col-md-3")?.classList.toggle("opacity-50", enabled);
+      });
+      if (enabled) {
+        defaultCopyMapping.checked = false;
+        defaultDeleteIfExists.checked = false;
+        defaultAliasEnabled.checked = false;
+      }
+      [defaultCopyMapping, defaultDeleteIfExists, defaultAliasEnabled].forEach((el) => {
+        if (!el) return;
+        el.disabled = enabled;
+      });
     }
 
     function applyRenameBase(name, rule) {
@@ -1847,11 +1928,16 @@
       defaultBufferSize.value = "500";
       defaultShards.value = "";
       defaultReplicas.value = "";
+      defaultRoutingField.value = "";
+      defaultSplitField.value = "";
+      defaultSplitParts.value = "";
       defaultCopyContent.checked = true;
       defaultCopyMapping.checked = true;
       defaultDeleteIfExists.checked = false;
       defaultAliasEnabled.checked = true;
       defaultAliasRemove.value = "false";
+      defaultWriteExisting.checked = false;
+      applyDefaultWriteExistingToggle();
       renamePattern.value = "";
       renameReplace.value = "";
       renamePrefix.value = "";
@@ -1951,6 +2037,7 @@
       }
     });
     aliasEnabled?.addEventListener("change", () => applyAliasToggle(aliasEnabled.checked));
+    defaultWriteExisting?.addEventListener("change", applyDefaultWriteExistingToggle);
 
     classicRunForm?.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -2207,10 +2294,14 @@
       const shards = parseOptionalNumber(bulkOverrideShards.value);
       const replicas = parseOptionalNumber(bulkOverrideReplicas.value);
       const routingField = bulkOverrideRoutingField.value.trim();
+      const splitField = bulkOverrideSplitField.value.trim();
+      const splitParts = parseOptionalNumber(bulkOverrideSplitParts.value);
       if (buffer !== null) overrides.buffer_size = buffer;
       if (shards !== null) overrides.number_of_shards = shards;
       if (replicas !== null) overrides.number_of_replicas = replicas;
       if (routingField) overrides.routing_field = routingField;
+      if (splitField) overrides.split_field = splitField;
+      if (splitParts !== null) overrides.split_parts = splitParts;
       if (bulkOverrideAliasRemove.value !== "inherit") {
         overrides.alias_remove_if_exists = bulkOverrideAliasRemove.value === "true";
       }
@@ -2225,6 +2316,14 @@
       }
       if (bulkOverrideAliasEnabled.value !== "inherit") {
         overrides.alias_enabled = bulkOverrideAliasEnabled.value === "true";
+      }
+      if (bulkOverrideWriteExisting.value !== "inherit") {
+        overrides.write_existing = bulkOverrideWriteExisting.value === "true";
+      }
+      if (overrides.write_existing === true) {
+        overrides.copy_mapping = false;
+        overrides.delete_if_exists = false;
+        overrides.alias_enabled = false;
       }
       return Object.keys(overrides).length ? overrides : null;
     }
@@ -2259,7 +2358,7 @@
           return `<tr><td>${source.name}</td><td class="text-danger">${dest.error}</td><td>-</td></tr>`;
         }
         let aliasValue = "-";
-        if (rule.alias.enabled) {
+        if (rule.alias.enabled && overrides?.write_existing !== true) {
           const aliasResult = applyRename(source.name, rule.alias);
           if (aliasResult.error) {
             errors.push(aliasResult.error);
@@ -2308,11 +2407,14 @@
       bulkOverrideShards.value = "";
       bulkOverrideReplicas.value = "";
       bulkOverrideRoutingField.value = "";
+      bulkOverrideSplitField.value = "";
+      bulkOverrideSplitParts.value = "";
       bulkOverrideAliasRemove.value = "inherit";
       bulkOverrideCopyContent.value = "inherit";
       bulkOverrideCopyMapping.value = "inherit";
       bulkOverrideDelete.value = "inherit";
       bulkOverrideAliasEnabled.value = "inherit";
+      bulkOverrideWriteExisting.value = "inherit";
       renderBulkPreview();
       bulkModal.showModal();
     }
@@ -2351,7 +2453,9 @@
     [bulkRenamePattern, bulkRenameReplace, bulkRenamePrefix, bulkRenameSuffix,
      bulkAliasPattern, bulkAliasReplace, bulkAliasPrefix, bulkAliasSuffix,
      bulkOverrideBuffer, bulkOverrideShards, bulkOverrideReplicas, bulkOverrideAliasRemove,
-     bulkOverrideCopyContent, bulkOverrideCopyMapping, bulkOverrideDelete, bulkOverrideAliasEnabled]
+     bulkOverrideRoutingField, bulkOverrideSplitField, bulkOverrideSplitParts,
+     bulkOverrideCopyContent, bulkOverrideCopyMapping, bulkOverrideDelete, bulkOverrideAliasEnabled,
+     bulkOverrideWriteExisting]
       .forEach((el) => el?.addEventListener("input", renderBulkPreview));
     bulkAliasEnabled?.addEventListener("change", () => {
       applyBulkAliasToggle(bulkAliasEnabled.checked);
@@ -2379,7 +2483,7 @@
         const dest = applyRename(source.name, rule.rename);
         if (dest.error) return;
         let aliasName = null;
-        if (rule.alias.enabled) {
+        if (rule.alias.enabled && overrides?.write_existing !== true) {
           const aliasResult = applyRename(source.name, rule.alias);
           if (aliasResult.error) return;
           if (!rule.alias.pattern && !rule.alias.prefix && !rule.alias.suffix && !rule.alias.replace) {
@@ -2418,6 +2522,10 @@
       if (overrides.number_of_shards !== undefined) parts.push(`shards=${overrides.number_of_shards}`);
       if (overrides.number_of_replicas !== undefined) parts.push(`replicas=${overrides.number_of_replicas}`);
       if (overrides.routing_field !== undefined) parts.push(`routing=${overrides.routing_field}`);
+      if (overrides.write_existing !== undefined) parts.push(`existing=${overrides.write_existing}`);
+      if (overrides.split_field !== undefined || overrides.split_parts !== undefined) {
+        parts.push(`split=${overrides.split_field ?? "?"}/${overrides.split_parts ?? "?"}`);
+      }
       if (overrides.copy_content !== undefined) parts.push(`content=${overrides.copy_content}`);
       if (overrides.copy_mapping !== undefined) parts.push(`mapping=${overrides.copy_mapping}`);
       if (overrides.delete_if_exists !== undefined) parts.push(`delete=${overrides.delete_if_exists}`);
@@ -2478,6 +2586,11 @@
         editShards.value = item.overrides?.number_of_shards ?? "";
         editReplicas.value = item.overrides?.number_of_replicas ?? "";
         editRoutingField.value = item.overrides?.routing_field ?? "";
+        editSplitField.value = item.overrides?.split_field ?? "";
+        editSplitParts.value = item.overrides?.split_parts ?? "";
+        editWriteExisting.value = item.overrides?.write_existing !== undefined
+          ? String(item.overrides.write_existing)
+          : "inherit";
         editCopyContent.value = item.overrides?.copy_content !== undefined
           ? String(item.overrides.copy_content)
           : "inherit";
@@ -2507,15 +2620,26 @@
       const shards = parseOptionalNumber(editShards.value);
       const replicas = parseOptionalNumber(editReplicas.value);
       const routingField = editRoutingField.value.trim();
+      const splitField = editSplitField.value.trim();
+      const splitParts = parseOptionalNumber(editSplitParts.value);
       if (buffer !== null) overrides.buffer_size = buffer;
       if (shards !== null) overrides.number_of_shards = shards;
       if (replicas !== null) overrides.number_of_replicas = replicas;
       if (routingField) overrides.routing_field = routingField;
+      if (splitField) overrides.split_field = splitField;
+      if (splitParts !== null) overrides.split_parts = splitParts;
+      if (editWriteExisting.value !== "inherit") overrides.write_existing = editWriteExisting.value === "true";
       if (editAliasEnabled.value !== "inherit") overrides.alias_enabled = editAliasEnabled.value === "true";
       if (editAliasRemove.value !== "inherit") overrides.alias_remove_if_exists = editAliasRemove.value === "true";
       if (editCopyContent.value !== "inherit") overrides.copy_content = editCopyContent.value === "true";
       if (editCopyMapping.value !== "inherit") overrides.copy_mapping = editCopyMapping.value === "true";
       if (editDelete.value !== "inherit") overrides.delete_if_exists = editDelete.value === "true";
+      if (overrides.write_existing === true) {
+        overrides.copy_mapping = false;
+        overrides.delete_if_exists = false;
+        overrides.alias_enabled = false;
+        item.alias_base_name = null;
+      }
       item.overrides = Object.keys(overrides).length ? overrides : null;
       renderSelectedItems();
       closeEditModal();

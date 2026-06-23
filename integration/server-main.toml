@@ -1,0 +1,18 @@
+[global]
+  backup_dir = "./integration/backup"
+
+[[endpoints]]
+  name = "E2E Source"
+  url = "http://localhost:9201"
+  prefix = ""
+  number_of_replicas = 0
+  keep_alive = "1m"
+  tenants = ["e2e"]
+
+[[endpoints]]
+  name = "E2E Destination"
+  url = "http://localhost:9202"
+  prefix = ""
+  number_of_replicas = 0
+  keep_alive = "1m"
+  tenants = ["e2e"]
