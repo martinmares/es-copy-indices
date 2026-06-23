@@ -11,18 +11,18 @@ mod utils;
 // use std::time::Duration;
 
 use audit_builder::AuditBuilder;
-use clap::{command, value_parser, Arg};
+use clap::{Arg, command, value_parser};
 use tracing::{error, info, warn};
 use tracing_subscriber;
 use tracing_subscriber::EnvFilter;
 // use env_logger::Env;
 // use log::{error, info, warn};
+use crate::backup::{BackupChunkWriter, BackupDoc, BackupIndexEntry, BackupMetadata};
+use chrono::Utc;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use chrono::Utc;
 use twelf::Layer;
-use crate::backup::{BackupChunkWriter, BackupDoc, BackupIndexEntry, BackupMetadata};
-use std::collections::{HashMap, HashSet};
 
 async fn flush_restore_batch(
     docs: &mut Vec<BackupDoc>,
@@ -98,7 +98,9 @@ async fn flush_restore_batch(
     }
 
     if !bulk_body_pre_create.is_empty() {
-        let _ = destination_es_client.post_bulk(dest_name, &bulk_body_pre_create).await;
+        let _ = destination_es_client
+            .post_bulk(dest_name, &bulk_body_pre_create)
+            .await;
     }
 
     let _ = destination_es_client.post_bulk(dest_name, &bulk_body).await;
@@ -209,8 +211,7 @@ fn parse_range_bound(value: &serde_json::Value) -> Option<f64> {
                 chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f%z")
             {
                 Some(parsed.timestamp_millis() as f64)
-            } else if let Ok(parsed) =
-                chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%z")
+            } else if let Ok(parsed) = chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%z")
             {
                 Some(parsed.timestamp_millis() as f64)
             } else {
@@ -255,7 +256,10 @@ fn doc_has_field(source: &serde_json::Value, field: &str) -> bool {
         }
         return !current.is_null();
     }
-    source.get(field).map(|value| !value.is_null()).unwrap_or(false)
+    source
+        .get(field)
+        .map(|value| !value.is_null())
+        .unwrap_or(false)
 }
 
 fn doc_matches_filter(doc: &BackupDoc, filter: &RestoreFilter) -> bool {
@@ -306,8 +310,13 @@ fn validate_endpoint_for_backup(endpoint: &conf::Endpoint) -> Result<(), String>
     Ok(())
 }
 
-fn get_endpoint<'a>(endpoints: &'a Vec<conf::Endpoint>, name: &String) -> Option<&'a conf::Endpoint> {
-    endpoints.iter().find(|endpoint| endpoint.get_name() == name)
+fn get_endpoint<'a>(
+    endpoints: &'a Vec<conf::Endpoint>,
+    name: &String,
+) -> Option<&'a conf::Endpoint> {
+    endpoints
+        .iter()
+        .find(|endpoint| endpoint.get_name() == name)
 }
 
 fn apply_settings_overrides(settings_value: &mut serde_json::Value, index: &conf::Index) {
@@ -573,10 +582,14 @@ async fn main() {
                     quantile_digest: None,
                 };
 
-                if let Err(err) = backup::write_json_file(&index_dir.join("mappings.json"), &mapping) {
+                if let Err(err) =
+                    backup::write_json_file(&index_dir.join("mappings.json"), &mapping)
+                {
                     panic!("Failed to write mappings.json: {:?}", err);
                 }
-                if let Err(err) = backup::write_json_file(&index_dir.join("settings.json"), &settings) {
+                if let Err(err) =
+                    backup::write_json_file(&index_dir.join("settings.json"), &settings)
+                {
                     panic!("Failed to write settings.json: {:?}", err);
                 }
 
@@ -643,11 +656,7 @@ async fn main() {
                                 }
                             }
                         }
-                        source_es_client
-                            .as_mut()
-                            .unwrap()
-                            .scroll_next(index)
-                            .await;
+                        source_es_client.as_mut().unwrap().scroll_next(index).await;
                     }
                     let current_total = source_es_client.as_mut().unwrap().get_total_size();
                     alias_expanded_processed_docs =
@@ -805,16 +814,14 @@ async fn main() {
                                 )
                                 .await;
                                 if total_docs > 0 {
-                                    let percent = (processed_docs as f64 / total_docs as f64) * 100.0;
+                                    let percent =
+                                        (processed_docs as f64 / total_docs as f64) * 100.0;
                                     info!(
                                         "Iterate {} - docs {}/{} ({:.2} %)",
                                         index_name, processed_docs, total_docs, percent
                                     );
                                 } else {
-                                    info!(
-                                        "Iterate {} - docs {}",
-                                        index_name, processed_docs
-                                    );
+                                    info!("Iterate {} - docs {}", index_name, processed_docs);
                                 }
                             }
                         }
@@ -949,11 +956,7 @@ async fn main() {
                         .await;
 
                     // next docs?
-                    source_es_client
-                        .as_mut()
-                        .unwrap()
-                        .scroll_next(index)
-                        .await;
+                    source_es_client.as_mut().unwrap().scroll_next(index).await;
 
                     memory_stats!();
                 }

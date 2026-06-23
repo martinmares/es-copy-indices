@@ -115,7 +115,11 @@ impl BackupChunkWriter {
             };
             let file_name = format!("{}{}.jsonl.zst", base, suffix);
             let file_path = self.dir.join(file_name);
-            match OpenOptions::new().write(true).create_new(true).open(file_path) {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(file_path)
+            {
                 Ok(file) => break file,
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     attempt = attempt.saturating_add(1);
@@ -182,8 +186,11 @@ impl QuantileDigest {
         if self.centroids.len() <= self.max_centroids {
             return;
         }
-        self.centroids
-            .sort_by(|a, b| a.mean.partial_cmp(&b.mean).unwrap_or(std::cmp::Ordering::Equal));
+        self.centroids.sort_by(|a, b| {
+            a.mean
+                .partial_cmp(&b.mean)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let total: f64 = self.centroids.iter().map(|c| c.count).sum();
         if total <= 0.0 {
             return;
@@ -194,7 +201,8 @@ impl QuantileDigest {
         for centroid in self.centroids.iter().skip(1) {
             if current.count + centroid.count <= max_weight {
                 let combined = current.count + centroid.count;
-                let mean = (current.mean * current.count + centroid.mean * centroid.count) / combined;
+                let mean =
+                    (current.mean * current.count + centroid.mean * centroid.count) / combined;
                 current = QuantileCentroid {
                     mean,
                     count: combined,
@@ -307,7 +315,9 @@ pub fn merge_metadata(existing: BackupMetadata, incoming: BackupMetadata) -> Bac
         index_name: existing.index_name,
         name_of_copy: existing.name_of_copy.or(incoming.name_of_copy),
         alias_name: existing.alias_name.or(incoming.alias_name),
-        alias_is_write_index: existing.alias_is_write_index.or(incoming.alias_is_write_index),
+        alias_is_write_index: existing
+            .alias_is_write_index
+            .or(incoming.alias_is_write_index),
         alias_remove_if_exists: existing.alias_remove_if_exists,
         routing_field: existing.routing_field.or(incoming.routing_field),
         pre_create_doc_ids: existing.pre_create_doc_ids,
@@ -349,10 +359,7 @@ pub fn write_metadata_with_lock(
     })
 }
 
-pub fn update_catalog_entry_with_lock(
-    path: &Path,
-    entry: BackupIndexEntry,
-) -> std::io::Result<()> {
+pub fn update_catalog_entry_with_lock(path: &Path, entry: BackupIndexEntry) -> std::io::Result<()> {
     let lock_path = path.with_extension("lock");
     with_file_lock(&lock_path, || {
         let mut catalog = if path.exists() {
@@ -360,7 +367,11 @@ pub fn update_catalog_entry_with_lock(
         } else {
             BackupIndexCatalog::default()
         };
-        if let Some(existing) = catalog.indices.iter_mut().find(|item| item.name == entry.name) {
+        if let Some(existing) = catalog
+            .indices
+            .iter_mut()
+            .find(|item| item.name == entry.name)
+        {
             if let Some(total) = entry.docs_total {
                 existing.docs_total = Some(total);
             }
@@ -394,9 +405,12 @@ pub fn extract_quantile_value(source: &Value, field: &str) -> Option<f64> {
                 Some(parsed)
             } else if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(text) {
                 Some(parsed.timestamp_millis() as f64)
-            } else if let Ok(parsed) = chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f%z") {
+            } else if let Ok(parsed) =
+                chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f%z")
+            {
                 Some(parsed.timestamp_millis() as f64)
-            } else if let Ok(parsed) = chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%z") {
+            } else if let Ok(parsed) = chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%z")
+            {
                 Some(parsed.timestamp_millis() as f64)
             } else {
                 None
@@ -476,10 +490,7 @@ pub fn read_backup_docs(path: &Path) -> std::io::Result<Vec<BackupDoc>> {
     Ok(docs)
 }
 
-pub fn extract_routing_ids(
-    docs: &[BackupDoc],
-    routing_field: &Option<String>,
-) -> HashSet<String> {
+pub fn extract_routing_ids(docs: &[BackupDoc], routing_field: &Option<String>) -> HashSet<String> {
     let mut ids = HashSet::new();
     if let Some(pointer) = routing_field {
         for doc in docs {

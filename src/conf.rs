@@ -1,4 +1,4 @@
-use serde_with::{serde_as, DisplayFromStr, PickFirst};
+use serde_with::{DisplayFromStr, PickFirst, serde_as};
 use twelf::config;
 use twelf::reexports::serde::{Deserialize, Serialize};
 

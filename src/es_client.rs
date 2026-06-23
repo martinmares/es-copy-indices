@@ -73,7 +73,10 @@ fn rewrite_rollover_alias(
         return;
     };
 
-    if let Some(lifecycle) = index_settings.get_mut("lifecycle").and_then(|v| v.as_object_mut()) {
+    if let Some(lifecycle) = index_settings
+        .get_mut("lifecycle")
+        .and_then(|v| v.as_object_mut())
+    {
         if let Some(rollover_alias) = lifecycle.get_mut("rollover_alias") {
             if rollover_alias.as_str() == Some(source_alias_name) {
                 *rollover_alias = Value::String(target_rollover_alias);
@@ -139,11 +142,10 @@ impl EsClient {
                             return None;
                         }
                         if !status.is_success() {
-                            if status == reqwest::StatusCode::NOT_FOUND && path.starts_with("/_alias/") {
-                                debug!(
-                                    "Alias not found at {} (status {}): {}",
-                                    url, status, text
-                                );
+                            if status == reqwest::StatusCode::NOT_FOUND
+                                && path.starts_with("/_alias/")
+                            {
+                                debug!("Alias not found at {} (status {}): {}", url, status, text);
                                 return None;
                             }
                             error!(
@@ -155,7 +157,10 @@ impl EsClient {
                         return Some(text);
                     }
                     Err(e) => {
-                        error!("Failed to read response from {} (status {}): {:#?}", url, status, e);
+                        error!(
+                            "Failed to read response from {} (status {}): {:#?}",
+                            url, status, e
+                        );
                         return None;
                     }
                 }
@@ -370,12 +375,16 @@ impl EsClient {
             if let Some(index_val) = settings_val.get_mut("index") {
                 if let Some(value) = index_val.get("number_of_shards").and_then(|v| v.as_str()) {
                     original_shards = value.parse::<u64>().ok();
-                } else if let Some(value) = index_val.get("number_of_shards").and_then(|v| v.as_u64()) {
+                } else if let Some(value) =
+                    index_val.get("number_of_shards").and_then(|v| v.as_u64())
+                {
                     original_shards = Some(value);
                 }
                 if let Some(value) = index_val.get("number_of_replicas").and_then(|v| v.as_str()) {
                     original_replicas = value.parse::<u64>().ok();
-                } else if let Some(value) = index_val.get("number_of_replicas").and_then(|v| v.as_u64()) {
+                } else if let Some(value) =
+                    index_val.get("number_of_replicas").and_then(|v| v.as_u64())
+                {
                     original_replicas = Some(value);
                 }
 
@@ -440,7 +449,10 @@ impl EsClient {
                         return Some(text);
                     }
                     Err(e) => {
-                        error!("Failed to read response from {} (status {}): {:#?}", url, status, e);
+                        error!(
+                            "Failed to read response from {} (status {}): {:#?}",
+                            url, status, e
+                        );
                         return None;
                     }
                 }
@@ -498,7 +510,10 @@ impl EsClient {
                         return Some(text);
                     }
                     Err(e) => {
-                        error!("Failed to read response from {} (status {}): {:#?}", url, status, e);
+                        error!(
+                            "Failed to read response from {} (status {}): {:#?}",
+                            url, status, e
+                        );
                         return None;
                     }
                 }
@@ -1094,7 +1109,10 @@ impl EsClient {
                                 if let Some(id) = pointer_id.as_str() {
                                     debug!(
                                         "Pointer '&routing_field' found: {}, value: {:?}, id: {:?}, doc.get_id(): {:?}",
-                                        pointer_id, value, id, doc.get_id()
+                                        pointer_id,
+                                        value,
+                                        id,
+                                        doc.get_id()
                                     );
                                     let id = id.to_string();
                                     if is_pre_create_doc_ids {
