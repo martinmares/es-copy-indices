@@ -66,7 +66,7 @@
     <div class="col-12 col-md-3">
       <div class="card">
         <div class="card-body">
-          <div class="text-secondary">Server CPU (%)</div>
+          <div class="text-secondary">Server CPU (%) · PID <span id="serverCpuPid">{{ summary.server_pid }}</span></div>
           <div class="h2 m-0" id="procCpu">{{ summary.proc_cpu }}%</div>
         </div>
       </div>
@@ -91,15 +91,15 @@
       <div class="card">
         <div class="card-body">
           <div class="text-secondary">Host Memory</div>
-          <div class="h3 m-0" id="hostMem">{{ summary.host_mem_used_mb }} / {{ summary.host_mem_total_mb }} MB</div>
+          <div class="h3 m-0" id="hostMem">{{ summary.host_mem_used }} / {{ summary.host_mem_total }}</div>
         </div>
       </div>
     </div>
     <div class="col-12 col-md-4">
       <div class="card">
         <div class="card-body">
-          <div class="text-secondary">Server Memory</div>
-          <div class="h3 m-0" id="procMem">{{ summary.proc_mem_mb }} MB</div>
+          <div class="text-secondary">Server Memory · PID <span id="serverMemPid">{{ summary.server_pid }}</span></div>
+          <div class="h3 m-0" id="procMem">{{ summary.proc_mem }}</div>
         </div>
       </div>
     </div>
@@ -107,15 +107,15 @@
       <div class="card">
         <div class="card-body">
           <div class="text-secondary">Child processes Memory</div>
-          <div class="h3 m-0" id="childrenMem">{{ summary.children_mem_mb }} MB</div>
+          <div class="h3 m-0" id="childrenMem">{{ summary.children_mem }}</div>
         </div>
       </div>
     </div>
     <div class="col-12 col-md-4">
       <div class="card">
         <div class="card-body">
-          <div class="text-secondary">Total Memory</div>
-          <div class="h3 m-0" id="totalMem">{{ summary.total_mem_mb }} MB</div>
+          <div class="text-secondary">Server + child processes Memory</div>
+          <div class="h3 m-0" id="totalMem">{{ summary.total_mem }}</div>
         </div>
       </div>
     </div>
@@ -190,7 +190,7 @@
     <div class="col-12">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">Memory (last 10 min, MB)</div>
+          <div class="card-title">Memory (last 10 min, MiB)</div>
         </div>
         <div class="card-body">
           <div class="chart-legend mb-2">
@@ -233,10 +233,12 @@
     const resumeLiveBtn = document.getElementById("resumeLiveBtn");
     const hostCpu = document.getElementById("hostCpu");
     const procCpu = document.getElementById("procCpu");
+    const serverCpuPid = document.getElementById("serverCpuPid");
     const childrenCpu = document.getElementById("childrenCpu");
     const totalCpu = document.getElementById("totalCpu");
     const hostMem = document.getElementById("hostMem");
     const procMem = document.getElementById("procMem");
+    const serverMemPid = document.getElementById("serverMemPid");
     const childrenMem = document.getElementById("childrenMem");
     const totalMem = document.getElementById("totalMem");
     const runningJobs = document.getElementById("runningJobs");
@@ -246,6 +248,22 @@
     const charts = {};
     let paused = false;
     let samples = [];
+
+    function bytesToMiB(bytes) {
+      return bytes / 1024 / 1024;
+    }
+
+    function formatBytes(bytes) {
+      const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+      let value = Number(bytes) || 0;
+      let unit = 0;
+      while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+      }
+      if (unit === 0) return `${Math.round(value)} ${units[unit]}`;
+      return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
+    }
 
     function renderCharts() {
       const cpuSeries = [
@@ -258,9 +276,9 @@
         { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.total_cpu })) },
       ];
       const memSeries = [
-        { name: "Server", data: samples.map((sample) => ({ x: sample.ts * 1000, y: Math.round(sample.proc_mem_kb / 1024) })) },
-        { name: "Children", data: samples.map((sample) => ({ x: sample.ts * 1000, y: Math.round(sample.children_mem_kb / 1024) })) },
-        { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: Math.round(sample.total_mem_kb / 1024) })) },
+        { name: "Server", data: samples.map((sample) => ({ x: sample.ts * 1000, y: bytesToMiB(sample.proc_mem_bytes) })) },
+        { name: "Children", data: samples.map((sample) => ({ x: sample.ts * 1000, y: bytesToMiB(sample.children_mem_bytes) })) },
+        { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: bytesToMiB(sample.total_mem_bytes) })) },
       ];
       const loadSeries = [
         { name: "Load 1", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load1 })) },
@@ -346,12 +364,14 @@
     function updateSnapshot(sample) {
       hostCpu.textContent = `${sample.host_cpu.toFixed(1)}%`;
       procCpu.textContent = `${sample.proc_cpu.toFixed(1)}%`;
+      serverCpuPid.textContent = sample.server_pid;
       childrenCpu.textContent = `${sample.children_cpu.toFixed(1)}%`;
       totalCpu.textContent = `${sample.total_cpu.toFixed(1)}%`;
-      hostMem.textContent = `${Math.round(sample.host_mem_used_kb / 1024)} / ${Math.round(sample.host_mem_total_kb / 1024)} MB`;
-      procMem.textContent = `${Math.round(sample.proc_mem_kb / 1024)} MB`;
-      childrenMem.textContent = `${Math.round(sample.children_mem_kb / 1024)} MB`;
-      totalMem.textContent = `${Math.round(sample.total_mem_kb / 1024)} MB`;
+      hostMem.textContent = `${formatBytes(sample.host_mem_used_bytes)} / ${formatBytes(sample.host_mem_total_bytes)}`;
+      procMem.textContent = formatBytes(sample.proc_mem_bytes);
+      serverMemPid.textContent = sample.server_pid;
+      childrenMem.textContent = formatBytes(sample.children_mem_bytes);
+      totalMem.textContent = formatBytes(sample.total_mem_bytes);
       runningJobs.textContent = sample.running_jobs;
       queuedJobs.textContent = sample.queued_jobs;
       jobLimit.textContent = "Per destination";

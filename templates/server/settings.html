@@ -1,0 +1,170 @@
+{% extends "server/layout.html" %}
+
+{% block title %}Settings · ES Copy Runner{% endblock %}
+
+{% block header %}
+  <div class="page-header d-print-none">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">Administration</div>
+        <h2 class="page-title">Settings</h2>
+        <div class="text-secondary">Runtime controls for job scheduling.</div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="row row-cards">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="card-title">Job concurrency</h3>
+            <p class="card-subtitle">Limits apply independently to each destination. Use 0 for unlimited concurrency.</p>
+          </div>
+          <div class="card-actions">
+            <span class="badge bg-yellow-lt text-yellow">
+              <i class="ti ti-clock me-1"></i>Runtime only
+            </span>
+          </div>
+        </div>
+        <div class="card-body border-bottom">
+          <form class="row g-3 align-items-end" id="globalConcurrencyForm">
+            <div class="col-sm-6 col-lg-4">
+              <label class="form-label" for="globalConcurrency">All destinations</label>
+              <input
+                class="form-control"
+                id="globalConcurrency"
+                name="value"
+                type="number"
+                min="0"
+                step="1"
+                value="{{ global_limit_value }}"
+                placeholder="Mixed"
+              >
+            </div>
+            <div class="col-auto">
+              <button class="btn btn-primary" type="submit">
+                <i class="ti ti-device-floppy me-1"></i>Apply to all
+              </button>
+            </div>
+            <div class="col-12">
+              <div class="form-hint">The startup value comes from <code>--max-concurrent-jobs</code>. Runtime changes are reset when the server restarts.</div>
+            </div>
+          </form>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th>Destination</th>
+                <th class="text-center">Running</th>
+                <th class="text-center">Queued</th>
+                <th style="width: 16rem;">Concurrency limit</th>
+                <th class="w-1"></th>
+              </tr>
+            </thead>
+            <tbody id="queueLimits">
+              {% for limit in queue_limits %}
+                <tr data-endpoint-id="{{ limit.endpoint_id }}">
+                  <td>
+                    <div class="fw-semibold">{{ limit.endpoint_name }}</div>
+                    <div class="text-secondary small font-monospace">{{ limit.endpoint_id }}</div>
+                  </td>
+                  <td class="text-center"><span class="badge bg-yellow-lt text-yellow js-queue-running">{{ limit.running_jobs }}</span></td>
+                  <td class="text-center"><span class="badge bg-blue-lt text-blue js-queue-queued">{{ limit.queued_jobs }}</span></td>
+                  <td>
+                    <input
+                      class="form-control form-control-sm js-queue-limit"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value="{{ limit.max_concurrent_jobs.unwrap_or(0) }}"
+                      aria-label="Concurrency limit for {{ limit.endpoint_name }}"
+                    >
+                  </td>
+                  <td>
+                    <button class="btn btn-outline-primary btn-sm js-queue-save" type="button">
+                      Save
+                    </button>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="card-footer text-secondary">
+          <i class="ti ti-info-circle me-1"></i>
+          Running jobs are not stopped when a limit is lowered; the new limit is used when scheduling subsequent jobs.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="alert alert-success mt-3 d-none" id="settingsSaved" role="status">
+    <i class="ti ti-check me-1"></i>Concurrency settings updated.
+  </div>
+  <div class="alert alert-danger mt-3 d-none" id="settingsError" role="alert"></div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+    const savedAlert = document.getElementById("settingsSaved");
+    const errorAlert = document.getElementById("settingsError");
+
+    function showResult(error) {
+      savedAlert.classList.toggle("d-none", Boolean(error));
+      errorAlert.classList.toggle("d-none", !error);
+      errorAlert.textContent = error || "";
+    }
+
+    async function saveLimit(url, value) {
+      const body = new URLSearchParams({ value: String(value) });
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      if (!response.ok) {
+        throw new Error((await response.text()) || `Request failed (${response.status})`);
+      }
+      return response.json();
+    }
+
+    document.getElementById("globalConcurrencyForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = document.getElementById("globalConcurrency");
+      try {
+        await saveLimit(`${basePath}/settings/max-concurrent-jobs`, input.value);
+        document.querySelectorAll(".js-queue-limit").forEach((field) => {
+          field.value = input.value;
+        });
+        showResult(null);
+      } catch (error) {
+        showResult(error instanceof Error ? error.message : "Failed to update concurrency");
+      }
+    });
+
+    document.getElementById("queueLimits").addEventListener("click", async (event) => {
+      const button = event.target.closest(".js-queue-save");
+      if (!button) return;
+      const row = button.closest("tr");
+      const endpointId = row?.dataset.endpointId;
+      const input = row?.querySelector(".js-queue-limit");
+      if (!endpointId || !input) return;
+      button.disabled = true;
+      try {
+        await saveLimit(
+          `${basePath}/settings/max-concurrent-jobs/${encodeURIComponent(endpointId)}`,
+          input.value,
+        );
+        showResult(null);
+      } catch (error) {
+        showResult(error instanceof Error ? error.message : "Failed to update concurrency");
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+{% endblock %}

@@ -151,8 +151,8 @@
       <div class="col-auto">
         <div class="btn-list">
           <a class="btn btn-outline-secondary" href="{{ base_path }}/runs/{{ run.id }}/export">Export</a>
-          <button class="btn btn-outline-warning" type="button" id="retryFailedBtn">Retry Failed</button>
-          <button class="btn btn-outline-primary" type="button" id="editConfigsBtn" {% if !run.can_edit_configs %}disabled{% endif %}>
+          <button class="btn btn-outline-warning" type="button" id="retryFailedBtn" data-min-role="editor">Retry Failed</button>
+          <button class="btn btn-outline-primary" type="button" id="editConfigsBtn" data-min-role="admin" {% if !run.can_edit_configs %}disabled{% endif %}>
             Edit configs
           </button>
         </div>
@@ -201,12 +201,12 @@
           <div class="card-actions d-flex gap-2 align-items-center">
             {% if stage.can_start %}
               <form class="js-start-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/start" method="post">
-                <button class="btn btn-primary" type="submit">Start Stage</button>
+                <button class="btn btn-primary" type="submit" data-min-role="editor">Start Stage</button>
               </form>
             {% endif %}
             {% if stage.can_stop %}
               <form class="js-stop-stage" action="{{ base_path }}/runs/{{ run.id }}/stages/{{ stage.id }}/stop" method="post">
-                <button class="btn btn-outline-danger" type="submit">Stop Stage</button>
+                <button class="btn btn-outline-danger" type="submit" data-min-role="editor">Stop Stage</button>
               </form>
             {% endif %}
           </div>
@@ -266,11 +266,11 @@
                     <div class="btn-list justify-content-end">
                       {% if job.status.as_str() == "running" || job.status.as_str() == "queued" %}
                         <form class="js-stop-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/stop" method="post">
-                          <button class="btn btn-outline-danger" type="submit">Stop Job</button>
+                          <button class="btn btn-outline-danger" type="submit" data-min-role="editor">Stop Job</button>
                         </form>
                       {% else if job.status.as_str() == "pending" || job.status.as_str() == "failed" || job.status.as_str() == "stopped" %}
                         <form class="js-start-job" action="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}/start?redirect=run" method="post">
-                          <button class="btn btn-outline-primary" type="submit">Start Job</button>
+                          <button class="btn btn-outline-primary" type="submit" data-min-role="editor">Start Job</button>
                         </form>
                       {% endif %}
                       <a class="btn btn-outline-secondary js-view-logs" href="{{ base_path }}/runs/{{ run.id }}/jobs/{{ job.id }}">View Logs</a>
@@ -363,7 +363,7 @@
         </div>
         <div class="modal-footer">
           <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Close</button>
-          <button class="btn btn-primary" type="button" id="configSaveBtn" disabled>Save</button>
+          <button class="btn btn-primary" type="button" id="configSaveBtn" data-min-role="admin" disabled>Save</button>
         </div>
       </div>
     </div>
@@ -481,13 +481,13 @@
               const stopButton = (job.status === "running" || job.status === "queued")
                 ? `
                     <form class="js-stop-job" action="${basePath}/runs/${run.id}/jobs/${job.id}/stop" method="post">
-                      <button class="btn btn-outline-danger" type="submit">Stop Job</button>
+                      <button class="btn btn-outline-danger" type="submit" data-min-role="editor">Stop Job</button>
                     </form>`
                 : "";
               const startButton = (job.status === "pending" || job.status === "failed" || job.status === "stopped")
                 ? `
                     <form class="js-start-job" action="${basePath}/runs/${run.id}/jobs/${job.id}/start?redirect=run" method="post">
-                      <button class="btn btn-outline-primary" type="submit">Start Job</button>
+                      <button class="btn btn-outline-primary" type="submit" data-min-role="editor">Start Job</button>
                     </form>`
                 : "";
               return `
@@ -511,13 +511,13 @@
           const startStageButton = stage.can_start
             ? `
                 <form class="js-start-stage" action="${basePath}/runs/${run.id}/stages/${stage.id}/start" method="post">
-                  <button class="btn btn-primary" type="submit">Start Stage</button>
+                  <button class="btn btn-primary" type="submit" data-min-role="editor">Start Stage</button>
                 </form>`
             : "";
           const stopStageButton = stage.can_stop
             ? `
                 <form class="js-stop-stage" action="${basePath}/runs/${run.id}/stages/${stage.id}/stop" method="post">
-                  <button class="btn btn-outline-danger" type="submit">Stop Stage</button>
+                  <button class="btn btn-outline-danger" type="submit" data-min-role="editor">Stop Stage</button>
                 </form>`
             : "";
           const splitHtml = splitDetails.length
@@ -599,6 +599,7 @@
             </div>`;
         })
         .join("");
+      window.applyRoleVisibility?.(container);
       container.querySelectorAll("details.split-details").forEach((detail) => {
         const stageId = detail.getAttribute("data-stage-id");
         const chartEl = detail.querySelector("[data-split-chart]");
@@ -789,7 +790,12 @@
 
     if (editConfigsBtn && configModalEl) {
       editConfigsBtn.addEventListener("click", () => {
-        const modal = bootstrap.Modal.getOrCreateInstance(configModalEl);
+        const Modal = window.tabler?.bootstrap?.Modal || window.bootstrap?.Modal;
+        if (!Modal) {
+          setStatus("The configuration editor could not be opened.", "danger");
+          return;
+        }
+        const modal = Modal.getOrCreateInstance(configModalEl);
         modal.show();
         loadConfigList();
       });

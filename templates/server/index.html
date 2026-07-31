@@ -8,198 +8,14 @@
 
 {% block styles %}
   <style>
-    dialog.modal {
-      border: none;
-      padding: 0;
-      width: min(720px, 92vw);
-      background: transparent;
-      color: inherit;
-    }
-    dialog.modal::backdrop {
-      background: rgba(10, 14, 20, 0.75);
-    }
-    dialog.modal[open] {
-      display: block;
-    }
     .js-run-card {
       cursor: pointer;
-      transition: background-color 0.12s ease, border-color 0.12s ease;
-    }
-    .js-run-card.run-active {
-      border-color: rgba(47, 158, 68, 0.6);
-      background-color: rgba(20, 66, 40, 0.28);
-    }
-    .js-run-card:hover {
-      background-color: #0f1622;
-      border-color: rgba(148, 163, 184, 0.35);
     }
     .js-run-card .js-remove-run {
       cursor: pointer;
     }
-    .run-total-badge {
-      font-size: 0.95rem;
-      padding: 6px 10px;
-    }
-    .concurrency-row {
-      font-size: 0.85rem;
-      padding: 6px 0;
-    }
-    .concurrency-value {
-      font-weight: 700;
-      color: #ffffff !important;
-      border-color: rgba(255, 255, 255, 0.25);
-      background-color: rgba(59, 130, 246, 0.25);
-      font-size: 0.95rem;
-      min-width: 44px;
-      justify-content: center;
-      opacity: 1;
-    }
-    .concurrency-row .btn {
-      min-width: 32px;
-    }
     .sparkline {
       height: 68px;
-    }
-    .wizard-cta {
-      position: relative;
-      overflow: hidden;
-      border: none;
-      color: #f8fbff;
-      background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 45%, #22d3ee 100%);
-      box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
-    }
-    .backup-cta {
-      position: relative;
-      overflow: hidden;
-      border: none;
-      color: #ecfeff;
-      background: linear-gradient(135deg, #0f766e 0%, #14b8a6 55%, #22d3ee 100%);
-      box-shadow: 0 8px 18px rgba(20, 184, 166, 0.25);
-    }
-    .restore-cta {
-      position: relative;
-      overflow: hidden;
-      border: none;
-      color: #eff6ff;
-      background: linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%);
-      box-shadow: 0 8px 18px rgba(99, 102, 241, 0.25);
-    }
-    .wizard-cta::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(
-        120deg,
-        transparent 0%,
-        rgba(255, 255, 255, 0.35) 45%,
-        transparent 60%
-      );
-      transform: translateX(-120%);
-      animation: wizardShimmer 6s ease-in-out infinite;
-    }
-    .classic-cta {
-      position: relative;
-      overflow: hidden;
-      border: none;
-      color: #fffaf0;
-      background: linear-gradient(135deg, #7c2d12 0%, #ea580c 50%, #f97316 100%);
-      box-shadow: 0 8px 18px rgba(249, 115, 22, 0.25);
-    }
-    .classic-cta::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(
-        120deg,
-        transparent 0%,
-        rgba(255, 255, 255, 0.35) 45%,
-        transparent 60%
-      );
-      transform: translateX(-120%);
-      animation: classicShimmer 7s ease-in-out infinite;
-    }
-    .backup-cta::after,
-    .restore-cta::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(
-        120deg,
-        transparent 0%,
-        rgba(255, 255, 255, 0.35) 45%,
-        transparent 60%
-      );
-      transform: translateX(-120%);
-      animation: classicShimmer 7s ease-in-out infinite;
-    }
-    @keyframes classicShimmer {
-      0% {
-        transform: translateX(-120%);
-      }
-      14% {
-        transform: translateX(120%);
-      }
-      100% {
-        transform: translateX(120%);
-      }
-    }
-    @keyframes wizardShimmer {
-      0% {
-        transform: translateX(-120%);
-      }
-      12% {
-        transform: translateX(120%);
-      }
-      100% {
-        transform: translateX(120%);
-      }
-    }
-    .wizard-modal {
-      --tblr-modal-width: 1400px;
-      width: 96vw !important;
-      max-width: 1400px !important;
-      padding: 0;
-      border: 0;
-    }
-    .wizard-modal .modal-dialog {
-      max-width: 1400px !important;
-      width: 100% !important;
-      margin: 1.5rem auto !important;
-    }
-    .wizard-modal .modal-content {
-      width: 100% !important;
-      max-height: 90vh;
-    }
-    .wizard-modal .modal-body {
-      max-height: 70vh;
-      overflow: auto;
-    }
-    .backup-restore-modal {
-      --tblr-modal-width: 1100px;
-      width: 94vw !important;
-      max-width: 1100px !important;
-      padding: 0;
-      border: 0;
-    }
-    .backup-restore-modal .modal-dialog {
-      max-width: 1100px !important;
-      width: 100% !important;
-      margin: 1.5rem auto !important;
-    }
-    .wizard-source-name {
-      white-space: nowrap;
-    }
-    .wizard-bulk-modal {
-      --tblr-modal-width: 840px;
-      width: min(92vw, 840px) !important;
-      max-width: 840px !important;
-      padding: 0;
-      border: 0;
-    }
-    .wizard-bulk-modal .modal-dialog {
-      max-width: 840px !important;
-      width: 100% !important;
-      margin: 1.5rem auto !important;
     }
   </style>
 {% endblock %}
@@ -214,10 +30,18 @@
       </div>
       <div class="col-auto">
         <div class="btn-list">
-          <button class="btn backup-cta" id="openBackupRun" type="button">Create Backup</button>
-          <button class="btn restore-cta" id="openRestoreRun" type="button">Restore from Backup</button>
-          <button class="btn classic-cta" id="openClassicRun" type="button">Create New Run</button>
-          <button class="btn wizard-cta" id="openWizardRun" type="button">Wizard mode</button>
+          <button class="btn btn-outline-teal" id="openBackupRun" type="button" data-min-role="editor">
+            <i class="ti ti-database-export me-1"></i>Create backup
+          </button>
+          <button class="btn btn-outline-indigo" id="openRestoreRun" type="button" data-min-role="editor">
+            <i class="ti ti-database-import me-1"></i>Restore backup
+          </button>
+          <button class="btn btn-outline-primary" id="openClassicRun" type="button" data-min-role="editor">
+            <i class="ti ti-copy me-1"></i>New run
+          </button>
+          <button class="btn btn-primary" id="openWizardRun" type="button" data-min-role="editor">
+            <i class="ti ti-wand me-1"></i>Wizard
+          </button>
         </div>
       </div>
     </div>
@@ -226,71 +50,64 @@
 
 {% block content %}
   <div class="row row-cards mb-3">
-    <div class="col-12 col-lg-6">
-      <div class="card h-100">
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
         <div class="card-body">
-          <div class="text-secondary mb-2">Concurrency by destination</div>
-          <div class="table-responsive">
-            <table class="table table-sm table-vcenter">
-              <thead>
-                <tr>
-                  <th>Destination</th>
-                  <th>Running</th>
-                  <th>Queued</th>
-                  <th class="text-end">Limit</th>
-                </tr>
-              </thead>
-              <tbody id="queueLimits">
-                {% for limit in queue_limits %}
-                <tr data-endpoint-id="{{ limit.endpoint_id }}">
-                  <td>{{ limit.endpoint_name }}</td>
-                  <td><span class="badge bg-yellow text-dark js-queue-running">{{ limit.running_jobs }}</span></td>
-                  <td><span class="badge bg-blue text-white js-queue-queued">{{ limit.queued_jobs }}</span></td>
-                  <td class="text-end">
-                    <div class="btn-group btn-group-sm" role="group" aria-label="Adjust concurrency">
-                      <button class="btn btn-outline-secondary js-queue-decrease" type="button" data-endpoint-id="{{ limit.endpoint_id }}">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M6 9l6 6l6-6"></path>
-                        </svg>
-                      </button>
-                      <span class="btn btn-outline-secondary disabled concurrency-value js-queue-limit" data-max-concurrency="{{ limit.max_concurrent_jobs.unwrap_or(0) }}">
-                        {% if limit.max_concurrent_jobs.is_some() %}
-                          {{ limit.max_concurrent_jobs.unwrap() }}
-                        {% else %}
-                          ∞
-                        {% endif %}
-                      </span>
-                      <button class="btn btn-outline-secondary js-queue-increase" type="button" data-endpoint-id="{{ limit.endpoint_id }}">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M6 15l6-6l6 6"></path>
-                        </svg>
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          <div class="mt-2" id="runTotals">
-            <span class="badge bg-green text-dark run-total-badge">Running {{ running_total }}</span>
-            <span class="badge bg-blue text-white run-total-badge">Queued {{ queued_total }}</span>
+          <div class="d-flex align-items-center">
+            <span class="avatar bg-blue-lt text-blue me-3"><i class="ti ti-history"></i></span>
+            <div>
+              <div class="text-secondary">Runs</div>
+              <div class="h2 mb-0" id="dashboardRunCount">{{ runs.len() }}</div>
+            </div>
           </div>
         </div>
       </div>
     </div>
-    <div class="col-12 col-lg-6">
-      <div class="card h-100">
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
         <div class="card-body">
-          <div class="text-secondary">System snapshot</div>
-          <div class="row g-3 mt-1">
-            <div class="col-6">
+          <div class="d-flex align-items-center">
+            <span class="avatar bg-yellow-lt text-yellow me-3"><i class="ti ti-player-play"></i></span>
+            <div>
+              <div class="text-secondary">Running jobs</div>
+              <div class="h2 mb-0" id="dashboardRunningCount">{{ running_total }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="d-flex align-items-center">
+            <span class="avatar bg-azure-lt text-azure me-3"><i class="ti ti-clock-pause"></i></span>
+            <div>
+              <div class="text-secondary">Queued jobs</div>
+              <div class="h2 mb-0" id="dashboardQueuedCount">{{ queued_total }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">System snapshot</h3>
+          <div class="card-actions">
+            <a class="btn btn-ghost-secondary btn-sm" href="{{ base_path }}/status">
+              Details <i class="ti ti-arrow-right ms-1"></i>
+            </a>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="row g-4">
+            <div class="col-md-6">
               <div class="text-secondary small">CPU (%)</div>
               <div class="h3 m-0" id="dashboardCpuValue">-</div>
               <div id="dashboardCpuSpark" class="sparkline"></div>
             </div>
-            <div class="col-6">
-              <div class="text-secondary small">Total memory (MB)</div>
+            <div class="col-md-6">
+              <div class="text-secondary small">Server and child-process memory</div>
               <div class="h3 m-0" id="dashboardMemValue">-</div>
               <div id="dashboardMemSpark" class="sparkline"></div>
             </div>
@@ -308,7 +125,7 @@
   <div class="row row-cards" id="runsList">
     {% for run in runs %}
       <div class="col-12">
-        <div class="card position-relative js-run-card {% if run.jobs_running > 0 %}run-active{% endif %}" data-run-id="{{ run.id }}">
+        <div class="card position-relative js-run-card {% if run.jobs_running > 0 %}border-yellow{% endif %}" data-run-id="{{ run.id }}">
           <div class="card-body">
             <div class="d-flex align-items-center justify-content-between">
               <div class="h3 m-0">
@@ -328,11 +145,11 @@
               </div>
               <div class="text-end">
                 <div class="text-secondary">{{ run.created_at }}</div>
-                <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="{{ run.id }}">
+                <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="{{ run.id }}" data-min-role="admin">
                   Remove
                 </button>
                 {% if run.jobs_running > 0 %}
-                  <button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="{{ run.id }}">
+                  <button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="{{ run.id }}" data-min-role="editor">
                     Stop all jobs
                   </button>
                 {% endif %}
@@ -356,8 +173,8 @@
     {% endfor %}
   </div>
 
-  <dialog class="modal" id="createRunModal">
-    <div class="modal-dialog modal-lg">
+  <div class="modal modal-blur fade" id="createRunModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
       <div class="modal-content">
         <form action="{{ base_path }}/runs" method="post" id="createRunForm">
           <div class="modal-header">
@@ -442,10 +259,10 @@
         </form>
       </div>
     </div>
-  </dialog>
+  </div>
 
-  <dialog class="modal backup-restore-modal" id="backupRestoreModal">
-    <div class="modal-dialog modal-xl">
+  <div class="modal modal-blur fade" id="backupRestoreModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
       <div class="modal-content">
         <form action="{{ base_path }}/runs" method="post" id="backupRestoreForm">
           <input type="hidden" name="mode" id="backupMode" value="backup">
@@ -571,10 +388,10 @@
         </form>
       </div>
     </div>
-  </dialog>
+  </div>
 
-  <dialog class="modal wizard-modal" id="wizardRunModal">
-    <div class="modal-dialog modal-xxl">
+  <div class="modal modal-blur fade" id="wizardRunModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
       <div class="modal-content">
         <div class="modal-header">
           <h3 class="modal-title">Create New Run (Wizard)</h3>
@@ -879,10 +696,10 @@
         </div>
       </div>
     </div>
-  </dialog>
+  </div>
 
-  <dialog class="modal wizard-bulk-modal" id="wizardBulkModal">
-    <div class="modal-dialog modal-md">
+  <div class="modal modal-blur fade" id="wizardBulkModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
       <div class="modal-content">
         <div class="modal-header">
           <h3 class="modal-title">Add selected indices</h3>
@@ -1034,10 +851,10 @@
         </div>
       </div>
     </div>
-  </dialog>
+  </div>
 
-  <dialog class="modal" id="wizardEditModal">
-    <div class="modal-dialog modal-lg">
+  <div class="modal modal-blur fade" id="wizardEditModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
       <div class="modal-content">
         <div class="modal-header">
           <h3 class="modal-title">Edit selected index</h3>
@@ -1137,9 +954,9 @@
         </div>
       </div>
     </div>
-  </dialog>
-  <dialog class="modal" id="removeRunModal">
-    <div class="modal-dialog modal-sm">
+  </div>
+  <div class="modal modal-blur fade" id="removeRunModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm modal-dialog-centered">
       <div class="modal-content">
         <div class="modal-header">
           <h3 class="modal-title">Remove run</h3>
@@ -1155,7 +972,7 @@
         </div>
       </div>
     </div>
-  </dialog>
+  </div>
 {% endblock %}
 
 {% block scripts %}
@@ -1165,7 +982,9 @@
     const endpoints = {{ endpoints_json | safe }};
     const templates = {{ templates_json | safe }};
     const metricsSamples = {{ metrics_samples_json | safe }};
-    const runTotalsEl = document.getElementById("runTotals");
+    const dashboardRunCount = document.getElementById("dashboardRunCount");
+    const dashboardRunningCount = document.getElementById("dashboardRunningCount");
+    const dashboardQueuedCount = document.getElementById("dashboardQueuedCount");
     const runsListEl = document.getElementById("runsList");
     const noRunsCard = document.getElementById("noRunsCard");
     const classicModal = document.getElementById("createRunModal");
@@ -1639,7 +1458,7 @@
       classicRunError.classList.add("d-none");
       classicRunError.textContent = "";
       classicRunForm.reset();
-      classicModal.showModal();
+      showAppModal(classicModal);
       classicSrcEndpointSelect.focus();
     }
 
@@ -1903,7 +1722,7 @@
         restoreMappingEmpty?.classList.add("d-none");
         if (restoreMapInput) restoreMapInput.value = "";
       }
-      backupRestoreModal.showModal();
+      showAppModal(backupRestoreModal);
       if (mode === "restore") {
         loadBackupRuns();
         restoreFromSelect?.focus();
@@ -1913,7 +1732,7 @@
     }
 
     function closeBackupRestore() {
-      backupRestoreModal?.close();
+      hideAppModal(backupRestoreModal);
     }
 
     function openModal() {
@@ -1963,16 +1782,16 @@
       }
       updateModalDetails();
       setStep(1);
-      wizardModal.showModal();
+      showAppModal(wizardModal);
       srcEndpointSelect.focus();
     }
 
     function closeClassicModal() {
-      classicModal.close();
+      hideAppModal(classicModal);
     }
 
     function closeModal() {
-      wizardModal.close();
+      hideAppModal(wizardModal);
     }
 
     openClassicBtn?.addEventListener("click", openClassicModal);
@@ -2416,11 +2235,11 @@
       bulkOverrideAliasEnabled.value = "inherit";
       bulkOverrideWriteExisting.value = "inherit";
       renderBulkPreview();
-      bulkModal.showModal();
+      showAppModal(bulkModal);
     }
 
     function closeBulkModal() {
-      bulkModal.close();
+      hideAppModal(bulkModal);
     }
 
     wizardAddSelected?.addEventListener("click", () => {
@@ -2600,12 +2419,12 @@
         editDelete.value = item.overrides?.delete_if_exists !== undefined
           ? String(item.overrides.delete_if_exists)
           : "inherit";
-        editModal.showModal();
+        showAppModal(editModal);
       }
     });
 
     function closeEditModal() {
-      editModal.close();
+      hideAppModal(editModal);
       wizardState.editIndex = null;
     }
     editClose?.addEventListener("click", closeEditModal);
@@ -2725,9 +2544,9 @@
       if (!samples.length) return;
       const latest = samples[samples.length - 1];
       dashboardCpuValue.textContent = `${latest.host_cpu.toFixed(1)}%`;
-      dashboardMemValue.textContent = `${Math.round(latest.total_mem_kb / 1024)} MB`;
+      dashboardMemValue.textContent = formatMetricBytes(latest.total_mem_bytes);
       const cpuSeries = samples.map((s) => parseFloat(s.host_cpu.toFixed(1)));
-      const memSeries = samples.map((s) => Math.round(s.total_mem_kb / 1024));
+      const memSeries = samples.map((s) => s.total_mem_bytes / 1024 / 1024);
       const cpuChartEl = document.getElementById("dashboardCpuSpark");
       const memChartEl = document.getElementById("dashboardMemSpark");
       if (!cpuChartEl._apexChart) {
@@ -2740,6 +2559,18 @@
       } else {
         updateSparkline(memChartEl, memSeries);
       }
+    }
+
+    function formatMetricBytes(bytes) {
+      const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+      let value = Number(bytes) || 0;
+      let unit = 0;
+      while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+      }
+      if (unit === 0) return `${Math.round(value)} ${units[unit]}`;
+      return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
     }
 
     updateDashboardMetrics(metricsSamples);
@@ -2821,11 +2652,11 @@
             ? `<span class="badge bg-indigo text-white ms-2">restore</span>`
             : "";
         const stopButton = run.jobs_running > 0
-          ? `<button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="${run.id}">Stop all jobs</button>`
+          ? `<button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="${run.id}" data-min-role="editor">Stop all jobs</button>`
           : "";
         return `
           <div class="col-12">
-            <div class="card position-relative js-run-card ${run.jobs_running > 0 ? "run-active" : ""}" data-run-id="${run.id}">
+            <div class="card position-relative js-run-card ${run.jobs_running > 0 ? "border-yellow" : ""}" data-run-id="${run.id}">
               <div class="card-body">
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="h3 m-0">
@@ -2837,7 +2668,7 @@
                   </div>
                   <div class="text-end">
                     <div class="text-secondary">${run.created_at}</div>
-                    <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="${run.id}">Remove</button>
+                    <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="${run.id}" data-min-role="admin">Remove</button>
                     ${stopButton}
                   </div>
                 </div>
@@ -2865,16 +2696,15 @@
         }
       }
       attachRunHandlers();
+      window.applyRoleVisibility?.(runsListEl);
     }
 
     function updateTotals(runs) {
       const running = runs.reduce((sum, run) => sum + run.jobs_running, 0);
       const queued = runs.reduce((sum, run) => sum + run.jobs_queued, 0);
-      if (runTotalsEl) {
-        runTotalsEl.innerHTML = `
-          <span class="badge bg-green text-dark run-total-badge">Running ${running}</span>
-          <span class="badge bg-blue text-white run-total-badge">Queued ${queued}</span>`;
-      }
+      if (dashboardRunCount) dashboardRunCount.textContent = runs.length;
+      if (dashboardRunningCount) dashboardRunningCount.textContent = running;
+      if (dashboardQueuedCount) dashboardQueuedCount.textContent = queued;
     }
 
     function attachRunHandlers() {
@@ -2900,14 +2730,28 @@
     const cancelRemoveRun = document.getElementById("cancelRemoveRun");
     const removeRunClose = document.getElementById("removeRunClose");
 
+    function modalInstance(element) {
+      const Modal = window.tabler?.bootstrap?.Modal || window.bootstrap?.Modal;
+      if (!Modal) throw new Error("Tabler modal component is unavailable");
+      return Modal.getOrCreateInstance(element);
+    }
+
+    function showAppModal(element) {
+      modalInstance(element).show();
+    }
+
+    function hideAppModal(element) {
+      if (element) modalInstance(element).hide();
+    }
+
     function openRemoveModal(runId) {
       removeRunId.textContent = runId;
       removeModal.dataset.runId = runId;
-      removeModal.showModal();
+      showAppModal(removeModal);
     }
 
     function closeRemoveModal() {
-      removeModal.close();
+      hideAppModal(removeModal);
       removeModal.dataset.runId = "";
     }
 
@@ -2946,38 +2790,6 @@
       }
     });
 
-    function renderQueueLimits(limits) {
-      const container = document.getElementById("queueLimits");
-      if (!container) return;
-      const rows = limits.map((limit) => {
-        const value = limit.max_concurrent_jobs ?? 0;
-        const label = limit.max_concurrent_jobs ? limit.max_concurrent_jobs : "∞";
-        return `<tr data-endpoint-id="${limit.endpoint_id}">
-          <td>${limit.endpoint_name}</td>
-          <td><span class="badge bg-yellow text-dark js-queue-running">${limit.running_jobs}</span></td>
-          <td><span class="badge bg-blue text-white js-queue-queued">${limit.queued_jobs}</span></td>
-          <td class="text-end">
-            <div class="btn-group btn-group-sm" role="group" aria-label="Adjust concurrency">
-              <button class="btn btn-outline-secondary js-queue-decrease" type="button" data-endpoint-id="${limit.endpoint_id}">
-                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M6 9l6 6l6-6"></path>
-                </svg>
-              </button>
-              <span class="btn btn-outline-secondary disabled concurrency-value js-queue-limit" data-max-concurrency="${value}">
-                ${label}
-              </span>
-              <button class="btn btn-outline-secondary js-queue-increase" type="button" data-endpoint-id="${limit.endpoint_id}">
-                <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M6 15l6-6l6 6"></path>
-                </svg>
-              </button>
-            </div>
-          </td>
-        </tr>`;
-      });
-      container.innerHTML = rows.join("");
-    }
-
     const runsSource = new EventSource(`${basePath}/runs/stream`);
     runsSource.onmessage = (event) => {
       try {
@@ -2986,51 +2798,7 @@
           updateTotals(data.runs);
           renderRuns(data.runs);
         }
-        if (data && Array.isArray(data.queue_limits)) {
-          renderQueueLimits(data.queue_limits);
-        }
       } catch (_) {}
     };
-
-    function updateEndpointConcurrency(endpointId, value) {
-      const body = new URLSearchParams();
-      body.set("value", value);
-      fetch(`${basePath}/settings/max-concurrent-jobs/${endpointId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: body.toString(),
-      }).catch(() => {});
-    }
-
-    document.addEventListener("click", (event) => {
-      const decrease = event.target.closest(".js-queue-decrease");
-      if (decrease) {
-        const endpointId = decrease.dataset.endpointId;
-        if (!endpointId) return;
-        const row = decrease.closest("tr");
-        const valueEl = row?.querySelector(".js-queue-limit");
-        if (!valueEl) return;
-        const current = parseInt(valueEl.dataset.maxConcurrency || "0", 10);
-        if (current <= 1) return;
-        const next = current - 1;
-        valueEl.dataset.maxConcurrency = `${next}`;
-        valueEl.textContent = `${next}`;
-        updateEndpointConcurrency(endpointId, next);
-        return;
-      }
-      const increase = event.target.closest(".js-queue-increase");
-      if (increase) {
-        const endpointId = increase.dataset.endpointId;
-        if (!endpointId) return;
-        const row = increase.closest("tr");
-        const valueEl = row?.querySelector(".js-queue-limit");
-        if (!valueEl) return;
-        const current = parseInt(valueEl.dataset.maxConcurrency || "0", 10);
-        const next = current + 1;
-        valueEl.dataset.maxConcurrency = `${next}`;
-        valueEl.textContent = `${next}`;
-        updateEndpointConcurrency(endpointId, next);
-      }
-    });
   </script>
 {% endblock %}

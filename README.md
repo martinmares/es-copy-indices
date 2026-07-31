@@ -15,9 +15,21 @@ CLI utility for copying Elasticsearch indices between clusters, including mappin
 - Access to source and destination Elasticsearch clusters.
 
 ## Build
+
 ```bash
 cargo build --release
 ```
+
+Cross-platform release builds are available through `just`:
+
+```bash
+just build-macos    # aarch64-apple-darwin
+just build-linux    # x86_64-unknown-linux-musl via cargo-zigbuild
+just build-windows  # x86_64-pc-windows-gnu
+```
+
+`just build-all` builds all three targets. The Linux recipe requires `zig` and
+`cargo-zigbuild`; the relevant Rust targets and cross-linkers must be installed.
 
 ## Integration Test (Docker)
 This repo includes a minimal docker-compose based integration test for ES 7.x.
@@ -279,9 +291,48 @@ Charts:
 - `/jobs` Global job list with filters.
 - `/status` Host/process metrics and charts.
 - `/config` Read-only view of main config and templates.
+- `/settings` Admin-only runtime settings, including per-destination concurrency.
+- `/healthz` Unauthenticated health check at the server root, outside `BASE_PATH`.
+
+### Reverse proxy authentication
+
+Trusted-proxy authentication is opt-in for backward compatibility. With authentication
+disabled (the default), the UI operates as a local administrator and behaves like older
+versions.
+
+To protect the UI with `simple-idm-ad-proxy` or `simple-idm-oauth2-proxy`:
+
+```bash
+BASE_PATH=/es-copy-indices \
+TRUSTED_PROXY_AUTH=true \
+LOGOUT_URL=/oauth2/sign_out \
+es-copy-indices-server \
+  --main-config ./conf/main-server.toml \
+  --env-templates ./conf/templates \
+  --bind 127.0.0.1:8181
+```
+
+The application accepts the canonical `X-Auth-*` headers and the compatible
+`X-WEBAUTH-*` aliases. The proxy must remove client-supplied identity headers before
+setting trusted values, and the application listener must not be reachable directly
+from untrusted networks.
+
+Default role groups:
+
+- `es-copy-indices:viewer`: read-only UI, status, configuration and logs.
+- `es-copy-indices:editor`: Viewer access plus creating, starting and stopping runs/jobs.
+- `es-copy-indices:admin`: Editor access plus deleting runs, editing generated configs and changing runtime settings.
+
+The group names can be changed with `AUTH_GROUP_VIEWER`, `AUTH_GROUP_EDITOR` and
+`AUTH_GROUP_ADMIN`. `X-Auth-Subject` is displayed as the durable identity when supplied;
+`X-Auth-User` is required as the login/display name.
+
+`BASE_PATH` is normalized, so `/es-copy-indices` and `/es-copy-indices/` are equivalent.
+All UI links, API calls, SSE streams and embedded Tabler assets use the configured prefix.
 
 ### Server CLI reference (selected)
-Flags are strict CLI-only (no env fallbacks).
+Most flags are strict CLI-only. Reverse-proxy and authentication settings also support
+the environment variables documented below.
 
 - `--main-config PATH`: main config with endpoints.
 - `--env-templates DIR`: templates directory.
@@ -296,7 +347,12 @@ Flags are strict CLI-only (no env fallbacks).
 - `--root-certificates DIR`: PEM directory for HTTPS (alias: `--ca-path`).
 - `--insecure`: disable TLS verify for percentile queries and generated jobs (useful with self-signed or non-compliant certs).
 - `--runs-dir DIR`: store run history/logs (default `./runs`).
-- `--base-path PATH`: reverse-proxy base path (e.g. `/es-copy-indices`).
+- `--base-path PATH` / `BASE_PATH`: reverse-proxy base path (e.g. `/es-copy-indices`).
+- `--logout-url URL` / `LOGOUT_URL`: logout endpoint exposed by the authentication proxy.
+- `--trusted-proxy-auth` / `TRUSTED_PROXY_AUTH`: require trusted proxy identity headers (default false).
+- `--auth-group-viewer` / `AUTH_GROUP_VIEWER`: group granting Viewer access.
+- `--auth-group-editor` / `AUTH_GROUP_EDITOR`: group granting Editor access.
+- `--auth-group-admin` / `AUTH_GROUP_ADMIN`: group granting Admin access.
 - `--max-concurrent-jobs COUNT`: limit concurrent jobs; additional jobs stay queued.
 - `--refresh-seconds N`: UI SSE refresh interval for run/job pages (default 5).
 - `--metrics-seconds N`: status metrics sampling interval (default 5).

@@ -162,10 +162,10 @@
       jobsTableBody.innerHTML = filtered.map((job) => {
         const color = runColor(job.run_id);
         const startBtn = job.can_start
-          ? `<button class="btn btn-outline-primary btn-sm js-job-action" data-url="${job.start_url}" data-method="POST">Start</button>`
+          ? `<button class="btn btn-outline-primary btn-sm js-job-action" data-url="${job.start_url}" data-method="POST" data-min-role="editor">Start</button>`
           : "";
         const stopBtn = job.can_stop
-          ? `<button class="btn btn-outline-danger btn-sm js-job-action" data-url="${job.stop_url}" data-method="POST">Stop</button>`
+          ? `<button class="btn btn-outline-danger btn-sm js-job-action" data-url="${job.stop_url}" data-method="POST" data-min-role="editor">Stop</button>`
           : "";
         return `
           <tr>
@@ -192,6 +192,7 @@
             </td>
           </tr>`;
       }).join("");
+      window.applyRoleVisibility?.(jobsTableBody);
       if (filtered.length === 0) {
         jobsEmpty.classList.remove("d-none");
       } else {

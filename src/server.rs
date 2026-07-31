@@ -1,10 +1,13 @@
 use crate::backup;
+use crate::server_auth;
+use crate::server_static;
 use askama::Template;
 use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
+use axum::middleware;
 use axum::response::{Html, IntoResponse, Redirect, Sse};
 use axum::routing::{get, post};
 use chrono::TimeZone;
@@ -55,8 +58,30 @@ struct ServerArgs {
     bind: String,
     #[arg(long = "es-copy-indices-path", default_value = "es-copy-indices")]
     es_copy_path: PathBuf,
-    #[arg(long, default_value = "/")]
+    #[arg(long, env = "BASE_PATH", default_value = "/")]
     base_path: String,
+    #[arg(long, env = "LOGOUT_URL")]
+    logout_url: Option<String>,
+    #[arg(long, env = "TRUSTED_PROXY_AUTH", default_value_t = false)]
+    trusted_proxy_auth: bool,
+    #[arg(
+        long,
+        env = "AUTH_GROUP_ADMIN",
+        default_value = "es-copy-indices:admin"
+    )]
+    auth_group_admin: String,
+    #[arg(
+        long,
+        env = "AUTH_GROUP_EDITOR",
+        default_value = "es-copy-indices:editor"
+    )]
+    auth_group_editor: String,
+    #[arg(
+        long,
+        env = "AUTH_GROUP_VIEWER",
+        default_value = "es-copy-indices:viewer"
+    )]
+    auth_group_viewer: String,
     #[arg(long, default_value_t = 5)]
     refresh_seconds: u64,
     #[arg(long, default_value_t = 5)]
@@ -682,7 +707,6 @@ struct IndexTemplate {
     endpoints_json: String,
     templates_json: String,
     metrics_samples_json: String,
-    queue_limits: Vec<QueueLimitView>,
     running_total: usize,
     queued_total: usize,
     copy_suffix: Option<String>,
@@ -731,6 +755,15 @@ struct JobsTemplate {
     base_path: String,
     runs: Vec<RunOption>,
     runs_json: String,
+    active_nav: String,
+}
+
+#[derive(Template)]
+#[template(path = "server/settings.html")]
+struct SettingsTemplate {
+    base_path: String,
+    queue_limits: Vec<QueueLimitView>,
+    global_limit_value: String,
     active_nav: String,
 }
 
@@ -882,15 +915,16 @@ struct MetricsState {
 #[derive(Clone, Debug, Serialize)]
 struct MetricsSample {
     ts: i64,
+    server_pid: u32,
     host_cpu: f32,
-    host_mem_used_kb: u64,
-    host_mem_total_kb: u64,
+    host_mem_used_bytes: u64,
+    host_mem_total_bytes: u64,
     proc_cpu: f32,
-    proc_mem_kb: u64,
+    proc_mem_bytes: u64,
     children_cpu: f32,
-    children_mem_kb: u64,
+    children_mem_bytes: u64,
     total_cpu: f32,
-    total_mem_kb: u64,
+    total_mem_bytes: u64,
     running_jobs: usize,
     queued_jobs: usize,
     max_concurrent_jobs: Option<usize>,
@@ -901,15 +935,16 @@ struct MetricsSample {
 
 #[derive(Clone, Debug, Default)]
 struct MetricsSummary {
+    server_pid: u32,
     host_cpu: f32,
     proc_cpu: f32,
     children_cpu: f32,
     total_cpu: f32,
-    host_mem_used_mb: u64,
-    host_mem_total_mb: u64,
-    proc_mem_mb: u64,
-    children_mem_mb: u64,
-    total_mem_mb: u64,
+    host_mem_used: String,
+    host_mem_total: String,
+    proc_mem: String,
+    children_mem: String,
+    total_mem: String,
     running_jobs: usize,
     queued_jobs: usize,
     load1: f64,
@@ -975,6 +1010,13 @@ pub async fn run() {
         Some(args.max_concurrent_jobs)
     };
     let destination_queues = build_destination_queues(&endpoints, default_max_concurrent_jobs);
+    let auth_config = Arc::new(server_auth::AuthConfig {
+        enabled: args.trusted_proxy_auth,
+        admin_group: args.auth_group_admin.clone(),
+        editor_group: args.auth_group_editor.clone(),
+        viewer_group: args.auth_group_viewer.clone(),
+        logout_url: args.logout_url.as_deref().map(normalize_logout_url),
+    });
     let state = Arc::new(AppState {
         endpoints,
         templates,
@@ -1011,11 +1053,10 @@ pub async fn run() {
         args.metrics_seconds,
     );
 
-    let routes = Router::new()
+    let viewer_routes = Router::new()
         .route("/", get(index))
         .route("/dashboard", get(index))
-        .route("/runs", get(index).post(create_run))
-        .route("/runs/wizard", post(create_run_wizard))
+        .route("/runs", get(index))
         .route("/wizard/sources", get(wizard_sources))
         .route("/jobs", get(jobs_view))
         .route("/config", get(config_view))
@@ -1027,6 +1068,41 @@ pub async fn run() {
         .route("/jobs/stream", get(jobs_stream))
         .route("/runs/snapshot", get(runs_snapshot))
         .route("/runs/stream", get(runs_stream))
+        .route("/runs/{run_id}", get(run_view))
+        .route("/runs/{run_id}/stream", get(run_stream))
+        .route("/runs/{run_id}/configs", get(run_configs_list))
+        .route("/runs/{run_id}/configs/{file_name}", get(run_config_fetch))
+        .route("/runs/{run_id}/export", get(export_run))
+        .route("/runs/{run_id}/jobs/{job_id}", get(job_view))
+        .route("/runs/{run_id}/jobs/{job_id}/stream", get(job_stream))
+        .route(
+            "/runs/{run_id}/jobs/{job_id}/status",
+            get(job_status_stream),
+        )
+        .route("/auth/session", get(server_auth::session))
+        .route("/static/{*path}", get(server_static::serve))
+        .layer(middleware::from_fn_with_state(
+            auth_config.clone(),
+            server_auth::require_viewer,
+        ))
+        .layer(axum::Extension(auth_config.clone()));
+
+    let editor_routes = Router::new()
+        .route("/runs", post(create_run))
+        .route("/runs/wizard", post(create_run_wizard))
+        .route("/runs/{run_id}/retry-failed", post(retry_failed))
+        .route("/runs/{run_id}/stop", post(stop_run))
+        .route("/runs/{run_id}/stages/{stage_id}/start", post(start_stage))
+        .route("/runs/{run_id}/stages/{stage_id}/stop", post(stop_stage))
+        .route("/runs/{run_id}/jobs/{job_id}/start", post(start_job))
+        .route("/runs/{run_id}/jobs/{job_id}/stop", post(stop_job))
+        .layer(middleware::from_fn_with_state(
+            auth_config.clone(),
+            server_auth::require_editor,
+        ));
+
+    let admin_routes = Router::new()
+        .route("/settings", get(settings_view))
         .route(
             "/settings/max-concurrent-jobs",
             post(update_max_concurrent_jobs),
@@ -1035,29 +1111,16 @@ pub async fn run() {
             "/settings/max-concurrent-jobs/{endpoint_id}",
             post(update_max_concurrent_jobs_for_endpoint),
         )
-        .route("/runs/{run_id}", get(run_view))
-        .route("/runs/{run_id}/stream", get(run_stream))
-        .route("/runs/{run_id}/configs", get(run_configs_list))
-        .route(
-            "/runs/{run_id}/configs/{file_name}",
-            get(run_config_fetch).post(run_config_save),
-        )
         .route("/runs/{run_id}/delete", post(delete_run))
-        .route("/runs/{run_id}/export", get(export_run))
-        .route("/runs/{run_id}/retry-failed", post(retry_failed))
-        .route("/runs/{run_id}/stop", post(stop_run))
-        .route("/runs/{run_id}/stages/{stage_id}/start", post(start_stage))
-        .route("/runs/{run_id}/stages/{stage_id}/stop", post(stop_stage))
-        .route("/runs/{run_id}/jobs/{job_id}/start", post(start_job))
-        .route("/runs/{run_id}/jobs/{job_id}/stop", post(stop_job))
-        .route("/runs/{run_id}/jobs/{job_id}", get(job_view))
-        .route("/runs/{run_id}/jobs/{job_id}/stream", get(job_stream))
-        .route(
-            "/runs/{run_id}/jobs/{job_id}/status",
-            get(job_status_stream),
-        );
+        .route("/runs/{run_id}/configs/{file_name}", post(run_config_save))
+        .layer(middleware::from_fn_with_state(
+            auth_config,
+            server_auth::require_admin,
+        ));
 
-    let app = if state.base_path == "/" {
+    let routes = viewer_routes.merge(editor_routes).merge(admin_routes);
+
+    let protected_app = if state.base_path == "/" {
         routes
     } else {
         let base_with_slash = format!("{}/", state.base_path);
@@ -1067,6 +1130,9 @@ pub async fn run() {
             .nest(&state.base_path, routes)
     }
     .with_state(Arc::clone(&state));
+    let app = Router::new()
+        .route("/healthz", get(healthz))
+        .merge(protected_app);
 
     let listener = tokio::net::TcpListener::bind(&args.bind)
         .await
@@ -1075,11 +1141,14 @@ pub async fn run() {
     axum::serve(listener, app).await.unwrap();
 }
 
+async fn healthz() -> StatusCode {
+    StatusCode::OK
+}
+
 async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_summaries(&state).await;
     let running_total = runs.iter().map(|run| run.jobs_running).sum();
     let queued_total = runs.iter().map(|run| run.jobs_queued).sum();
-    let queue_limits = build_queue_limits(&state).await;
     let backup_root_value = state
         .backup_dir
         .as_ref()
@@ -1099,7 +1168,6 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         endpoints_json: endpoints_json(&state),
         templates_json: templates_json(&state),
         metrics_samples_json: metrics_samples_json(state.as_ref()).await,
-        queue_limits,
         running_total,
         queued_total,
         copy_suffix: state.copy_suffix.clone(),
@@ -1218,6 +1286,34 @@ async fn config_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         endpoints: build_endpoint_views(&state),
         templates: build_template_views(&state),
         active_nav: "config".to_string(),
+    };
+    Html(render_template(&template)).into_response()
+}
+
+async fn settings_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let global_limit_value = {
+        let queues = state.destination_queues.lock().await;
+        let values = queues
+            .values()
+            .map(|queue| queue.max_concurrent_jobs)
+            .collect::<HashSet<_>>();
+        if values.len() == 1 {
+            values
+                .iter()
+                .next()
+                .copied()
+                .flatten()
+                .unwrap_or(0)
+                .to_string()
+        } else {
+            String::new()
+        }
+    };
+    let template = SettingsTemplate {
+        base_path: template_base_path(state.as_ref()),
+        queue_limits: build_queue_limits(&state).await,
+        global_limit_value,
+        active_nav: "settings".to_string(),
     };
     Html(render_template(&template)).into_response()
 }
@@ -2528,10 +2624,8 @@ async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         let state = Arc::clone(&state);
         async move {
             let runs = build_run_summaries(&state).await;
-            let queue_limits = build_queue_limits(&state).await;
             let payload = serde_json::to_string(&serde_json::json!({
-                "runs": runs,
-                "queue_limits": queue_limits
+                "runs": runs
             }))
             .unwrap_or_else(|_| "{}".to_string());
             Ok::<axum::response::sse::Event, Infallible>(
@@ -2544,10 +2638,8 @@ async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn runs_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_summaries(&state).await;
-    let queue_limits = build_queue_limits(&state).await;
     Json(json!({
-        "runs": runs,
-        "queue_limits": queue_limits
+        "runs": runs
     }))
     .into_response()
 }
@@ -3588,15 +3680,16 @@ fn extract_progress_percent(line: &str) -> Option<f64> {
 fn build_metrics_summary(sample: Option<&MetricsSample>) -> MetricsSummary {
     if let Some(sample) = sample {
         MetricsSummary {
+            server_pid: sample.server_pid,
             host_cpu: sample.host_cpu,
             proc_cpu: sample.proc_cpu,
             children_cpu: sample.children_cpu,
             total_cpu: sample.total_cpu,
-            host_mem_used_mb: mem_to_mb(sample.host_mem_used_kb),
-            host_mem_total_mb: mem_to_mb(sample.host_mem_total_kb),
-            proc_mem_mb: mem_to_mb(sample.proc_mem_kb),
-            children_mem_mb: mem_to_mb(sample.children_mem_kb),
-            total_mem_mb: mem_to_mb(sample.total_mem_kb),
+            host_mem_used: format_bytes(sample.host_mem_used_bytes),
+            host_mem_total: format_bytes(sample.host_mem_total_bytes),
+            proc_mem: format_bytes(sample.proc_mem_bytes),
+            children_mem: format_bytes(sample.children_mem_bytes),
+            total_mem: format_bytes(sample.total_mem_bytes),
             running_jobs: sample.running_jobs,
             queued_jobs: sample.queued_jobs,
             load1: sample.load1,
@@ -3608,8 +3701,25 @@ fn build_metrics_summary(sample: Option<&MetricsSample>) -> MetricsSummary {
     }
 }
 
-fn mem_to_mb(value: u64) -> u64 {
-    value / 1024 / 1024
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else if value >= 100.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn process_cpu_as_host_percent(cpu_usage: f32, logical_cpu_count: usize) -> f32 {
+    cpu_usage / logical_cpu_count.max(1) as f32
 }
 
 fn template_base_path(state: &AppState) -> String {
@@ -3636,7 +3746,8 @@ fn start_metrics_sampler(
 ) {
     let interval_seconds = if seconds == 0 { 5 } else { seconds };
     tokio::spawn(async move {
-        let pid = Pid::from_u32(std::process::id());
+        let server_pid = std::process::id();
+        let pid = Pid::from_u32(server_pid);
         let mut system = System::new();
         system.refresh_cpu_all();
         system.refresh_memory();
@@ -3657,8 +3768,12 @@ fn start_metrics_sampler(
             let host_mem_total = system.total_memory();
             let host_mem_used = system.used_memory();
             let load = System::load_average();
+            let logical_cpu_count = system.cpus().len();
             let (proc_cpu, proc_mem) = if let Some(process) = system.process(pid) {
-                (process.cpu_usage(), process.memory())
+                (
+                    process_cpu_as_host_percent(process.cpu_usage(), logical_cpu_count),
+                    process.memory(),
+                )
             } else {
                 (0.0, 0)
             };
@@ -3671,7 +3786,8 @@ fn start_metrics_sampler(
                 let mut parent = process.parent();
                 while let Some(ppid) = parent {
                     if ppid == pid {
-                        children_cpu += process.cpu_usage();
+                        children_cpu +=
+                            process_cpu_as_host_percent(process.cpu_usage(), logical_cpu_count);
                         children_mem += process.memory();
                         break;
                     }
@@ -3699,15 +3815,16 @@ fn start_metrics_sampler(
 
             let sample = MetricsSample {
                 ts: chrono::Utc::now().timestamp(),
+                server_pid,
                 host_cpu,
-                host_mem_used_kb: host_mem_used,
-                host_mem_total_kb: host_mem_total,
+                host_mem_used_bytes: host_mem_used,
+                host_mem_total_bytes: host_mem_total,
                 proc_cpu,
-                proc_mem_kb: proc_mem,
+                proc_mem_bytes: proc_mem,
                 children_cpu,
-                children_mem_kb: children_mem,
+                children_mem_bytes: children_mem,
                 total_cpu,
-                total_mem_kb: total_mem,
+                total_mem_bytes: total_mem,
                 running_jobs,
                 queued_jobs,
                 max_concurrent_jobs: None,
@@ -4551,11 +4668,6 @@ fn is_process_not_found(err: &std::io::Error) -> bool {
     is_not_found(err) || err.raw_os_error() == Some(3)
 }
 
-#[cfg(windows)]
-fn is_process_not_found(err: &std::io::Error) -> bool {
-    is_not_found(err)
-}
-
 #[derive(Clone, Debug)]
 struct MainConfigBundle {
     endpoints: Vec<EndpointConfig>,
@@ -4634,7 +4746,7 @@ fn load_main_config(path: &PathBuf) -> MainConfigBundle {
                     id
                 },
                 name: endpoint.name,
-                url: endpoint.url,
+                url: normalize_endpoint_url(&endpoint.url),
                 prefix: endpoint.prefix,
                 number_of_replicas: endpoint.number_of_replicas,
                 keep_alive: endpoint.keep_alive,
@@ -5093,9 +5205,16 @@ async fn generate_date_intervals(
         .map_err(|e| format!("percentile request failed: {e}"))?;
     let status = response.status();
     if !status.is_success() {
+        let details = response.text().await.unwrap_or_default();
+        let details = details.trim();
+        let details = if details.is_empty() {
+            String::new()
+        } else {
+            format!(": {details}")
+        };
         return Err(format!(
-            "percentile request failed: {} for index {} at {}",
-            status, index_name, url
+            "percentile request failed: {} for index {} at {}{}",
+            status, index_name, url, details
         ));
     }
     let value: serde_json::Value = response
@@ -5656,6 +5775,20 @@ fn normalize_base_path(value: &str) -> String {
     result
 }
 
+fn normalize_logout_url(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.starts_with('/') || trimmed.starts_with("http://") || trimmed.starts_with("https://")
+    {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+fn normalize_endpoint_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
 fn is_sensitive_key(key: &str) -> bool {
     matches!(
         key.to_ascii_lowercase().as_str(),
@@ -5819,5 +5952,61 @@ fn with_base(state: &AppState, path: &str) -> String {
         path.to_string()
     } else {
         format!("{}{}", state.base_path, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        format_bytes, normalize_base_path, normalize_endpoint_url, normalize_logout_url,
+        process_cpu_as_host_percent,
+    };
+
+    #[test]
+    fn endpoint_url_without_trailing_slash_is_unchanged() {
+        assert_eq!(
+            normalize_endpoint_url("https://elasticsearch.example"),
+            "https://elasticsearch.example"
+        );
+    }
+
+    #[test]
+    fn endpoint_url_trailing_slashes_are_removed() {
+        assert_eq!(
+            normalize_endpoint_url("https://elasticsearch.example///"),
+            "https://elasticsearch.example"
+        );
+    }
+
+    #[test]
+    fn endpoint_url_keeps_base_path_and_trims_whitespace() {
+        assert_eq!(
+            normalize_endpoint_url("  https://example.test/elasticsearch/  "),
+            "https://example.test/elasticsearch"
+        );
+    }
+
+    #[test]
+    fn memory_bytes_are_formatted_with_binary_units() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(17_760 * 1024), "17.3 MiB");
+        assert_eq!(format_bytes(48 * 1024 * 1024 * 1024), "48.0 GiB");
+    }
+
+    #[test]
+    fn process_cpu_is_normalized_to_host_capacity() {
+        assert_eq!(process_cpu_as_host_percent(200.0, 10), 20.0);
+        assert_eq!(process_cpu_as_host_percent(25.0, 0), 25.0);
+    }
+
+    #[test]
+    fn reverse_proxy_paths_are_normalized() {
+        assert_eq!(normalize_base_path("es-copy-indices/"), "/es-copy-indices");
+        assert_eq!(normalize_base_path("/"), "/");
+        assert_eq!(normalize_logout_url("oauth2/sign_out"), "/oauth2/sign_out");
+        assert_eq!(
+            normalize_logout_url("https://sso.example/logout"),
+            "https://sso.example/logout"
+        );
     }
 }

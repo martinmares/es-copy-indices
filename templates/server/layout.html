@@ -2,108 +2,129 @@
 <html lang="en" data-bs-theme="dark">
   <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>{% block title %}ES Copy Runner{% endblock %}</title>
     {% block head_meta %}{% endblock %}
-    <link rel="stylesheet" href="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.0.0/dist/tabler-icons.min.css">
+    <script>
+      (() => {
+        const theme = localStorage.getItem("es-copy-theme") || "auto";
+        const effective = theme === "auto"
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : theme;
+        document.documentElement.setAttribute("data-bs-theme", effective);
+      })();
+    </script>
+    <link rel="stylesheet" href="{{ base_path }}/static/vendor/tabler/css/tabler.min.css">
+    <link rel="stylesheet" href="{{ base_path }}/static/vendor/tabler-icons/css/tabler-icons.min.css">
+    <link rel="icon" href="{{ base_path }}/static/favicon.svg" type="image/svg+xml">
     {% block head_extra %}{% endblock %}
-    <style>
-      .navbar-brand-title {
-        font-size: 1.25rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        color: #e6edf3;
-      }
-      .nav-link.active {
-        color: #93c5fd;
-      }
-      .navbar-nav .nav-item.active .nav-link {
-        position: relative;
-      }
-      .navbar-nav .nav-item.active .nav-link::after {
-        content: "";
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: -10px;
-        height: 2px;
-        background: var(--tblr-primary, #206bc4);
-        border-radius: 999px;
-      }
-    </style>
     {% block styles %}{% endblock %}
   </head>
   <body>
     <div class="page">
       <header class="navbar navbar-expand-md d-print-none navbar-dark">
         <div class="container-xl">
-          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar-menu">
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar-menu" aria-controls="navbar-menu" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>
           <h1 class="navbar-brand navbar-brand-autodark d-none-navbar-horizontal pe-0 pe-md-3">
-            <a href="{{ base_path }}/" class="d-inline-flex align-items-center gap-2">
-              <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <path d="M21 21l-4.3-4.3"></path>
-              </svg>
-              <span class="navbar-brand-title">ES Copy Runner</span>
+            <a href="{{ base_path }}/">
+              <i class="ti ti-arrows-transfer-up me-2"></i>
+              ES Copy Runner
             </a>
           </h1>
-          <div class="navbar-nav flex-row order-md-last"></div>
+          <div class="navbar-nav flex-row order-md-last align-items-center">
+            <div class="nav-item dropdown" id="account-item" style="display: none; position: relative;">
+              <a href="#" class="nav-link d-flex lh-1 text-reset" id="account-toggle" aria-label="Account details">
+                <span class="avatar avatar-sm" id="account-avatar">?</span>
+                <span class="d-none d-xl-block ps-2">
+                  <span id="account-username">-</span>
+                  <span class="d-block text-secondary mt-1" id="account-role">-</span>
+                </span>
+              </a>
+              <div id="account-menu" class="dropdown-menu dropdown-menu-end dropdown-menu-arrow" style="display: none; min-width: 22rem; max-width: 32rem; max-height: calc(100vh - 5rem); overflow-y: auto; position: absolute; right: 0; top: 100%;">
+                <div class="dropdown-header">Account details</div>
+                <div class="dropdown-item-text">
+                  <strong id="account-detail-username">-</strong>
+                  <div class="text-secondary small" id="account-email"></div>
+                </div>
+                <div class="dropdown-divider"></div>
+                <div class="dropdown-item-text"><span class="text-secondary">Auth mode:</span> <span id="account-auth-mode">-</span></div>
+                <div class="dropdown-item-text"><span class="text-secondary">Role:</span> <span id="account-detail-role">-</span></div>
+                <div class="dropdown-item-text" id="account-subject-row" style="display: none;">
+                  <span class="text-secondary">Subject:</span>
+                  <div class="small font-monospace text-break" id="account-subject"></div>
+                </div>
+                <div class="dropdown-item-text" id="account-groups-row" style="display: none;">
+                  <span class="text-secondary">Groups:</span>
+                  <div class="small text-wrap" id="account-groups"></div>
+                </div>
+                <div id="account-headers-section" style="display: none;">
+                  <div class="dropdown-divider"></div>
+                  <div class="dropdown-header">Trusted proxy headers</div>
+                  <div id="account-headers"></div>
+                </div>
+              </div>
+            </div>
+            <div class="nav-item d-none d-md-flex" style="position: relative;">
+              <a href="#" class="nav-link px-0" id="theme-toggle" tabindex="-1" aria-label="Change theme">
+                <i class="ti ti-sun"></i>
+              </a>
+              <div id="theme-menu" class="dropdown-menu dropdown-menu-end dropdown-menu-arrow" style="display: none; position: absolute; right: 0; top: 100%;">
+                <a href="#" class="dropdown-item" data-theme="light">
+                  <i class="ti ti-sun me-2"></i>Light
+                </a>
+                <a href="#" class="dropdown-item" data-theme="dark">
+                  <i class="ti ti-moon me-2"></i>Dark
+                </a>
+                <a href="#" class="dropdown-item" data-theme="auto">
+                  <i class="ti ti-device-desktop me-2"></i>Auto
+                </a>
+              </div>
+            </div>
+            <div class="nav-item d-none d-md-flex" id="logout-item" style="display: none !important;">
+              <a href="#" class="nav-link px-2" id="logout-link" title="Sign out">
+                <i class="ti ti-logout me-1"></i>
+                <span class="d-none d-lg-inline">Logout</span>
+              </a>
+            </div>
+          </div>
         </div>
       </header>
-      <header class="navbar-expand-md">
+
+      <header class="navbar-expand-md d-print-none">
         <div class="collapse navbar-collapse" id="navbar-menu">
-          <div class="navbar navbar-dark">
+          <div class="navbar">
             <div class="container-xl">
               <ul class="navbar-nav">
                 <li class="nav-item {% if active_nav == "dashboard" %}active{% endif %}">
                   <a class="nav-link" href="{{ base_path }}/">
-                    <span class="nav-link-icon d-md-none d-lg-inline-block">
-                      <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 13h8V3H3v10z"></path>
-                        <path d="M13 21h8v-6h-8v6z"></path>
-                        <path d="M13 3h8v8h-8V3z"></path>
-                        <path d="M3 15h8v6H3v-6z"></path>
-                      </svg>
-                    </span>
+                    <span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span>
                     <span class="nav-link-title">Dashboard</span>
                   </a>
                 </li>
                 <li class="nav-item {% if active_nav == "jobs" %}active{% endif %}">
                   <a class="nav-link" href="{{ base_path }}/jobs">
-                    <span class="nav-link-icon d-md-none d-lg-inline-block">
-                      <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M9 6h10"></path>
-                        <path d="M9 12h10"></path>
-                        <path d="M9 18h10"></path>
-                        <path d="M5 6h.01"></path>
-                        <path d="M5 12h.01"></path>
-                        <path d="M5 18h.01"></path>
-                      </svg>
-                    </span>
+                    <span class="nav-link-icon"><i class="ti ti-list-check"></i></span>
                     <span class="nav-link-title">Jobs</span>
                   </a>
                 </li>
                 <li class="nav-item {% if active_nav == "status" %}active{% endif %}">
                   <a class="nav-link" href="{{ base_path }}/status">
-                    <span class="nav-link-icon d-md-none d-lg-inline-block">
-                      <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 12h4l3 8 4-16 3 8h4"></path>
-                      </svg>
-                    </span>
+                    <span class="nav-link-icon"><i class="ti ti-activity-heartbeat"></i></span>
                     <span class="nav-link-title">Status</span>
                   </a>
                 </li>
                 <li class="nav-item {% if active_nav == "config" %}active{% endif %}">
                   <a class="nav-link" href="{{ base_path }}/config">
-                    <span class="nav-link-icon d-md-none d-lg-inline-block">
-                      <svg xmlns="http://www.w3.org/2000/svg" class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7z"></path>
-                        <path d="M19.4 15a7.97 7.97 0 0 0 .1-3l2.1-1.6-2-3.4-2.5 1a8 8 0 0 0-2.6-1.5l-.4-2.7h-4l-.4 2.7a8 8 0 0 0-2.6 1.5l-2.5-1-2 3.4 2.1 1.6a7.97 7.97 0 0 0 .1 3L2.4 16.6l2 3.4 2.5-1a8 8 0 0 0 2.6 1.5l.4 2.7h4l.4-2.7a8 8 0 0 0 2.6-1.5l2.5 1 2-3.4-2.1-1.6z"></path>
-                      </svg>
-                    </span>
-                    <span class="nav-link-title">Config</span>
+                    <span class="nav-link-icon"><i class="ti ti-file-settings"></i></span>
+                    <span class="nav-link-title">Configuration</span>
+                  </a>
+                </li>
+                <li class="nav-item d-none" id="settingsNav">
+                  <a class="nav-link {% if active_nav == "settings" %}active{% endif %}" href="{{ base_path }}/settings">
+                    <span class="nav-link-icon"><i class="ti ti-settings"></i></span>
+                    <span class="nav-link-title">Settings</span>
                   </a>
                 </li>
               </ul>
@@ -111,16 +132,160 @@
           </div>
         </div>
       </header>
+
       <div class="page-wrapper">
         <div class="container-xl">
           {% block header %}{% endblock %}
-          <div class="page-body">
+        </div>
+        <div class="page-body">
+          <div class="container-xl">
             {% block content %}{% endblock %}
           </div>
         </div>
+        <footer class="footer footer-transparent d-print-none">
+          <div class="container-xl">
+            <div class="text-center text-secondary small">
+              ES Copy Runner
+            </div>
+          </div>
+        </footer>
       </div>
     </div>
-    <script src="https://unpkg.com/@tabler/core@1.0.0-beta21/dist/js/tabler.min.js"></script>
+
+    <script src="{{ base_path }}/static/vendor/tabler/js/tabler.min.js"></script>
+    <script>
+      (() => {
+        const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
+
+        function applyTheme(theme) {
+          const dark = theme === "dark"
+            || (theme === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.setAttribute("data-bs-theme", dark ? "dark" : "light");
+        }
+
+        const themeToggle = document.getElementById("theme-toggle");
+        const themeMenu = document.getElementById("theme-menu");
+        const accountToggle = document.getElementById("account-toggle");
+        const accountMenu = document.getElementById("account-menu");
+
+        themeToggle?.addEventListener("click", (event) => {
+          event.preventDefault();
+          const visible = themeMenu.style.display === "block";
+          themeMenu.style.display = visible ? "none" : "block";
+          if (accountMenu) accountMenu.style.display = "none";
+        });
+
+        document.querySelectorAll("[data-theme]").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            const theme = button.dataset.theme || "auto";
+            localStorage.setItem("es-copy-theme", theme);
+            applyTheme(theme);
+            if (themeMenu) themeMenu.style.display = "none";
+          });
+        });
+        applyTheme(localStorage.getItem("es-copy-theme") || "auto");
+
+        accountToggle?.addEventListener("click", (event) => {
+          event.preventDefault();
+          const visible = accountMenu.style.display === "block";
+          accountMenu.style.display = visible ? "none" : "block";
+          if (themeMenu) themeMenu.style.display = "none";
+        });
+
+        document.addEventListener("click", (event) => {
+          if (
+            themeToggle
+            && themeMenu
+            && !themeToggle.contains(event.target)
+            && !themeMenu.contains(event.target)
+          ) {
+            themeMenu.style.display = "none";
+          }
+          if (
+            accountToggle
+            && accountMenu
+            && !accountToggle.contains(event.target)
+            && !accountMenu.contains(event.target)
+          ) {
+            accountMenu.style.display = "none";
+          }
+        });
+
+        window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+          if ((localStorage.getItem("es-copy-theme") || "auto") === "auto") {
+            applyTheme("auto");
+          }
+        });
+
+        const roleRank = { viewer: 1, editor: 2, admin: 3 };
+        window.applyRoleVisibility = function (root = document) {
+          const current = roleRank[window.esCopyAuthRole] || 0;
+          root.querySelectorAll("[data-min-role]").forEach((element) => {
+            const required = roleRank[element.dataset.minRole] || roleRank.admin;
+            element.classList.toggle("d-none", current < required);
+          });
+        };
+
+        fetch(`${basePath}/auth/session`)
+          .then((response) => response.ok ? response.json() : Promise.reject())
+          .then((session) => {
+            const role = String(session.role || "viewer").toLowerCase();
+            window.esCopyAuthRole = role;
+            document.getElementById("account-avatar").textContent =
+              String(session.username || "?").slice(0, 1).toUpperCase();
+            document.getElementById("account-username").textContent = session.username || "-";
+            document.getElementById("account-detail-username").textContent = session.username || "-";
+            document.getElementById("account-role").textContent = role;
+            document.getElementById("account-detail-role").textContent = role;
+            document.getElementById("account-email").textContent = session.email || "";
+            document.getElementById("account-auth-mode").textContent =
+              session.mode === "trusted-proxy" ? "Trusted proxy" : "Local";
+
+            if (session.subject) {
+              document.getElementById("account-subject").textContent = session.subject;
+              document.getElementById("account-subject-row").style.display = "";
+            }
+            if (Array.isArray(session.groups) && session.groups.length) {
+              const groups = document.getElementById("account-groups");
+              groups.replaceChildren(...session.groups.map((group) => {
+                const code = document.createElement("code");
+                code.className = "me-1";
+                code.textContent = group;
+                return code;
+              }));
+              document.getElementById("account-groups-row").style.display = "";
+            }
+            if (Array.isArray(session.headers) && session.headers.length) {
+              const headers = document.getElementById("account-headers");
+              headers.replaceChildren(...session.headers.map((header) => {
+                const row = document.createElement("div");
+                row.className = "dropdown-item-text";
+                const name = document.createElement("div");
+                name.className = "text-secondary small font-monospace";
+                name.textContent = header.name;
+                const value = document.createElement("div");
+                value.className = "small font-monospace text-break";
+                value.textContent = header.value;
+                row.append(name, value);
+                return row;
+              }));
+              document.getElementById("account-headers-section").style.display = "";
+            }
+            if (session.logout_url) {
+              const logout = document.getElementById("logout-link");
+              logout.href = session.logout_url;
+              document.getElementById("logout-item").style.removeProperty("display");
+            }
+            if ((roleRank[role] || 0) >= roleRank.admin) {
+              document.getElementById("settingsNav").classList.remove("d-none");
+            }
+            document.getElementById("account-item").style.removeProperty("display");
+            window.applyRoleVisibility();
+          })
+          .catch(() => {});
+      })();
+    </script>
     {% block scripts %}{% endblock %}
   </body>
 </html>

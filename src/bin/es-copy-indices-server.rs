@@ -6,6 +6,10 @@ mod backup;
 mod conf;
 #[path = "../server.rs"]
 mod server;
+#[path = "../server_auth.rs"]
+mod server_auth;
+#[path = "../server_static.rs"]
+mod server_static;
 
 #[tokio::main]
 async fn main() {
