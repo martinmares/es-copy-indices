@@ -1489,8 +1489,15 @@ impl EsClient {
         index_name_of_copy: &str,
         source_alias_is_write_index: Option<bool>,
     ) -> &Self {
-        if index.is_alias() {
-            let alias_name = index.get_alias_name().unwrap();
+        for (alias_index, alias) in index.get_aliases().iter().enumerate() {
+            let alias_name = alias.get_name();
+            let is_write_index = alias.get_is_write_index().or_else(|| {
+                if index.has_legacy_alias() && alias_index == 0 {
+                    source_alias_is_write_index
+                } else {
+                    None
+                }
+            });
 
             let resp = self
                 .call_get(&format!("/_alias/{}", alias_name), &vec![], &vec![])
@@ -1517,7 +1524,7 @@ impl EsClient {
             debug!("Indices with same alias: {:#?}", indices_with_same_alias);
 
             if !indices_with_same_alias.is_empty() {
-                if index.is_alias_remove_if_exists() {
+                if alias.is_remove_if_exists() {
                     warn!(
                         "Removing alias is enabled by config, refences found {:?}!",
                         indices_with_same_alias
@@ -1538,7 +1545,10 @@ impl EsClient {
                 }
             }
 
-            if indices_with_same_alias.contains(&index_name_of_copy.to_string()) {
+            if indices_with_same_alias.contains(&index_name_of_copy.to_string())
+                && is_write_index.is_none()
+                && !alias.is_remove_if_exists()
+            {
                 debug!(
                     "Alias \"{}\" already points to \"{}\", skipping add action",
                     alias_name, index_name_of_copy
@@ -1548,7 +1558,7 @@ impl EsClient {
                     "Add action \"add\" alias \"{}\" for \"{}\"",
                     alias_name, index_name_of_copy
                 );
-                let action = if let Some(is_write_index) = source_alias_is_write_index {
+                let action = if let Some(is_write_index) = is_write_index {
                     format!(
                         "{{ \"add\": {{ \"index\": \"{}\", \"alias\": \"{}\", \"is_write_index\": {} }} }}",
                         index_name_of_copy, alias_name, is_write_index
@@ -1563,7 +1573,7 @@ impl EsClient {
             }
 
             if actions.is_empty() {
-                return self;
+                continue;
             }
 
             let _ = self

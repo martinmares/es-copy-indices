@@ -36,6 +36,8 @@ pub struct BackupMetadata {
     pub alias_name: Option<String>,
     pub alias_is_write_index: Option<bool>,
     pub alias_remove_if_exists: bool,
+    #[serde(default)]
+    pub aliases: Vec<BackupAlias>,
     pub routing_field: Option<String>,
     pub pre_create_doc_ids: bool,
     pub pre_create_doc_source: String,
@@ -50,6 +52,15 @@ pub struct BackupMetadata {
     pub docs_total: Option<u64>,
     pub quantile_field: Option<String>,
     pub quantile_digest: Option<Vec<QuantileCentroid>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct BackupAlias {
+    pub name: String,
+    #[serde(default)]
+    pub is_write_index: Option<bool>,
+    #[serde(default)]
+    pub remove_if_exists: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -308,6 +319,13 @@ pub fn merge_metadata(existing: BackupMetadata, incoming: BackupMetadata) -> Bac
         200,
     );
 
+    let mut aliases = existing.aliases.clone();
+    for alias in incoming.aliases {
+        if !aliases.iter().any(|existing| existing.name == alias.name) {
+            aliases.push(alias);
+        }
+    }
+
     BackupMetadata {
         created_at: existing.created_at,
         from_endpoint: existing.from_endpoint,
@@ -319,6 +337,7 @@ pub fn merge_metadata(existing: BackupMetadata, incoming: BackupMetadata) -> Bac
             .alias_is_write_index
             .or(incoming.alias_is_write_index),
         alias_remove_if_exists: existing.alias_remove_if_exists,
+        aliases,
         routing_field: existing.routing_field.or(incoming.routing_field),
         pre_create_doc_ids: existing.pre_create_doc_ids,
         pre_create_doc_source: existing.pre_create_doc_source,
@@ -552,7 +571,11 @@ pub fn resolve_index_dir(backup_dir: &Path, index_name: &str) -> Result<PathBuf,
                             .alias_name
                             .as_deref()
                             .map(|name| name == index_name)
-                            .unwrap_or(false);
+                            .unwrap_or(false)
+                        || metadata
+                            .aliases
+                            .iter()
+                            .any(|alias| alias.name == index_name);
                     if matches_name {
                         candidates.push(path.clone());
                     }

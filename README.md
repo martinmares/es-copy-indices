@@ -55,7 +55,11 @@ There is also a server-side Wizard Mode E2E test:
 It starts the web server against the same local ES nodes, creates a Wizard run through
 the HTTP API, verifies generated split TOML configs for `routing_field` and
 `write_existing`, starts the generated split stage, and checks that documents are
-copied into an existing destination write alias.
+copied into an existing destination write alias. It also verifies that overlapping
+source aliases are expanded into a deduplicated set of physical indices, split jobs do
+not copy an index twice, and alias membership plus `is_write_index` are preserved. If
+the Wizard shard count is left on `inherit`, each expanded physical index keeps its
+source `number_of_shards`; an explicit global or per-index Wizard override still wins.
 
 ## Usage
 ```bash
@@ -433,6 +437,18 @@ name_of_copy = "my-index-copy"
 name = "my-index-alias"
 remove_if_exists = true
 
+# Optional alternative for a physical index that belongs to multiple aliases.
+# Do not combine this form with [indices.alias] on the same index.
+# [[indices.aliases]]
+# name = "my-index-alias"
+# remove_if_exists = false
+# is_write_index = true
+#
+# [[indices.aliases]]
+# name = "my-index-active"
+# remove_if_exists = false
+# is_write_index = false
+
 # Optional: custom query/sort/doc_type/mapping
 [indices.custom]
 query = "{ \"match_all\": {} }"
@@ -492,6 +508,11 @@ enabled = true
 - `alias` (object, optional):
   - `name` (string, required): Alias name.
   - `remove_if_exists` (bool, optional, default false): Remove alias from other indices first.
+- `aliases` (array, optional): Multiple alias relationships for one physical index. This is
+  mutually exclusive with `alias`; existing single-alias configurations remain unchanged.
+  - `name` (string, required): Alias name.
+  - `remove_if_exists` (bool, optional, default false): Remove alias from other indices first.
+  - `is_write_index` (bool, optional): Preserve the alias write-index relationship.
 - `delete_if_exists` (bool, optional): Defined in config, not currently used in code.
 
 ### audit

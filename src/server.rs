@@ -560,6 +560,8 @@ struct InputIndex {
     dest_name: Option<String>,
     #[serde(default)]
     alias_name: Option<String>,
+    #[serde(default)]
+    aliases: Vec<InputAlias>,
     #[serde(default = "default_false")]
     use_dest_name_as_is: bool,
     #[serde(default = "default_false")]
@@ -579,12 +581,23 @@ struct InputIndex {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+struct InputAlias {
+    name: String,
+    #[serde(default = "default_false")]
+    use_name_as_is: bool,
+    #[serde(default)]
+    remove_if_exists: Option<bool>,
+    #[serde(default)]
+    is_write_index: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 struct SplitConfig {
     field_name: String,
     number_of_parts: u64,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 struct InputCustom {
     mapping: Option<String>,
 }
@@ -678,6 +691,8 @@ struct OutputIndex {
     pre_create_doc_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     alias: Option<OutputAlias>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    aliases: Vec<OutputAlias>,
     #[serde(skip_serializing_if = "Option::is_none")]
     custom: Option<OutputCustom>,
 }
@@ -686,6 +701,8 @@ struct OutputIndex {
 struct OutputAlias {
     name: String,
     remove_if_exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_write_index: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -1399,6 +1416,7 @@ fn input_index_from_backup_metadata(
             .or(meta.original_number_of_replicas),
         dest_name: None,
         alias_name: None,
+        aliases: Vec::new(),
         use_dest_name_as_is: false,
         use_alias_name_as_is: false,
         alias_enabled: meta.alias_name.is_some(),
@@ -1514,6 +1532,10 @@ fn load_backup_metadata_map(
                 if let Some(alias) = meta.alias_name.as_deref() {
                     map.entry(alias.to_string()).or_insert_with(|| meta.clone());
                 }
+                for alias in &meta.aliases {
+                    map.entry(alias.name.clone())
+                        .or_insert_with(|| meta.clone());
+                }
             }
         }
     }
@@ -1536,6 +1558,10 @@ fn load_backup_metadata_map(
                     }
                     if let Some(alias) = meta.alias_name.as_deref() {
                         map.entry(alias.to_string()).or_insert_with(|| meta.clone());
+                    }
+                    for alias in &meta.aliases {
+                        map.entry(alias.name.clone())
+                            .or_insert_with(|| meta.clone());
                     }
                 }
             }
@@ -1876,6 +1902,222 @@ async fn create_run(
     }
 }
 
+#[derive(Clone, Debug)]
+struct WizardAliasMember {
+    index_name: String,
+    is_write_index: Option<bool>,
+    number_of_shards: Option<u64>,
+}
+
+async fn resolve_wizard_index_shards(
+    state: &Arc<AppState>,
+    endpoint: &EndpointConfig,
+    resource_name: &str,
+) -> Result<HashMap<String, u64>, String> {
+    let mut url = reqwest::Url::parse(&endpoint.url)
+        .map_err(|error| format!("Invalid source endpoint URL: {error}"))?;
+    url.path_segments_mut()
+        .map_err(|_| "Source endpoint URL cannot be used as a base URL".to_string())?
+        .extend([resource_name, "_settings"]);
+    url.query_pairs_mut()
+        .append_pair("filter_path", "*.settings.index.number_of_shards");
+
+    let mut request = state.client.get(url).timeout(Duration::from_secs(30));
+    if let Some(auth) = &endpoint.auth {
+        request = request.basic_auth(auth.username.clone(), auth.password.clone());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("Failed to read settings for '{resource_name}': {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to read settings for '{}': {}",
+            resource_name,
+            response.status()
+        ));
+    }
+
+    let value = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| format!("Failed to parse settings for '{resource_name}': {error}"))?;
+    let Some(indices) = value.as_object() else {
+        return Err(format!(
+            "Unexpected settings response for '{resource_name}'"
+        ));
+    };
+    Ok(indices
+        .iter()
+        .filter_map(|(index_name, index_value)| {
+            let value = index_value
+                .pointer("/settings/index/number_of_shards")?
+                .as_str()?
+                .parse::<u64>()
+                .ok()?;
+            Some((index_name.clone(), value))
+        })
+        .collect())
+}
+
+async fn resolve_wizard_alias_members(
+    state: &Arc<AppState>,
+    endpoint: &EndpointConfig,
+    alias_name: &str,
+) -> Result<Option<Vec<WizardAliasMember>>, String> {
+    let mut url = reqwest::Url::parse(&endpoint.url)
+        .map_err(|error| format!("Invalid source endpoint URL: {error}"))?;
+    url.path_segments_mut()
+        .map_err(|_| "Source endpoint URL cannot be used as a base URL".to_string())?
+        .extend(["_alias", alias_name]);
+
+    let mut request = state.client.get(url).timeout(Duration::from_secs(30));
+    if let Some(auth) = &endpoint.auth {
+        request = request.basic_auth(auth.username.clone(), auth.password.clone());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("Failed to resolve alias '{alias_name}': {error}"))?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to resolve alias '{}': {}",
+            alias_name,
+            response.status()
+        ));
+    }
+
+    let value = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| format!("Failed to parse alias '{alias_name}': {error}"))?;
+    let Some(indices) = value.as_object() else {
+        return Err(format!("Unexpected alias response for '{alias_name}'"));
+    };
+    let mut members = indices
+        .iter()
+        .filter_map(|(index_name, index_value)| {
+            let alias = index_value.get("aliases")?.get(alias_name)?;
+            Some(WizardAliasMember {
+                index_name: index_name.clone(),
+                is_write_index: alias
+                    .get("is_write_index")
+                    .and_then(|value| value.as_bool()),
+                number_of_shards: None,
+            })
+        })
+        .collect::<Vec<_>>();
+    members.sort_by(|left, right| left.index_name.cmp(&right.index_name));
+    if members.is_empty() {
+        Ok(None)
+    } else {
+        let shard_counts = resolve_wizard_index_shards(state, endpoint, alias_name).await?;
+        for member in &mut members {
+            member.number_of_shards = Some(
+                shard_counts
+                    .get(&member.index_name)
+                    .copied()
+                    .ok_or_else(|| {
+                        format!(
+                            "Settings response for alias '{}' is missing number_of_shards for index '{}'",
+                            alias_name, member.index_name
+                        )
+                    })?,
+            );
+        }
+        Ok(Some(members))
+    }
+}
+
+fn wizard_expanded_destination_name(
+    source_index_name: &str,
+    source_alias_name: &str,
+    destination_alias_name: &str,
+    source_prefix: &str,
+    destination_prefix: &str,
+) -> String {
+    if let Some(remainder) = source_index_name.strip_prefix(source_alias_name) {
+        return format!("{}{}", destination_alias_name, remainder);
+    }
+    if source_prefix == destination_prefix {
+        return source_index_name.to_string();
+    }
+    if source_prefix.is_empty() {
+        return format!("{}{}", destination_prefix, source_index_name);
+    }
+    if let Some(remainder) = source_index_name.strip_prefix(source_prefix) {
+        return format!("{}{}", destination_prefix, remainder);
+    }
+    source_index_name.to_string()
+}
+
+fn wizard_copy_settings_match(left: &InputIndex, right: &InputIndex) -> bool {
+    left.buffer_size == right.buffer_size
+        && left.copy_content == right.copy_content
+        && left.copy_mapping == right.copy_mapping
+        && left.delete_if_exists == right.delete_if_exists
+        && left.routing_field == right.routing_field
+        && left.number_of_shards == right.number_of_shards
+        && left.number_of_replicas == right.number_of_replicas
+        && left.alias_remove_if_exists == right.alias_remove_if_exists
+        && left.split == right.split
+        && left.custom == right.custom
+}
+
+fn merge_wizard_expanded_index(
+    indices: &mut Vec<InputIndex>,
+    positions: &mut HashMap<String, usize>,
+    incoming: InputIndex,
+) -> Result<(), String> {
+    if let Some(position) = positions.get(&incoming.name).copied() {
+        let existing = &mut indices[position];
+        if existing.alias_enabled || incoming.alias_enabled {
+            return Err(format!(
+                "Source index '{}' was selected both directly and through an alias; select only one form",
+                incoming.name
+            ));
+        }
+        if existing.dest_name != incoming.dest_name {
+            return Err(format!(
+                "Selected aliases map source index '{}' to conflicting destinations '{}' and '{}'",
+                incoming.name,
+                existing.dest_name.as_deref().unwrap_or(""),
+                incoming.dest_name.as_deref().unwrap_or("")
+            ));
+        }
+        if !wizard_copy_settings_match(existing, &incoming) {
+            return Err(format!(
+                "Selected aliases use conflicting copy or split settings for source index '{}'",
+                incoming.name
+            ));
+        }
+        for alias in incoming.aliases {
+            if let Some(existing_alias) = existing
+                .aliases
+                .iter()
+                .find(|candidate| candidate.name == alias.name)
+            {
+                if existing_alias.is_write_index != alias.is_write_index {
+                    return Err(format!(
+                        "Alias '{}' has conflicting write-index metadata for source index '{}'",
+                        alias.name, incoming.name
+                    ));
+                }
+            } else {
+                existing.aliases.push(alias);
+            }
+        }
+        return Ok(());
+    }
+
+    positions.insert(incoming.name.clone(), indices.len());
+    indices.push(incoming);
+    Ok(())
+}
+
 async fn create_run_wizard(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<WizardRunRequest>,
@@ -1897,6 +2139,7 @@ async fn create_run_wizard(
     let defaults = payload.defaults.clone();
 
     let mut indices = Vec::new();
+    let mut expanded_positions = HashMap::new();
     for item in &payload.items {
         if item.source_name.trim().is_empty() || item.dest_base_name.trim().is_empty() {
             return (StatusCode::BAD_REQUEST, "Missing index name").into_response();
@@ -1982,7 +2225,8 @@ async fn create_run_wizard(
             number_of_shards,
             number_of_replicas,
             dest_name: Some(item.dest_base_name.clone()),
-            alias_name: alias_base,
+            alias_name: alias_base.clone(),
+            aliases: Vec::new(),
             use_dest_name_as_is: true,
             use_alias_name_as_is: alias_enabled,
             alias_enabled,
@@ -1993,7 +2237,85 @@ async fn create_run_wizard(
             split,
             custom: None,
         };
-        indices.push(index);
+        let alias_members = if write_existing {
+            None
+        } else {
+            match resolve_wizard_alias_members(&state, &src_endpoint, item.source_name.as_str())
+                .await
+            {
+                Ok(value) => value,
+                Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+            }
+        };
+
+        if let Some(alias_members) = alias_members {
+            for member in alias_members {
+                let mut expanded = index.clone();
+                expanded.name = member.index_name.clone();
+                expanded.dest_name = Some(wizard_expanded_destination_name(
+                    &member.index_name,
+                    &item.source_name,
+                    &item.dest_base_name,
+                    &src_endpoint.prefix,
+                    &dst_endpoint.prefix,
+                ));
+                if expanded.number_of_shards.is_none() {
+                    expanded.number_of_shards = member.number_of_shards;
+                }
+                expanded.alias_name = None;
+                expanded.alias_enabled = false;
+                expanded.aliases = alias_base
+                    .as_ref()
+                    .map(|alias_name| {
+                        vec![InputAlias {
+                            name: alias_name.clone(),
+                            use_name_as_is: true,
+                            remove_if_exists: Some(alias_remove_if_exists),
+                            is_write_index: member.is_write_index,
+                        }]
+                    })
+                    .unwrap_or_default();
+                if let Err(error) =
+                    merge_wizard_expanded_index(&mut indices, &mut expanded_positions, expanded)
+                {
+                    return (StatusCode::BAD_REQUEST, error).into_response();
+                }
+            }
+        } else {
+            let mut index = index;
+            if index.number_of_shards.is_none() {
+                let shard_counts = match resolve_wizard_index_shards(
+                    &state,
+                    &src_endpoint,
+                    item.source_name.as_str(),
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+                };
+                let Some(number_of_shards) = shard_counts
+                    .get(item.source_name.as_str())
+                    .copied()
+                    .or_else(|| shard_counts.values().next().copied())
+                else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Settings response for index '{}' is missing number_of_shards",
+                            item.source_name
+                        ),
+                    )
+                        .into_response();
+                };
+                index.number_of_shards = Some(number_of_shards);
+            }
+            if let Err(error) =
+                merge_wizard_expanded_index(&mut indices, &mut expanded_positions, index)
+            {
+                return (StatusCode::BAD_REQUEST, error).into_response();
+            }
+        }
     }
 
     let mut wizard_tenants = src_endpoint.tenants.clone();
@@ -5572,6 +5894,22 @@ fn build_output_config(
     } else {
         build_alias_name(dst_prefix, alias_base_name, alias_suffix)
     };
+    let mut output_aliases = job
+        .index
+        .aliases
+        .iter()
+        .map(|alias| OutputAlias {
+            name: if alias.use_name_as_is {
+                alias.name.clone()
+            } else {
+                build_alias_name(dst_prefix, &alias.name, alias_suffix)
+            },
+            remove_if_exists: alias
+                .remove_if_exists
+                .unwrap_or(state.alias_remove_if_exists),
+            is_write_index: alias.is_write_index,
+        })
+        .collect::<Vec<_>>();
 
     let mut custom_mapping = job.index.custom.as_ref().and_then(|c| c.mapping.clone());
     if custom_mapping.as_deref().unwrap_or("").is_empty() {
@@ -5670,6 +6008,17 @@ fn build_output_config(
         .index
         .alias_remove_if_exists
         .unwrap_or(state.alias_remove_if_exists);
+    let legacy_alias = if job.index.alias_enabled {
+        Some(OutputAlias {
+            name: alias_name,
+            remove_if_exists: alias_remove_if_exists,
+            is_write_index: None,
+        })
+    } else if output_aliases.len() == 1 {
+        output_aliases.pop()
+    } else {
+        None
+    };
     let index = OutputIndex {
         buffer_size: job.index.buffer_size,
         copy_content: job.index.copy_content,
@@ -5685,14 +6034,8 @@ fn build_output_config(
         backup_quantile_field,
         routing_field,
         pre_create_doc_source,
-        alias: if job.index.alias_enabled {
-            Some(OutputAlias {
-                name: alias_name,
-                remove_if_exists: alias_remove_if_exists,
-            })
-        } else {
-            None
-        },
+        alias: legacy_alias,
+        aliases: output_aliases,
         custom: if has_custom {
             Some(OutputCustom {
                 query: custom_query,

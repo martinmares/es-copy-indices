@@ -102,6 +102,8 @@ pub struct Index {
     delete_if_exists: bool,
     #[serde(default)]
     alias: Option<Alias>,
+    #[serde(default)]
+    aliases: Vec<Alias>,
     #[serde(default = "default_shards")]
     #[serde_as(as = "PickFirst<(_, DisplayFromStr)>")]
     number_of_shards: u64,
@@ -117,6 +119,8 @@ pub struct Alias {
     name: String,
     #[serde(default)]
     remove_if_exists: bool,
+    #[serde(default)]
+    is_write_index: Option<bool>,
 }
 
 impl Default for Alias {
@@ -124,6 +128,7 @@ impl Default for Alias {
         Self {
             name: String::default(),
             remove_if_exists: false,
+            is_write_index: None,
         }
     }
 }
@@ -239,25 +244,29 @@ impl Index {
         &self.name_of_copy
     }
     pub fn get_alias_name(&self) -> Option<String> {
-        if let Some(alias) = &self.alias {
-            Some(alias.name.clone())
-        } else {
-            None
-        }
+        self.get_aliases().first().map(|alias| alias.name.clone())
+    }
+    pub fn get_aliases(&self) -> Vec<&Alias> {
+        self.alias
+            .iter()
+            .chain(self.aliases.iter())
+            .filter(|alias| !alias.name.is_empty())
+            .collect()
+    }
+    pub fn has_legacy_and_multiple_aliases(&self) -> bool {
+        self.alias.is_some() && !self.aliases.is_empty()
+    }
+    pub fn has_legacy_alias(&self) -> bool {
+        self.alias.is_some()
     }
     pub fn is_alias(&self) -> bool {
-        if let Some(alias) = &self.alias {
-            !alias.name.is_empty()
-        } else {
-            false
-        }
+        !self.get_aliases().is_empty()
     }
     pub fn is_alias_remove_if_exists(&self) -> bool {
-        if let Some(alias) = &self.alias {
-            alias.remove_if_exists
-        } else {
-            false
-        }
+        self.get_aliases()
+            .first()
+            .map(|alias| alias.remove_if_exists)
+            .unwrap_or(false)
     }
     pub fn get_number_of_shards(&self) -> u64 {
         *&self.number_of_shards
@@ -345,6 +354,20 @@ impl Index {
     }
 }
 
+impl Alias {
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn is_remove_if_exists(&self) -> bool {
+        self.remove_if_exists
+    }
+
+    pub fn get_is_write_index(&self) -> Option<bool> {
+        self.is_write_index
+    }
+}
+
 impl Custom {
     pub fn get_query(&self) -> &Option<String> {
         &self.query
@@ -357,5 +380,60 @@ impl Custom {
     }
     pub fn get_mapping(&self) -> &Option<String> {
         &self.mapping
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    const INDEX_BASE: &str = r#"
+[[endpoints]]
+name = "source"
+url = "http://localhost:9200"
+
+[[endpoints]]
+name = "destination"
+url = "http://localhost:9201"
+
+[[indices]]
+from = "source"
+to = "destination"
+name = "orders-000001"
+name_of_copy = "orders-000001"
+buffer_size = 500
+copy_mapping = true
+copy_content = true
+"#;
+
+    #[test]
+    fn parses_legacy_single_alias_config() {
+        let config: Config = toml::from_str(&format!(
+            "{}\n[indices.alias]\nname = \"orders\"\nremove_if_exists = false\n",
+            INDEX_BASE
+        ))
+        .expect("legacy alias config must remain valid");
+
+        let index = &config.indices[0];
+        let aliases = index.get_aliases();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].get_name(), "orders");
+        assert_eq!(aliases[0].get_is_write_index(), None);
+    }
+
+    #[test]
+    fn parses_multiple_alias_config_with_write_indices() {
+        let config: Config = toml::from_str(&format!(
+            "{}\n[[indices.aliases]]\nname = \"orders\"\nis_write_index = true\n\n[[indices.aliases]]\nname = \"orders-active\"\nis_write_index = false\n",
+            INDEX_BASE
+        ))
+        .expect("multiple aliases config must be valid");
+
+        let aliases = config.indices[0].get_aliases();
+        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases[0].get_name(), "orders");
+        assert_eq!(aliases[0].get_is_write_index(), Some(true));
+        assert_eq!(aliases[1].get_name(), "orders-active");
+        assert_eq!(aliases[1].get_is_write_index(), Some(false));
     }
 }

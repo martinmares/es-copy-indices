@@ -383,6 +383,15 @@ async fn main() {
             panic!("Invalid endpoint configuration!");
         }
     }
+    for index in config.get_indices() {
+        if index.has_legacy_and_multiple_aliases() {
+            error!(
+                "Invalid index configuration for '{}': use either [indices.alias] or [[indices.aliases]], not both",
+                index.get_name()
+            );
+            panic!("Invalid index alias configuration!");
+        }
+    }
 
     let backup_run_tag = format!(
         "{}-{:06}",
@@ -557,15 +566,35 @@ async fn main() {
                     .await
                     .expect("Failed to fetch settings");
 
+                let metadata_aliases = index
+                    .get_aliases()
+                    .iter()
+                    .enumerate()
+                    .map(|(alias_index, alias)| backup::BackupAlias {
+                        name: alias.get_name().to_string(),
+                        is_write_index: alias.get_is_write_index().or_else(|| {
+                            if index.has_legacy_alias() && alias_index == 0 {
+                                alias_write_indices.get(index_name).copied()
+                            } else {
+                                None
+                            }
+                        }),
+                        remove_if_exists: alias.is_remove_if_exists(),
+                    })
+                    .collect::<Vec<_>>();
+                let primary_alias = metadata_aliases.first();
                 let mut metadata = BackupMetadata {
                     created_at: Utc::now().to_rfc3339(),
                     from_endpoint: from.to_string(),
                     to_endpoint: to.to_string(),
                     index_name: index_name.to_string(),
                     name_of_copy: index.get_name_of_copy().clone(),
-                    alias_name: index.get_alias_name(),
-                    alias_is_write_index: alias_write_indices.get(index_name).copied(),
-                    alias_remove_if_exists: index.is_alias_remove_if_exists(),
+                    alias_name: primary_alias.map(|alias| alias.name.clone()),
+                    alias_is_write_index: primary_alias.and_then(|alias| alias.is_write_index),
+                    alias_remove_if_exists: primary_alias
+                        .map(|alias| alias.remove_if_exists)
+                        .unwrap_or(false),
+                    aliases: metadata_aliases,
                     routing_field: index.get_routing_field().clone(),
                     pre_create_doc_ids: index.is_pre_create_doc_ids(),
                     pre_create_doc_source: index.get_pre_create_doc_source().to_string(),
