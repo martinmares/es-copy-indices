@@ -1,6 +1,6 @@
 [package]
 name = "es-copy-indices"
-version = "1.16.2"
+version = "1.16.7"
 edition = "2024"
 license = "MIT"
 

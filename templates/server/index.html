@@ -21,6 +21,11 @@
     .sparkline .uplot {
       font-family: inherit;
     }
+    .wizard-auto-detected {
+      border-color: var(--tblr-warning) !important;
+      background-color: rgba(245, 159, 0, 0.08) !important;
+      box-shadow: 0 0 0 0.15rem rgba(245, 159, 0, 0.2);
+    }
   </style>
 {% endblock %}
 
@@ -719,6 +724,7 @@
         </div>
         <div class="modal-body">
           <div class="text-secondary small">Applies rename rules and optional overrides to the selected items.</div>
+          <div class="alert alert-info mt-3 d-none" id="bulkMappingDetection" role="status"></div>
           <div class="row g-3 mt-2">
             <div class="col-md-3">
               <label class="form-label">Regex pattern</label>
@@ -784,7 +790,9 @@
                 </div>
                 <div class="col-md-3">
                   <label class="form-label">Split field</label>
-                  <input class="form-control" type="text" placeholder="inherit" id="bulkOverrideSplitField">
+                  <select class="form-select" id="bulkOverrideSplitField">
+                    <option value="">No split</option>
+                  </select>
                 </div>
                 <div class="col-md-3">
                   <label class="form-label">Split parts</label>
@@ -1144,6 +1152,7 @@
     const bulkOverrideWriteExisting = document.getElementById("bulkOverrideWriteExisting");
     const bulkAddError = document.getElementById("bulkAddError");
     const bulkPreviewTable = document.getElementById("bulkPreviewTable");
+    const bulkMappingDetection = document.getElementById("bulkMappingDetection");
     const editModal = document.getElementById("wizardEditModal");
     const editClose = document.getElementById("wizardEditClose");
     const editCancel = document.getElementById("wizardEditCancel");
@@ -2236,6 +2245,74 @@
       }
     }
 
+    function setWizardDetectionHighlight(element, enabled) {
+      if (!element) return;
+      element.classList.toggle("wizard-auto-detected", enabled);
+    }
+
+    function updateBulkSplitPartsState() {
+      if (!bulkOverrideSplitParts || !bulkOverrideSplitField) return;
+      const enabled = Boolean(bulkOverrideSplitField.value);
+      bulkOverrideSplitParts.disabled = !enabled;
+      if (!enabled) bulkOverrideSplitParts.value = "";
+    }
+
+    async function detectWizardMapping(selectedSources) {
+      const sources = selectedSources.filter((source) => source.kind === "index" || source.kind === "alias");
+      if (!sources.length || !bulkMappingDetection) return;
+      bulkMappingDetection.textContent = "Checking the selected mapping for parent/child relations…";
+      bulkMappingDetection.classList.remove("d-none");
+      const results = await Promise.all(sources.map(async (source) => {
+        const params = new URLSearchParams({
+          src_endpoint_id: srcEndpointSelect.value,
+          resource: source.name,
+        });
+        const response = await fetch(`${basePath}/wizard/mapping?${params}`);
+        if (!response.ok) throw new Error(await response.text() || "Failed to inspect mapping");
+        return response.json();
+      }));
+      const routings = [...new Set(results.map((result) => result.routing_field).filter(Boolean))];
+      const splitFields = [...new Set(results.flatMap((result) => Array.isArray(result.split_fields) ? result.split_fields : []))];
+      const messages = [];
+      const hasJoinRelation = routings.length === 1;
+      if (hasJoinRelation) {
+        if (!bulkOverrideRoutingField.value.trim()) {
+          bulkOverrideRoutingField.value = routings[0];
+        }
+        setWizardDetectionHighlight(bulkOverrideRoutingField, true);
+        bulkOverrideSplitField.value = "";
+        bulkOverrideSplitParts.value = "";
+        setWizardDetectionHighlight(bulkOverrideSplitField, true);
+        setWizardDetectionHighlight(bulkOverrideSplitParts, true);
+        messages.push(`Parent/child relation detected — Routing field was filled automatically: ${routings[0]}. Split is disabled by default; review Split field and Split parts if needed.`);
+      } else if (routings.length > 1) {
+        messages.push("Multiple different parent/child relations were detected; please set Routing field manually.");
+      }
+      if (splitFields.length) {
+        setWizardDetectionHighlight(bulkOverrideSplitParts, true);
+        splitFields.forEach((field) => {
+          const option = document.createElement("option");
+          option.value = field;
+          option.textContent = field;
+          bulkOverrideSplitField?.appendChild(option);
+        });
+        if (!hasJoinRelation) {
+          messages.push("Date fields are available for Split field. Select one and then choose Split parts if splitting is needed.");
+        }
+      }
+      if (!messages.length) {
+        bulkMappingDetection.textContent = "No parent/child relation or date field was detected in the selected mapping.";
+        bulkMappingDetection.classList.remove("alert-info");
+        bulkMappingDetection.classList.add("alert-secondary");
+      } else {
+        bulkMappingDetection.textContent = messages.join(" ");
+        bulkMappingDetection.classList.remove("alert-secondary");
+        bulkMappingDetection.classList.add("alert-info");
+      }
+      updateBulkSplitPartsState();
+      renderBulkPreview();
+    }
+
     function openBulkModal(selectedSources) {
       wizardState.bulkSources = selectedSources;
       bulkRenamePattern.value = renamePattern.value;
@@ -2254,6 +2331,14 @@
       bulkOverrideRoutingField.value = "";
       bulkOverrideSplitField.value = "";
       bulkOverrideSplitParts.value = "";
+      bulkOverrideSplitField.querySelectorAll("option:not(:first-child)").forEach((option) => option.remove());
+      updateBulkSplitPartsState();
+      setWizardDetectionHighlight(bulkOverrideRoutingField, false);
+      setWizardDetectionHighlight(bulkOverrideSplitField, false);
+      setWizardDetectionHighlight(bulkOverrideSplitParts, false);
+      bulkMappingDetection?.classList.add("d-none");
+      bulkMappingDetection?.classList.remove("alert-secondary", "alert-warning");
+      bulkMappingDetection?.classList.add("alert-info");
       bulkOverrideAliasRemove.value = "inherit";
       bulkOverrideCopyContent.value = "inherit";
       bulkOverrideCopyMapping.value = "inherit";
@@ -2262,6 +2347,12 @@
       bulkOverrideWriteExisting.value = "inherit";
       renderBulkPreview();
       showAppModal(bulkModal);
+      detectWizardMapping(selectedSources).catch((error) => {
+        if (!bulkMappingDetection) return;
+        bulkMappingDetection.textContent = `Mapping autodetection failed: ${error instanceof Error ? error.message : "unknown error"}`;
+        bulkMappingDetection.classList.remove("d-none", "alert-info");
+        bulkMappingDetection.classList.add("alert-warning");
+      });
     }
 
     function closeBulkModal() {
@@ -2302,6 +2393,10 @@
      bulkOverrideCopyContent, bulkOverrideCopyMapping, bulkOverrideDelete, bulkOverrideAliasEnabled,
      bulkOverrideWriteExisting]
       .forEach((el) => el?.addEventListener("input", renderBulkPreview));
+    bulkOverrideSplitField?.addEventListener("change", () => {
+      updateBulkSplitPartsState();
+      renderBulkPreview();
+    });
     bulkAliasEnabled?.addEventListener("change", () => {
       applyBulkAliasToggle(bulkAliasEnabled.checked);
       renderBulkPreview();

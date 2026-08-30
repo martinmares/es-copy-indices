@@ -1148,6 +1148,7 @@ pub async fn run() {
         .route("/dashboard", get(index))
         .route("/runs", get(index))
         .route("/wizard/sources", get(wizard_sources))
+        .route("/wizard/mapping", get(wizard_mapping))
         .route("/jobs", get(jobs_view))
         .route("/config", get(config_view))
         .route("/status", get(status_view))
@@ -1733,6 +1734,12 @@ struct WizardSourcesQuery {
     pattern: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct WizardMappingQuery {
+    src_endpoint_id: String,
+    resource: String,
+}
+
 #[derive(Serialize)]
 struct WizardSourceItem {
     name: String,
@@ -1740,6 +1747,12 @@ struct WizardSourceItem {
     docs: Option<u64>,
     size: Option<String>,
     indices: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct WizardMappingResponse {
+    routing_field: Option<String>,
+    split_fields: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -2492,6 +2505,127 @@ async fn wizard_sources(
     Json(items).into_response()
 }
 
+async fn wizard_mapping(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<WizardMappingQuery>,
+) -> impl IntoResponse {
+    let Some(endpoint) = endpoint_by_id(&state, &query.src_endpoint_id) else {
+        return (StatusCode::BAD_REQUEST, "Unknown source endpoint").into_response();
+    };
+    let mut url = match reqwest::Url::parse(&endpoint.url) {
+        Ok(url) => url,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid source endpoint URL: {error}"),
+            )
+                .into_response();
+        }
+    };
+    if url
+        .path_segments_mut()
+        .map_err(|_| "Source endpoint URL cannot be used as a base URL")
+        .and_then(|mut segments| {
+            segments.extend([query.resource.as_str(), "_mapping"]);
+            Ok(())
+        })
+        .is_err()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Source endpoint URL cannot be used as a base URL",
+        )
+            .into_response();
+    }
+    let mut request = state.client.get(url).timeout(Duration::from_secs(30));
+    if let Some(auth) = &endpoint.auth {
+        request = request.basic_auth(auth.username.clone(), auth.password.clone());
+    }
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to read mapping: {error}"),
+            )
+                .into_response();
+        }
+    };
+    if !response.status().is_success() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to read mapping: {}", response.status()),
+        )
+            .into_response();
+    }
+    let value = match response.json::<serde_json::Value>().await {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to parse mapping response: {error}"),
+            )
+                .into_response();
+        }
+    };
+    let mut routing_field = None;
+    let mut split_fields = Vec::new();
+    if let Some(index_mappings) = value.as_object() {
+        for index_mapping in index_mappings.values() {
+            let mapping = index_mapping.get("mappings").unwrap_or(index_mapping);
+            inspect_wizard_mapping(mapping, "", &mut routing_field, &mut split_fields);
+        }
+    } else {
+        inspect_wizard_mapping(&value, "", &mut routing_field, &mut split_fields);
+    }
+    split_fields.sort();
+    split_fields.dedup();
+    Json(WizardMappingResponse {
+        routing_field,
+        split_fields,
+    })
+    .into_response()
+}
+
+fn inspect_wizard_mapping(
+    value: &serde_json::Value,
+    path: &str,
+    routing_field: &mut Option<String>,
+    split_fields: &mut Vec<String>,
+) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    if object.get("type").and_then(|value| value.as_str()) == Some("date") && !path.is_empty() {
+        split_fields.push(path.to_string());
+    }
+    if object.get("type").and_then(|value| value.as_str()) == Some("join")
+        && routing_field.is_none()
+    {
+        if object
+            .get("relations")
+            .and_then(|value| value.as_object())
+            .and_then(|relations| relations.keys().next())
+            .is_some()
+        {
+            // The relation name (for example `Ticket`) is a logical join type,
+            // not the JSON property carrying the parent document id. Child
+            // documents store that id in the conventional `parent` member.
+            *routing_field = Some(format!("/{path}/parent"));
+        }
+    }
+    if let Some(properties) = object.get("properties").and_then(|value| value.as_object()) {
+        for (name, property) in properties {
+            let child_path = if path.is_empty() {
+                name.to_string()
+            } else {
+                format!("{path}/{name}")
+            };
+            inspect_wizard_mapping(property, &child_path, routing_field, split_fields);
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct CatIndexRow {
     index: String,
@@ -2526,13 +2660,42 @@ async fn fetch_cat_indices(
         .send()
         .await
         .map_err(|e| format!("Failed to list indices: {e}"))?;
-    if !response.status().is_success() {
+    let rows = if response.status().is_success() {
+        response
+            .json::<Vec<CatIndexRow>>()
+            .await
+            .map_err(|e| format!("Failed to parse indices response: {e}"))?
+    } else if response.status() == StatusCode::BAD_REQUEST {
+        // Older ES versions and some proxies reject the wildcard query parameter.
+        // Fetch the complete CAT response and apply the wildcard locally instead.
+        let mut fallback = state
+            .client
+            .get(&url)
+            .query(&[("format", "json"), ("h", "index,docs.count,store.size")]);
+        if let Some(auth) = &endpoint.auth {
+            fallback = fallback.basic_auth(auth.username.clone(), auth.password.clone());
+        }
+        let fallback_response = fallback
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to list indices: {e}"))?;
+        if !fallback_response.status().is_success() {
+            return Err(format!(
+                "Failed to list indices: {}",
+                fallback_response.status()
+            ));
+        }
+        fallback_response
+            .json::<Vec<CatIndexRow>>()
+            .await
+            .map_err(|e| format!("Failed to parse indices response: {e}"))?
+            .into_iter()
+            .filter(|row| wildcard_match(&row.index, pattern))
+            .collect()
+    } else {
         return Err(format!("Failed to list indices: {}", response.status()));
-    }
-    let rows = response
-        .json::<Vec<CatIndexRow>>()
-        .await
-        .map_err(|e| format!("Failed to parse indices response: {e}"))?;
+    };
     let items = rows
         .into_iter()
         .map(|row| WizardSourceItem {
@@ -2572,7 +2735,7 @@ async fn fetch_cat_aliases(
             .json::<Vec<CatAliasRow>>()
             .await
             .map_err(|e| format!("Failed to parse aliases response: {e}"))?
-    } else if response.status() == StatusCode::BAD_REQUEST && pattern != "*" {
+    } else if response.status() == StatusCode::BAD_REQUEST {
         // Some ES versions reject the name filter for _cat/aliases; fallback to client-side filtering.
         let mut fallback = state
             .client
@@ -6567,10 +6730,11 @@ fn with_base(state: &AppState, path: &str) -> String {
 mod tests {
     use super::{
         PageQuery, RunMode, RunSummary, ServerArgs, bind_is_loopback, format_bytes,
-        normalize_base_path, normalize_endpoint_url, normalize_logout_url, paginate,
-        process_cpu_as_host_percent, run_matches_query, validate_auth_group_names,
+        inspect_wizard_mapping, normalize_base_path, normalize_endpoint_url, normalize_logout_url,
+        paginate, process_cpu_as_host_percent, run_matches_query, validate_auth_group_names,
     };
     use clap::Parser;
+    use serde_json::json;
 
     #[test]
     fn endpoint_url_without_trailing_slash_is_unchanged() {
@@ -6707,5 +6871,23 @@ mod tests {
         let mut wrong_mode = matching;
         wrong_mode.mode = Some("backup".to_string());
         assert!(!run_matches_query(&run, &wrong_mode));
+    }
+
+    #[test]
+    fn wizard_mapping_parser_detects_join_and_date_fields() {
+        let mapping = json!({
+            "properties": {
+                "joinField": {
+                    "type": "join",
+                    "relations": { "Ticket": ["RelatedEntity"] }
+                },
+                "whenInserted": { "type": "date" }
+            }
+        });
+        let mut routing = None;
+        let mut split_fields = Vec::new();
+        inspect_wizard_mapping(&mapping, "", &mut routing, &mut split_fields);
+        assert_eq!(routing.as_deref(), Some("/joinField/parent"));
+        assert_eq!(split_fields, vec!["whenInserted"]);
     }
 }
