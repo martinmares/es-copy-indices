@@ -3,7 +3,8 @@
 {% block title %}Status · ES Copy Runner{% endblock %}
 
 {% block head_extra %}
-  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
+  <link rel="stylesheet" href="{{ base_path }}/static/vendor/uplot/uPlot.min.css">
+  <script src="{{ base_path }}/static/vendor/uplot/uPlot.iife.min.js"></script>
 {% endblock %}
 
 {% block styles %}
@@ -13,6 +14,13 @@
       height: 240px;
       background: var(--tblr-body-bg, #0b0f14);
       border-radius: 6px;
+    }
+    .chart .uplot {
+      font-family: inherit;
+    }
+    .chart-help {
+      color: var(--tblr-secondary-color);
+      font-size: 0.75rem;
     }
     .chart-legend {
       display: flex;
@@ -40,6 +48,7 @@
         <div class="page-pretitle">System</div>
         <h2 class="page-title">Status</h2>
         <div class="text-secondary">CPU is percent of total host capacity. Load is runnable/blocked tasks (compare to CPU core count).</div>
+        <div class="chart-help mt-1">Drag horizontally inside a chart to zoom. Double-click or use Resume live to reset.</div>
       </div>
       <div class="col-auto">
         <div class="d-flex align-items-center gap-2">
@@ -246,9 +255,10 @@
     const jobLimit = document.getElementById("jobLimit");
     const loadAvg = document.getElementById("loadAvg");
     const charts = {};
+    const chartResizeObservers = {};
+    const chartEventCleanups = [];
     let paused = false;
     let samples = [];
-    let chartsReady = null;
     let disposed = false;
 
     function bytesToMiB(bytes) {
@@ -267,58 +277,127 @@
       return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
     }
 
-    function chartSeries() {
-      const cpuSeries = [
-        { name: "Server", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.proc_cpu })) },
-        { name: "Children", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.children_cpu })) },
-        { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.total_cpu })) },
+    function formatChartTime(timestamp, includeSeconds = false) {
+      const date = new Date(timestamp * 1000);
+      const hours = String(date.getHours()).padStart(2, "0");
+      const minutes = String(date.getMinutes()).padStart(2, "0");
+      if (!includeSeconds) return `${hours}:${minutes}`;
+      return `${hours}:${minutes}:${String(date.getSeconds()).padStart(2, "0")}`;
+    }
+
+    const chartDefinitions = {
+      cpu: {
+        elementId: "cpuChart",
+        series: [
+          { label: "Server", stroke: "#4dabf7", value: (sample) => sample.proc_cpu },
+          { label: "Children", stroke: "#ffd43b", value: (sample) => sample.children_cpu },
+          { label: "Total", stroke: "#69db7c", value: (sample) => sample.total_cpu },
+        ],
+      },
+      cpuTotal: {
+        elementId: "cpuTotalChart",
+        series: [
+          { label: "Host", stroke: "#4dabf7", value: (sample) => sample.host_cpu },
+          { label: "Total", stroke: "#69db7c", value: (sample) => sample.total_cpu },
+        ],
+      },
+      mem: {
+        elementId: "memChart",
+        series: [
+          { label: "Server", stroke: "#4dabf7", value: (sample) => bytesToMiB(sample.proc_mem_bytes) },
+          { label: "Children", stroke: "#ffd43b", value: (sample) => bytesToMiB(sample.children_mem_bytes) },
+          { label: "Total", stroke: "#69db7c", value: (sample) => bytesToMiB(sample.total_mem_bytes) },
+        ],
+      },
+      load: {
+        elementId: "loadChart",
+        series: [
+          { label: "Load 1", stroke: "#4dabf7", value: (sample) => sample.load1 },
+          { label: "Load 5", stroke: "#ffd43b", value: (sample) => sample.load5 },
+          { label: "Load 15", stroke: "#69db7c", value: (sample) => sample.load15 },
+        ],
+      },
+    };
+
+    function chartData(definition) {
+      return [
+        samples.map((sample) => sample.ts),
+        ...definition.series.map((series) => samples.map(series.value)),
       ];
-      const cpuTotalSeries = [
-        { name: "Host", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.host_cpu })) },
-        { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.total_cpu })) },
-      ];
-      const memSeries = [
-        { name: "Server", data: samples.map((sample) => ({ x: sample.ts * 1000, y: bytesToMiB(sample.proc_mem_bytes) })) },
-        { name: "Children", data: samples.map((sample) => ({ x: sample.ts * 1000, y: bytesToMiB(sample.children_mem_bytes) })) },
-        { name: "Total", data: samples.map((sample) => ({ x: sample.ts * 1000, y: bytesToMiB(sample.total_mem_bytes) })) },
-      ];
-      const loadSeries = [
-        { name: "Load 1", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load1 })) },
-        { name: "Load 5", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load5 })) },
-        { name: "Load 15", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load15 })) },
-      ];
-      return { cpuSeries, cpuTotalSeries, memSeries, loadSeries };
+    }
+
+    function buildLineChart(key, definition) {
+      const element = document.getElementById(definition.elementId);
+      const gridColor = "rgba(154, 163, 171, 0.16)";
+      const axisColor = "#9aa3ab";
+      const chart = new uPlot({
+        width: Math.max(element.clientWidth, 320),
+        height: 240,
+        padding: [8, 8, 0, 0],
+        legend: { show: false },
+        cursor: {
+          drag: { x: true, y: false, setScale: true },
+        },
+        select: { show: true, fill: "rgba(77, 171, 247, 0.16)", stroke: "#4dabf7" },
+        scales: { x: { time: true } },
+        axes: [
+          {
+            stroke: axisColor,
+            grid: { stroke: gridColor },
+            ticks: { stroke: gridColor },
+            size: 42,
+            space: 80,
+            values: (plot, values) => {
+              const visibleSeconds = (plot.scales.x.max || 0) - (plot.scales.x.min || 0);
+              return values.map((value) => formatChartTime(value, visibleSeconds < 180));
+            },
+          },
+          { stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor }, size: 52 },
+        ],
+        series: [
+          { label: "Time" },
+          ...definition.series.map((series) => ({
+            label: series.label,
+            stroke: series.stroke,
+            width: 2,
+            points: { show: false },
+          })),
+        ],
+      }, chartData(definition), element);
+
+      let dragStartX = null;
+      const onMouseDown = (event) => {
+        dragStartX = event.clientX;
+      };
+      const onMouseUp = (event) => {
+        if (dragStartX !== null && Math.abs(event.clientX - dragStartX) >= 5) pauseLive();
+        dragStartX = null;
+      };
+      chart.over.addEventListener("mousedown", onMouseDown, true);
+      window.addEventListener("mouseup", onMouseUp, true);
+      chartEventCleanups.push(() => {
+        chart.over.removeEventListener("mousedown", onMouseDown, true);
+        window.removeEventListener("mouseup", onMouseUp, true);
+      });
+      element.addEventListener("dblclick", resumeLive);
+      const resizeObserver = new ResizeObserver(() => {
+        if (!disposed && element.isConnected) {
+          chart.setSize({ width: Math.max(element.clientWidth, 320), height: 240 });
+        }
+      });
+      resizeObserver.observe(element);
+      chartResizeObservers[key] = resizeObserver;
+      return chart;
     }
 
     function renderCharts() {
-      if (disposed) return;
-      const series = chartSeries();
-      if (!chartsReady) {
-        charts.cpu = new ApexCharts(document.getElementById("cpuChart"), buildLineChart(series.cpuSeries));
-        charts.cpuTotal = new ApexCharts(document.getElementById("cpuTotalChart"), buildLineChart(series.cpuTotalSeries));
-        charts.mem = new ApexCharts(document.getElementById("memChart"), buildLineChart(series.memSeries));
-        charts.load = new ApexCharts(document.getElementById("loadChart"), buildLineChart(series.loadSeries));
-        chartsReady = Promise.all([
-          charts.cpu.render(),
-          charts.cpuTotal.render(),
-          charts.mem.render(),
-          charts.load.render(),
-        ]).catch((error) => {
-          console.error("Failed to render status charts", error);
-        });
-        return;
-      }
-
-      chartsReady.then(() => {
-        if (disposed) return;
-        return Promise.all([
-          charts.cpu.updateSeries(series.cpuSeries, false),
-          charts.cpuTotal.updateSeries(series.cpuTotalSeries, false),
-          charts.mem.updateSeries(series.memSeries, false),
-          charts.load.updateSeries(series.loadSeries, false),
-        ]);
-      }).catch((error) => {
-        console.error("Failed to update status charts", error);
+      if (disposed || document.hidden || samples.length === 0) return;
+      Object.entries(chartDefinitions).forEach(([key, definition]) => {
+        if (!charts[key]) {
+          charts[key] = buildLineChart(key, definition);
+        } else {
+          charts[key].setData(chartData(definition));
+        }
       });
     }
 
@@ -334,54 +413,7 @@
       paused = false;
       livePausedBadge.classList.add("d-none");
       resumeLiveBtn.classList.add("d-none");
-    }
-
-    function buildLineChart(series) {
-      return {
-        chart: {
-          type: "line",
-          height: 240,
-          toolbar: {
-            show: true,
-            tools: {
-              zoom: true,
-              zoomin: true,
-              zoomout: true,
-              pan: true,
-              reset: true,
-            },
-          },
-          zoom: {
-            enabled: true,
-            type: "x",
-            autoScaleYaxis: true,
-          },
-          animations: { enabled: false },
-          background: "transparent",
-          events: {
-            zoomed: pauseLive,
-            scrolled: pauseLive,
-          },
-        },
-        theme: { mode: "dark" },
-        stroke: { width: 2, curve: "smooth" },
-        dataLabels: { enabled: false },
-        series,
-        xaxis: {
-          type: "datetime",
-          tickAmount: 6,
-          labels: {
-            datetimeUTC: false,
-            format: "HH:mm",
-            rotate: 0,
-            hideOverlappingLabels: true,
-          },
-        },
-        yaxis: {
-          decimalsInFloat: 1,
-        },
-        grid: { borderColor: "rgba(255, 255, 255, 0.08)" },
-      };
+      renderCharts();
     }
 
     function updateSnapshot(sample) {
@@ -405,7 +437,7 @@
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) {
-          samples = data;
+          samples = data.slice(-120);
           if (samples.length > 0) {
             updateSnapshot(samples[samples.length - 1]);
           }
@@ -418,18 +450,20 @@
       if (paused) return;
       const sample = JSON.parse(event.data);
       samples.push(sample);
-      if (samples.length > 120) {
-        samples.shift();
-      }
+      if (samples.length > 120) samples.splice(0, samples.length - 120);
       updateSnapshot(sample);
       renderCharts();
     };
 
-    document.getElementById("cpuChart")?.addEventListener("wheel", pauseLive);
     resumeLiveBtn.addEventListener("click", resumeLive);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && !paused) renderCharts();
+    });
     window.addEventListener("pagehide", () => {
       disposed = true;
       stream.close();
+      chartEventCleanups.forEach((cleanup) => cleanup());
+      Object.values(chartResizeObservers).forEach((observer) => observer.disconnect());
       Object.values(charts).forEach((chart) => chart.destroy());
     }, { once: true });
   </script>

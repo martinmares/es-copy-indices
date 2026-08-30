@@ -3,7 +3,6 @@
 {% block title %}Run {{ run.id }} · ES Copy Runner{% endblock %}
 
 {% block head_extra %}
-  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/material-darker.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.css">
@@ -63,7 +62,42 @@
     .split-chart {
       background: var(--tblr-body-bg, #0b0f14);
       border-radius: 6px;
-      padding: 6px;
+      padding: 10px 12px 8px;
+    }
+    .split-bar-chart {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      height: 160px;
+    }
+    .split-bar-column {
+      display: grid;
+      flex: 1 1 0;
+      grid-template-rows: 20px 1fr 22px;
+      min-width: 0;
+      text-align: center;
+    }
+    .split-bar-value,
+    .split-bar-label {
+      color: var(--tblr-secondary-color);
+      font-size: 0.7rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .split-bar-track {
+      align-items: flex-end;
+      border-bottom: 1px solid rgba(154, 163, 171, 0.3);
+      display: flex;
+      justify-content: center;
+      min-height: 0;
+    }
+    .split-bar-fill {
+      background: #4dabf7;
+      border-radius: 4px 4px 0 0;
+      max-width: 48px;
+      min-height: 2px;
+      width: 58%;
     }
     .config-editor-list {
       max-height: 520px;
@@ -150,7 +184,7 @@
       </div>
       <div class="col-auto">
         <div class="btn-list">
-          <a class="btn btn-outline-secondary" href="{{ base_path }}/runs/{{ run.id }}/export">Export</a>
+          <a class="btn btn-outline-secondary" href="{{ base_path }}/runs/{{ run.id }}/export" data-min-role="admin">Export</a>
           <button class="btn btn-outline-warning" type="button" id="retryFailedBtn" data-min-role="editor">Retry Failed</button>
           <button class="btn btn-outline-primary" type="button" id="editConfigsBtn" data-min-role="admin" {% if !run.can_edit_configs %}disabled{% endif %}>
             Edit configs
@@ -415,38 +449,35 @@
           data = [];
         }
         if (!data.length) {
-          chartEl.innerHTML = "";
+          chartEl.replaceChildren();
           return;
         }
-        const categories = data.map((item) => item[0]);
-        const values = data.map((item) => item[1]);
-        if (chartEl._apexChart) {
-          chartEl._apexChart.updateOptions({ xaxis: { categories } }, false, true);
-          chartEl._apexChart.updateSeries([{ name: "Docs", data: values }], true);
-          return;
-        }
-        chartEl.innerHTML = "";
-        const chart = new ApexCharts(chartEl, {
-          chart: {
-            type: "bar",
-            height: 160,
-            toolbar: { show: false },
-            animations: { enabled: false },
-            background: "transparent",
-          },
-          theme: { mode: "dark" },
-          plotOptions: {
-            bar: { columnWidth: "55%", borderRadius: 4 },
-          },
-          grid: { borderColor: "rgba(255, 255, 255, 0.1)" },
-          dataLabels: { enabled: false },
-          colors: ["#4dabf7"],
-          xaxis: { categories, title: { text: "Quantile" } },
-          yaxis: { title: { text: "Docs" } },
-          series: [{ name: "Docs", data: values }],
+        const maxValue = Math.max(...data.map((item) => Number(item[1]) || 0), 1);
+        const bars = document.createElement("div");
+        bars.className = "split-bar-chart";
+        data.forEach((item) => {
+          const label = String(item[0]);
+          const value = Number(item[1]) || 0;
+          const column = document.createElement("div");
+          column.className = "split-bar-column";
+          column.title = `${label}: ${value.toLocaleString()} docs`;
+
+          const valueLabel = document.createElement("div");
+          valueLabel.className = "split-bar-value";
+          valueLabel.textContent = value.toLocaleString();
+          const track = document.createElement("div");
+          track.className = "split-bar-track";
+          const fill = document.createElement("div");
+          fill.className = "split-bar-fill";
+          fill.style.height = `${Math.max(2, (value / maxValue) * 100)}%`;
+          track.appendChild(fill);
+          const category = document.createElement("div");
+          category.className = "split-bar-label";
+          category.textContent = label;
+          column.append(valueLabel, track, category);
+          bars.appendChild(column);
         });
-        chart.render();
-        chartEl._apexChart = chart;
+        chartEl.replaceChildren(bars);
       });
     }
 

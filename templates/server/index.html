@@ -3,7 +3,8 @@
 {% block title %}Dashboard · ES Copy Runner{% endblock %}
 
 {% block head_extra %}
-  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.52.0"></script>
+  <link rel="stylesheet" href="{{ base_path }}/static/vendor/uplot/uPlot.min.css">
+  <script src="{{ base_path }}/static/vendor/uplot/uPlot.iife.min.js"></script>
 {% endblock %}
 
 {% block styles %}
@@ -15,7 +16,10 @@
       cursor: pointer;
     }
     .sparkline {
-      height: 68px;
+      height: 112px;
+    }
+    .sparkline .uplot {
+      font-family: inherit;
     }
   </style>
 {% endblock %}
@@ -57,7 +61,7 @@
             <span class="avatar bg-blue-lt text-blue me-3"><i class="ti ti-history"></i></span>
             <div>
               <div class="text-secondary">Runs</div>
-              <div class="h2 mb-0" id="dashboardRunCount">{{ runs.len() }}</div>
+              <div class="h2 mb-0" id="dashboardRunCount">{{ runs_total }}</div>
             </div>
           </div>
         </div>
@@ -117,60 +121,68 @@
     </div>
   </div>
 
-  {% if runs.len() == 0 %}
-    <div class="card" id="noRunsCard">
-      <div class="card-body text-secondary">No runs yet. Create the first run to generate jobs.</div>
+  <div class="d-none mb-4" id="activeRunsSection">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <h3 class="m-0">Active runs</h3>
+      <span class="badge bg-yellow text-dark" id="activeRunsCount">0</span>
     </div>
-  {% endif %}
-  <div class="row row-cards" id="runsList">
-    {% for run in runs %}
-      <div class="col-12">
-        <div class="card position-relative js-run-card {% if run.jobs_running > 0 %}border-yellow{% endif %}" data-run-id="{{ run.id }}">
-          <div class="card-body">
-            <div class="d-flex align-items-center justify-content-between">
-              <div class="h3 m-0">
-                {{ run.src_name }} → {{ run.dst_name }}
-                <span class="text-secondary fw-normal small ms-2">({{ run.id }})</span>
-                {% if run.dry_run %}
-                  <span class="badge bg-azure text-white ms-2">dry run</span>
-                {% endif %}
-                {% if run.wizard %}
-                  <span class="badge bg-indigo text-white ms-2">wizard</span>
-                {% endif %}
-                {% if run.run_mode.as_str() == "backup" %}
-                  <span class="badge bg-teal text-white ms-2">backup</span>
-                {% elif run.run_mode.as_str() == "restore" %}
-                  <span class="badge bg-indigo text-white ms-2">restore</span>
-                {% endif %}
-              </div>
-              <div class="text-end">
-                <div class="text-secondary">{{ run.created_at }}</div>
-                <button class="btn btn-outline-danger btn-sm mt-2 js-remove-run" data-run-id="{{ run.id }}" data-min-role="admin">
-                  Remove
-                </button>
-                {% if run.jobs_running > 0 %}
-                  <button class="btn btn-outline-warning btn-sm mt-2 js-stop-run" data-run-id="{{ run.id }}" data-min-role="editor">
-                    Stop all jobs
-                  </button>
-                {% endif %}
-              </div>
-            </div>
-            <div class="text-secondary small">
-              {{ run.template_name }}
-              · copy_suffix={% if run.copy_suffix.is_some() %}{{ run.copy_suffix.as_deref().unwrap_or("") }}{% else %}none{% endif %}
-              · alias_suffix={% if run.alias_suffix.is_some() %}{{ run.alias_suffix.as_deref().unwrap_or("") }}{% else %}none{% endif %}
-            </div>
-            <div class="mt-3 d-flex flex-wrap gap-2">
-              <span class="badge bg-secondary text-white">Total {{ run.jobs_total }}</span>
-              <span class="badge bg-yellow text-dark">Running {{ run.jobs_running }}</span>
-              <span class="badge bg-blue text-white">Queued {{ run.jobs_queued }}</span>
-              <span class="badge bg-green text-dark">Succeeded {{ run.jobs_succeeded }}</span>
-              <span class="badge bg-red text-white">Failed {{ run.jobs_failed }}</span>
-            </div>
-          </div>
+    <div class="row row-cards" id="activeRunsList"></div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header"><h3 class="card-title">Run history</h3></div>
+    <div class="card-body">
+      <div class="row g-3 align-items-end">
+        <div class="col-12 col-lg-4">
+          <label class="form-label">Search runs</label>
+          <input class="form-control" id="runsFilter" type="search" placeholder="Run ID, endpoint or template">
+        </div>
+        <div class="col-6 col-lg-2">
+          <label class="form-label">Mode</label>
+          <select class="form-select" id="runsModeFilter">
+            <option value="">All</option>
+            <option value="copy">Copy</option>
+            <option value="backup">Backup</option>
+            <option value="restore">Restore</option>
+          </select>
+        </div>
+        <div class="col-6 col-lg-2">
+          <label class="form-label">Status</label>
+          <select class="form-select" id="runsStatusFilter">
+            <option value="">All</option>
+            <option value="failed">Failed</option>
+            <option value="succeeded">Succeeded</option>
+            <option value="pending">Pending</option>
+          </select>
+        </div>
+        <div class="col-12 col-lg-3">
+          <label class="form-label">Destination</label>
+          <select class="form-select" id="runsDestinationFilter">
+            <option value="">All destinations</option>
+            {% for endpoint in endpoints %}
+              <option value="{{ endpoint.id }}">{{ endpoint.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 col-lg-1">
+          <label class="form-label">Per page</label>
+          <select class="form-select" id="runsPerPage">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="50">50</option>
+          </select>
         </div>
       </div>
-    {% endfor %}
+    </div>
+  </div>
+
+  <div class="card d-none" id="noRunsCard">
+    <div class="card-body text-secondary">No history runs match the current filter.</div>
+  </div>
+  <div class="row row-cards" id="runsList"></div>
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mt-3">
+    <div class="text-secondary" id="runsPageSummary">Showing 0 runs</div>
+    <ul class="pagination m-0" id="runsPagination"></ul>
   </div>
 
   <div class="modal modal-blur fade" id="createRunModal" tabindex="-1" aria-hidden="true">
@@ -526,11 +538,11 @@
                   </div>
                   <div class="col-md-3">
                     <label class="form-label">Regex pattern</label>
-                    <input class="form-control" type="text" id="renamePattern" placeholder="e.g. ^zis-">
+                    <input class="form-control" type="text" id="renamePattern" placeholder="e.g. ^source-">
                   </div>
                   <div class="col-md-3">
                     <label class="form-label">Replace</label>
-                    <input class="form-control" type="text" id="renameReplace" placeholder="e.g. tsm-">
+                    <input class="form-control" type="text" id="renameReplace" placeholder="e.g. target-">
                   </div>
                   <div class="col-md-3">
                     <label class="form-label">Prefix</label>
@@ -978,15 +990,29 @@
 {% block scripts %}
   <script>
     const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
-    const runCardClicks = new Set();
+    const runCardClicks = new WeakSet();
     const endpoints = {{ endpoints_json | safe }};
     const templates = {{ templates_json | safe }};
     const metricsSamples = {{ metrics_samples_json | safe }};
+    const initialRunsPage = {{ runs_page_json | safe }};
     const dashboardRunCount = document.getElementById("dashboardRunCount");
     const dashboardRunningCount = document.getElementById("dashboardRunningCount");
     const dashboardQueuedCount = document.getElementById("dashboardQueuedCount");
     const runsListEl = document.getElementById("runsList");
     const noRunsCard = document.getElementById("noRunsCard");
+    const activeRunsSection = document.getElementById("activeRunsSection");
+    const activeRunsList = document.getElementById("activeRunsList");
+    const activeRunsCount = document.getElementById("activeRunsCount");
+    const runsFilter = document.getElementById("runsFilter");
+    const runsModeFilter = document.getElementById("runsModeFilter");
+    const runsStatusFilter = document.getElementById("runsStatusFilter");
+    const runsDestinationFilter = document.getElementById("runsDestinationFilter");
+    const runsPerPage = document.getElementById("runsPerPage");
+    const runsPagination = document.getElementById("runsPagination");
+    const runsPageSummary = document.getElementById("runsPageSummary");
+    let runsPage = 1;
+    let runsSource = null;
+    let runsFilterTimer = null;
     const classicModal = document.getElementById("createRunModal");
     const wizardModal = document.getElementById("wizardRunModal");
     const backupRestoreModal = document.getElementById("backupRestoreModal");
@@ -2515,28 +2541,75 @@
       }
     });
 
-    function renderSparkline(el, data, color) {
+    function formatSparklineTime(timestamp, includeSeconds = false) {
+      const date = new Date(timestamp * 1000);
+      const hours = String(date.getHours()).padStart(2, "0");
+      const minutes = String(date.getMinutes()).padStart(2, "0");
+      if (!includeSeconds) return `${hours}:${minutes}`;
+      return `${hours}:${minutes}:${String(date.getSeconds()).padStart(2, "0")}`;
+    }
+
+    function renderSparkline(el, data, color, formatYValue) {
       if (!el) return;
-      const chart = new ApexCharts(el, {
-        chart: {
-          type: "line",
-          height: 68,
-          sparkline: { enabled: true },
-          animations: { enabled: false },
+      const axisColor = "#7f8994";
+      const gridColor = "rgba(127, 137, 148, 0.16)";
+      const chart = new uPlot({
+        width: Math.max(el.clientWidth, 120),
+        height: 112,
+        padding: [4, 6, 0, 0],
+        legend: { show: false },
+        cursor: { show: false },
+        select: { show: false },
+        scales: {
+          x: {
+            time: true,
+            range: (_plot, min, max) => {
+              const padding = max > min ? (max - min) * 0.02 : 1;
+              return [min - padding, max + padding];
+            },
+          },
         },
-        stroke: { width: 2 },
-        colors: [color],
-        series: [{ data }],
-        tooltip: { enabled: false },
-        grid: { show: false },
+        axes: [
+          {
+            stroke: axisColor,
+            grid: { stroke: gridColor },
+            ticks: { stroke: gridColor },
+            size: 24,
+            space: 100,
+            font: "10px sans-serif",
+            values: (plot, values) => {
+              const visibleSeconds = (plot.scales.x.max || 0) - (plot.scales.x.min || 0);
+              return values.map((value) => formatSparklineTime(value, visibleSeconds < 180));
+            },
+          },
+          {
+            stroke: axisColor,
+            grid: { stroke: gridColor },
+            ticks: { stroke: gridColor },
+            size: 62,
+            space: 30,
+            font: "10px sans-serif",
+            values: (_plot, values) => values.map(formatYValue),
+          },
+        ],
+        series: [
+          {},
+          { stroke: color, width: 2, points: { show: false } },
+        ],
+      }, data, el);
+      const resizeObserver = new ResizeObserver(() => {
+        if (el.isConnected) {
+          chart.setSize({ width: Math.max(el.clientWidth, 120), height: 112 });
+        }
       });
-      chart.render();
-      el._apexChart = chart;
+      resizeObserver.observe(el);
+      el._uplotChart = chart;
+      el._uplotResizeObserver = resizeObserver;
     }
 
     function updateSparkline(el, data) {
-      if (el && el._apexChart) {
-        el._apexChart.updateSeries([{ data }], true);
+      if (el && el._uplotChart) {
+        el._uplotChart.setData(data);
       }
     }
 
@@ -2545,17 +2618,18 @@
       const latest = samples[samples.length - 1];
       dashboardCpuValue.textContent = `${latest.host_cpu.toFixed(1)}%`;
       dashboardMemValue.textContent = formatMetricBytes(latest.total_mem_bytes);
-      const cpuSeries = samples.map((s) => parseFloat(s.host_cpu.toFixed(1)));
-      const memSeries = samples.map((s) => s.total_mem_bytes / 1024 / 1024);
+      const timestamps = samples.map((sample) => sample.ts);
+      const cpuSeries = [timestamps, samples.map((sample) => sample.host_cpu)];
+      const memSeries = [timestamps, samples.map((sample) => sample.total_mem_bytes / 1024 / 1024)];
       const cpuChartEl = document.getElementById("dashboardCpuSpark");
       const memChartEl = document.getElementById("dashboardMemSpark");
-      if (!cpuChartEl._apexChart) {
-        renderSparkline(cpuChartEl, cpuSeries, "#4dabf7");
+      if (!cpuChartEl._uplotChart) {
+        renderSparkline(cpuChartEl, cpuSeries, "#4dabf7", (value) => `${value.toFixed(1)}%`);
       } else {
         updateSparkline(cpuChartEl, cpuSeries);
       }
-      if (!memChartEl._apexChart) {
-        renderSparkline(memChartEl, memSeries, "#69db7c");
+      if (!memChartEl._uplotChart) {
+        renderSparkline(memChartEl, memSeries, "#69db7c", (value) => `${value.toFixed(1)} MiB`);
       } else {
         updateSparkline(memChartEl, memSeries);
       }
@@ -2573,12 +2647,13 @@
       return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
     }
 
+    metricsSamples.splice(0, Math.max(0, metricsSamples.length - 120));
     updateDashboardMetrics(metricsSamples);
     fetch(`${basePath}/status/snapshot`)
       .then((res) => res.ok ? res.json() : [])
       .then((data) => {
         if (Array.isArray(data)) {
-          updateDashboardMetrics(data);
+          updateDashboardMetrics(data.slice(-120));
         }
       })
       .catch(() => {});
@@ -2591,7 +2666,7 @@
           .then((res) => res.ok ? res.json() : [])
           .then((data) => {
             if (Array.isArray(data) && data.length > 0) {
-              metricsSamples.splice(0, metricsSamples.length, ...data);
+              metricsSamples.splice(0, metricsSamples.length, ...data.slice(-120));
               updateDashboardMetrics(metricsSamples);
             }
           })
@@ -2641,9 +2716,7 @@
       }
     }
 
-    function renderRuns(runs) {
-      if (!runsListEl) return;
-      runsListEl.innerHTML = runs.map((run) => {
+    function runCardHtml(run) {
         const dryRunBadge = run.dry_run ? `<span class="badge bg-azure text-white ms-2">dry run</span>` : "";
         const wizardBadge = run.wizard ? `<span class="badge bg-indigo text-white ms-2">wizard</span>` : "";
         const modeBadge = run.run_mode === "backup"
@@ -2687,24 +2760,54 @@
               </div>
             </div>
           </div>`;
-      }).join("");
-      if (noRunsCard) {
-        if (runs.length === 0) {
-          noRunsCard.classList.remove("d-none");
-        } else {
-          noRunsCard.classList.add("d-none");
-        }
-      }
-      attachRunHandlers();
-      window.applyRoleVisibility?.(runsListEl);
     }
 
-    function updateTotals(runs) {
-      const running = runs.reduce((sum, run) => sum + run.jobs_running, 0);
-      const queued = runs.reduce((sum, run) => sum + run.jobs_queued, 0);
-      if (dashboardRunCount) dashboardRunCount.textContent = runs.length;
-      if (dashboardRunningCount) dashboardRunningCount.textContent = running;
-      if (dashboardQueuedCount) dashboardQueuedCount.textContent = queued;
+    function pageNumbers(page, totalPages) {
+      const values = new Set([1, totalPages, page - 1, page, page + 1]);
+      return Array.from(values)
+        .filter((value) => value >= 1 && value <= totalPages)
+        .sort((a, b) => a - b);
+    }
+
+    function renderRunsPage(data) {
+      if (!runsListEl || !data?.history || !Array.isArray(data.history.items)) return;
+      const history = data.history;
+      runsPage = history.page || 1;
+      runsListEl.innerHTML = history.items.map(runCardHtml).join("");
+      activeRunsList.innerHTML = (data.active_runs || []).map(runCardHtml).join("");
+      activeRunsCount.textContent = data.active_total > data.active_runs.length
+        ? `${data.active_runs.length} of ${data.active_total}`
+        : String(data.active_total || 0);
+      activeRunsSection.classList.toggle("d-none", !data.active_total);
+      noRunsCard.classList.toggle("d-none", history.items.length > 0);
+
+      const first = history.total === 0 ? 0 : ((history.page - 1) * history.per_page) + 1;
+      const last = history.total === 0 ? 0 : first + history.items.length - 1;
+      runsPageSummary.textContent = history.total === 0
+        ? "Showing 0 runs"
+        : `Showing ${first}–${last} of ${history.total} history runs`;
+      const numbers = pageNumbers(history.page, history.total_pages);
+      const pagination = [];
+      pagination.push(`<li class="page-item ${history.page <= 1 ? "disabled" : ""}"><button class="page-link" data-page="${history.page - 1}">Previous</button></li>`);
+      numbers.forEach((value, index) => {
+        if (index > 0 && value > numbers[index - 1] + 1) {
+          pagination.push('<li class="page-item disabled"><span class="page-link">…</span></li>');
+        }
+        pagination.push(`<li class="page-item ${value === history.page ? "active" : ""}"><button class="page-link" data-page="${value}">${value}</button></li>`);
+      });
+      pagination.push(`<li class="page-item ${history.page >= history.total_pages ? "disabled" : ""}"><button class="page-link" data-page="${history.page + 1}">Next</button></li>`);
+      runsPagination.innerHTML = pagination.join("");
+
+      attachRunHandlers();
+      window.applyRoleVisibility?.(runsListEl);
+      window.applyRoleVisibility?.(activeRunsList);
+      updateTotals(data);
+    }
+
+    function updateTotals(data) {
+      if (dashboardRunCount) dashboardRunCount.textContent = data.runs_total ?? 0;
+      if (dashboardRunningCount) dashboardRunningCount.textContent = data.running_jobs ?? 0;
+      if (dashboardQueuedCount) dashboardQueuedCount.textContent = data.queued_jobs ?? 0;
     }
 
     function attachRunHandlers() {
@@ -2790,15 +2893,72 @@
       }
     });
 
-    const runsSource = new EventSource(`${basePath}/runs/stream`);
-    runsSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data && Array.isArray(data.runs)) {
-          updateTotals(data.runs);
-          renderRuns(data.runs);
-        }
-      } catch (_) {}
-    };
+    function currentRunsParams() {
+      const params = new URLSearchParams();
+      params.set("page", String(runsPage));
+      params.set("per_page", runsPerPage.value || "20");
+      if (runsFilter.value.trim()) params.set("q", runsFilter.value.trim());
+      if (runsModeFilter.value) params.set("mode", runsModeFilter.value);
+      if (runsStatusFilter.value) params.set("status", runsStatusFilter.value);
+      if (runsDestinationFilter.value) params.set("destination", runsDestinationFilter.value);
+      return params;
+    }
+
+    function syncRunsUrl(params) {
+      const url = new URL(window.location.href);
+      url.search = params.toString();
+      history.replaceState(null, "", url);
+    }
+
+    function restartRunsStream(resetPage = false) {
+      if (resetPage) runsPage = 1;
+      const params = currentRunsParams();
+      syncRunsUrl(params);
+      runsSource?.close();
+      fetch(`${basePath}/runs/snapshot?${params}`)
+        .then((response) => response.ok ? response.json() : null)
+        .then(renderRunsPage)
+        .catch(() => {});
+      runsSource = new EventSource(`${basePath}/runs/stream?${params}`);
+      runsSource.onmessage = (event) => {
+        try { renderRunsPage(JSON.parse(event.data)); } catch (_) {}
+      };
+    }
+
+    const initialRunParams = new URLSearchParams(window.location.search);
+    runsPage = Math.max(1, Number(initialRunParams.get("page")) || 1);
+    runsPerPage.value = ["10", "20", "50"].includes(initialRunParams.get("per_page"))
+      ? initialRunParams.get("per_page")
+      : "20";
+    runsFilter.value = initialRunParams.get("q") || "";
+    runsModeFilter.value = initialRunParams.get("mode") || "";
+    runsStatusFilter.value = initialRunParams.get("status") || "";
+    runsDestinationFilter.value = initialRunParams.get("destination") || "";
+
+    renderRunsPage(initialRunsPage);
+    runsFilter?.addEventListener("input", () => {
+      clearTimeout(runsFilterTimer);
+      runsFilterTimer = setTimeout(() => restartRunsStream(true), 300);
+    });
+    [runsModeFilter, runsStatusFilter, runsDestinationFilter, runsPerPage].forEach((element) => {
+      element?.addEventListener("change", () => restartRunsStream(true));
+    });
+    runsPagination?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-page]");
+      if (!button || button.closest(".disabled") || button.closest(".active")) return;
+      runsPage = Math.max(1, Number(button.dataset.page) || 1);
+      restartRunsStream();
+    });
+    restartRunsStream();
+    window.addEventListener("pagehide", () => {
+      runsSource?.close();
+      metricsStream.close();
+      stopMetricsPoll();
+      [document.getElementById("dashboardCpuSpark"), document.getElementById("dashboardMemSpark")]
+        .forEach((el) => {
+          el?._uplotResizeObserver?.disconnect();
+          el?._uplotChart?.destroy();
+        });
+    }, { once: true });
   </script>
 {% endblock %}

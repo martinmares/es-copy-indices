@@ -96,7 +96,7 @@ pub struct Index {
     scroll_mode: ScrollMode,
     name: String,
     #[serde(default)]
-    multiple: bool, // tohle zn. že chci víc indexů, typicky "tsm-log-*"
+    multiple: bool, // Multiple source indices, for example "example-logs-*".
     name_of_copy: Option<String>,
     #[serde(default)]
     delete_if_exists: bool,

@@ -90,19 +90,38 @@
       </table>
     </div>
     <div class="card-body text-secondary d-none" id="jobsEmpty">No jobs match the current filter.</div>
+    <div class="card-footer d-flex flex-wrap align-items-center justify-content-between gap-3">
+      <div class="text-secondary" id="jobsPageSummary">Showing 0 jobs</div>
+      <div class="d-flex align-items-center gap-3">
+        <label class="d-flex align-items-center gap-2 mb-0">
+          <span class="text-secondary text-nowrap">Per page</span>
+          <select class="form-select form-select-sm" id="jobsPerPage">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+        <ul class="pagination pagination-sm m-0" id="jobsPagination"></ul>
+      </div>
+    </div>
   </div>
 {% endblock %}
 
 {% block scripts %}
   <script>
     const basePath = "{{ base_path }}" === "/" ? "" : "{{ base_path }}";
-    const runsData = {{ runs_json | safe }};
     let jobsData = [];
+    let jobsPage = 1;
+    let jobsSource = null;
+    let filterTimer = null;
     const jobsTableBody = document.getElementById("jobsTableBody");
     const jobsEmpty = document.getElementById("jobsEmpty");
     const jobsFilter = document.getElementById("jobsFilter");
     const runFilter = document.getElementById("runFilter");
     const statusCheckboxes = Array.from(document.querySelectorAll(".status-filter"));
+    const jobsPerPage = document.getElementById("jobsPerPage");
+    const jobsPagination = document.getElementById("jobsPagination");
+    const jobsPageSummary = document.getElementById("jobsPageSummary");
     const runColors = ["blue", "azure", "indigo", "purple", "teal", "green", "orange", "yellow", "red"];
 
     function runColor(runId) {
@@ -145,21 +164,7 @@
     }
 
     function renderJobs() {
-      const filterText = jobsFilter.value.trim().toLowerCase();
-      const selectedRun = runFilter.value;
-      const selectedStatuses = statusCheckboxes.filter((cb) => cb.checked).map((cb) => cb.value);
-      const filtered = jobsData.filter((job) => {
-        if (selectedRun && job.run_id !== selectedRun) {
-          return false;
-        }
-        if (selectedStatuses.length > 0 && !selectedStatuses.includes(job.status)) {
-          return false;
-        }
-        if (!filterText) return true;
-        const haystack = `${job.run_label} ${job.run_env_label} ${job.run_id} ${job.stage_name} ${job.job_name}`.toLowerCase();
-        return haystack.includes(filterText);
-      });
-      jobsTableBody.innerHTML = filtered.map((job) => {
+      jobsTableBody.innerHTML = jobsData.map((job) => {
         const color = runColor(job.run_id);
         const startBtn = job.can_start
           ? `<button class="btn btn-outline-primary btn-sm js-job-action" data-url="${job.start_url}" data-method="POST" data-min-role="editor">Start</button>`
@@ -193,23 +198,103 @@
           </tr>`;
       }).join("");
       window.applyRoleVisibility?.(jobsTableBody);
-      if (filtered.length === 0) {
+      if (jobsData.length === 0) {
         jobsEmpty.classList.remove("d-none");
       } else {
         jobsEmpty.classList.add("d-none");
       }
     }
 
-    function refreshJobs(data) {
-      jobsData = data;
-      renderJobs();
+    function pageNumbers(page, totalPages) {
+      const values = new Set([1, totalPages, page - 1, page, page + 1]);
+      return Array.from(values)
+        .filter((value) => value >= 1 && value <= totalPages)
+        .sort((a, b) => a - b);
     }
 
-    jobsFilter?.addEventListener("input", renderJobs);
-    jobsFilter?.addEventListener("keyup", renderJobs);
-    jobsFilter?.addEventListener("search", renderJobs);
-    runFilter?.addEventListener("change", renderJobs);
-    statusCheckboxes.forEach((cb) => cb.addEventListener("change", renderJobs));
+    function renderPagination(data) {
+      const first = data.total === 0 ? 0 : ((data.page - 1) * data.per_page) + 1;
+      const last = data.total === 0 ? 0 : first + data.items.length - 1;
+      jobsPageSummary.textContent = data.total === 0
+        ? "Showing 0 jobs"
+        : `Showing ${first}–${last} of ${data.total} jobs`;
+      const numbers = pageNumbers(data.page, data.total_pages);
+      const parts = [];
+      parts.push(`<li class="page-item ${data.page <= 1 ? "disabled" : ""}"><button class="page-link" data-page="${data.page - 1}">Previous</button></li>`);
+      numbers.forEach((value, index) => {
+        if (index > 0 && value > numbers[index - 1] + 1) {
+          parts.push('<li class="page-item disabled"><span class="page-link">…</span></li>');
+        }
+        parts.push(`<li class="page-item ${value === data.page ? "active" : ""}"><button class="page-link" data-page="${value}">${value}</button></li>`);
+      });
+      parts.push(`<li class="page-item ${data.page >= data.total_pages ? "disabled" : ""}"><button class="page-link" data-page="${data.page + 1}">Next</button></li>`);
+      jobsPagination.innerHTML = parts.join("");
+    }
+
+    function refreshJobs(data) {
+      if (!data || !Array.isArray(data.items)) return;
+      jobsData = data.items;
+      jobsPage = data.page || 1;
+      renderJobs();
+      renderPagination(data);
+    }
+
+    function currentParams() {
+      const params = new URLSearchParams();
+      params.set("page", String(jobsPage));
+      params.set("per_page", jobsPerPage.value || "50");
+      if (jobsFilter.value.trim()) params.set("q", jobsFilter.value.trim());
+      if (runFilter.value) params.set("run_id", runFilter.value);
+      const statuses = statusCheckboxes.filter((cb) => cb.checked).map((cb) => cb.value);
+      if (statuses.length) params.set("status", statuses.join(","));
+      return params;
+    }
+
+    function syncUrl(params) {
+      const url = new URL(window.location.href);
+      url.search = params.toString();
+      history.replaceState(null, "", url);
+    }
+
+    function restartJobsStream(resetPage = false) {
+      if (resetPage) jobsPage = 1;
+      const params = currentParams();
+      syncUrl(params);
+      jobsSource?.close();
+      fetch(`${basePath}/jobs/snapshot?${params}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then(refreshJobs)
+        .catch(() => {});
+      jobsSource = new EventSource(`${basePath}/jobs/stream?${params}`);
+      jobsSource.onmessage = (event) => {
+        try { refreshJobs(JSON.parse(event.data)); } catch (_) {}
+      };
+    }
+
+    const initialParams = new URLSearchParams(window.location.search);
+    jobsPage = Math.max(1, Number(initialParams.get("page")) || 1);
+    jobsPerPage.value = ["25", "50", "100"].includes(initialParams.get("per_page"))
+      ? initialParams.get("per_page")
+      : "50";
+    jobsFilter.value = initialParams.get("q") || "";
+    runFilter.value = initialParams.get("run_id") || "";
+    const initialStatuses = new Set((initialParams.get("status") || "").split(","));
+    statusCheckboxes.forEach((checkbox) => { checkbox.checked = initialStatuses.has(checkbox.value); });
+
+    jobsFilter?.addEventListener("input", () => {
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(() => restartJobsStream(true), 300);
+    });
+    jobsFilter?.addEventListener("search", () => restartJobsStream(true));
+    runFilter?.addEventListener("change", () => restartJobsStream(true));
+    jobsPerPage?.addEventListener("change", () => restartJobsStream(true));
+    statusCheckboxes.forEach((cb) => cb.addEventListener("change", () => restartJobsStream(true)));
+    jobsPagination?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-page]");
+      if (!button || button.closest(".disabled") || button.closest(".active")) return;
+      jobsPage = Math.max(1, Number(button.dataset.page) || 1);
+      restartJobsStream();
+    });
 
     document.addEventListener("click", async (event) => {
       const btn = event.target.closest(".js-job-action");
@@ -225,18 +310,7 @@
       }
     });
 
-    fetch(`${basePath}/jobs/snapshot`)
-      .then((res) => res.ok ? res.json() : [])
-      .then((data) => Array.isArray(data) && refreshJobs(data));
-
-    const source = new EventSource(`${basePath}/jobs/stream`);
-    source.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (Array.isArray(data)) {
-          refreshJobs(data);
-        }
-      } catch (_) {}
-    };
+    restartJobsStream();
+    window.addEventListener("pagehide", () => jobsSource?.close(), { once: true });
   </script>
 {% endblock %}

@@ -159,22 +159,22 @@ cargo build --bin es-copy-indices-server
   --env-templates ./conf/templates \
   --root-certificates ./certs \
   --runs-dir ./runs \
-  --bind 0.0.0.0:8080
+  --bind 127.0.0.1:8080
 ```
 
 ### main-server.toml
 ```toml
 [[endpoints]]
-  name = "REF prostředí"
-  url = "http://celzisr401.server.cetin:9200"
-  prefix = "tsm-ref"
+  name = "Reference environment"
+  url = "https://es-ref.example.com:9200"
+  prefix = "example-ref-"
   keep_alive = "10m"
   auth = { username = "empty", password = "empty" }
 
 [[endpoints]]
-  name = "TEST prostředí"
-  url = "http://celzist401.server.cetin:9200"
-  prefix = "tsm-test"
+  name = "Test environment"
+  url = "https://es-test.example.com:9200"
+  prefix = "example-test-"
   keep_alive = "10m"
   auth = { username = "empty", password = "empty" }
 ```
@@ -190,8 +190,8 @@ HTTPS example with self-signed certs:
 ```toml
 [[endpoints]]
   name = "PROD TLS"
-  url = "https://es-prod.local:9200"
-  prefix = "tsm"
+  url = "https://es-prod.example.com:9200"
+  prefix = "example-prod-"
   keep_alive = "10m"
   auth = { username = "elastic", password = "secret" }
 ```
@@ -300,15 +300,15 @@ Charts:
 
 ### Reverse proxy authentication
 
-Trusted-proxy authentication is opt-in for backward compatibility. With authentication
-disabled (the default), the UI operates as a local administrator and behaves like older
-versions.
+Trusted-proxy authentication is enabled by default. The server expects identity headers
+from `simple-idm-ad-proxy` or `simple-idm-oauth2-proxy` and denies requests without an
+authorized application group. The default listener is `127.0.0.1:8080` so the service can
+stay behind a same-host reverse proxy.
 
-To protect the UI with `simple-idm-ad-proxy` or `simple-idm-oauth2-proxy`:
+Recommended production invocation:
 
 ```bash
 BASE_PATH=/es-copy-indices \
-TRUSTED_PROXY_AUTH=true \
 LOGOUT_URL=/oauth2/sign_out \
 es-copy-indices-server \
   --main-config ./conf/main-server.toml \
@@ -319,17 +319,25 @@ es-copy-indices-server \
 The application accepts the canonical `X-Auth-*` headers and the compatible
 `X-WEBAUTH-*` aliases. The proxy must remove client-supplied identity headers before
 setting trusted values, and the application listener must not be reachable directly
-from untrusted networks.
+from untrusted networks. Authorization is derived only from `X-Auth-Groups` or
+`X-WEBAUTH-Groups`; generic role headers are ignored.
 
 Default role groups:
 
-- `es-copy-indices:viewer`: read-only UI, status, configuration and logs.
+- `es-copy-indices:viewer`: read-only UI, status, sanitized configuration and logs.
 - `es-copy-indices:editor`: Viewer access plus creating, starting and stopping runs/jobs.
-- `es-copy-indices:admin`: Editor access plus deleting runs, editing generated configs and changing runtime settings.
+- `es-copy-indices:admin`: Editor access plus deleting and exporting runs, reading/editing
+  generated configs and changing runtime settings.
 
 The group names can be changed with `AUTH_GROUP_VIEWER`, `AUTH_GROUP_EDITOR` and
 `AUTH_GROUP_ADMIN`. `X-Auth-Subject` is displayed as the durable identity when supplied;
 `X-Auth-User` is required as the login/display name.
+
+For an explicitly isolated development environment, authentication can be disabled with
+either `--allow-unauthenticated` or `ALLOW_UNAUTHENTICATED=true`. Every request then has
+local Admin privileges and the UI displays a warning banner. Never expose this mode to an
+untrusted network. The legacy `--trusted-proxy-auth` / `TRUSTED_PROXY_AUTH=true` switch is
+accepted temporarily but is redundant because trusted proxy authentication is the default.
 
 `BASE_PATH` is normalized, so `/es-copy-indices` and `/es-copy-indices/` are equivalent.
 All UI links, API calls, SSE streams and embedded Tabler assets use the configured prefix.
@@ -353,7 +361,10 @@ the environment variables documented below.
 - `--runs-dir DIR`: store run history/logs (default `./runs`).
 - `--base-path PATH` / `BASE_PATH`: reverse-proxy base path (e.g. `/es-copy-indices`).
 - `--logout-url URL` / `LOGOUT_URL`: logout endpoint exposed by the authentication proxy.
-- `--trusted-proxy-auth` / `TRUSTED_PROXY_AUTH`: require trusted proxy identity headers (default false).
+- `--allow-unauthenticated` / `ALLOW_UNAUTHENTICATED`: explicitly disable authentication
+  and grant local Admin privileges (default false).
+- `--trusted-proxy-auth` / `TRUSTED_PROXY_AUTH`: deprecated compatibility switch; trusted
+  proxy authentication is already enabled by default.
 - `--auth-group-viewer` / `AUTH_GROUP_VIEWER`: group granting Viewer access.
 - `--auth-group-editor` / `AUTH_GROUP_EDITOR`: group granting Editor access.
 - `--auth-group-admin` / `AUTH_GROUP_ADMIN`: group granting Admin access.
@@ -587,6 +598,10 @@ scroll_mode = "scrolling_search"
 
 ## Built With
 This project includes server UI and workflow improvements built with the help of CatGPT 5.2 codex.
+
+The server UI uses [uPlot](https://github.com/leeoniya/uPlot) for its Canvas-based
+time-series charts. uPlot is distributed under the MIT License; its license text
+is included with the vendored browser assets.
 
 ## License
 

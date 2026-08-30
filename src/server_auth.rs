@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Extension, Request, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
@@ -23,7 +23,10 @@ pub struct IdentityHeader {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ProxyIdentity {
+pub struct Principal {
+    pub auth_method: &'static str,
+    pub issuer: &'static str,
+    pub kind: &'static str,
     pub subject: Option<String>,
     pub username: String,
     pub email: Option<String>,
@@ -84,38 +87,91 @@ async fn require_role(
     next: Next,
     required: Role,
 ) -> Response {
-    if !config.enabled {
-        return next.run(req).await;
-    }
-
-    let Some(identity) = identity_from_headers(req.headers(), &config) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "trusted proxy identity and an authorized role are required",
-        )
-            .into_response();
+    let identity = if config.enabled {
+        let Some(identity) = identity_from_headers(req.headers(), &config) else {
+            tracing::warn!(
+                method = %req.method(),
+                path = %req.uri().path(),
+                "Authorization denied: trusted proxy identity is missing or has no application role"
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                "trusted proxy identity and an authorized role are required",
+            )
+                .into_response();
+        };
+        identity
+    } else {
+        local_admin_principal()
     };
 
     if identity.role < required {
+        tracing::warn!(
+            method = %req.method(),
+            path = %req.uri().path(),
+            subject = identity.subject.as_deref().unwrap_or("-"),
+            username = %identity.username,
+            role = ?identity.role,
+            required_role = ?required,
+            "Authorization denied: insufficient role"
+        );
         return (StatusCode::FORBIDDEN, "insufficient role").into_response();
     }
 
-    req.extensions_mut().insert(identity);
-    next.run(req).await
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    req.extensions_mut().insert(identity.clone());
+    let response = next.run(req).await;
+    if should_audit(&method, &path, required) {
+        tracing::info!(
+            target: "es_copy_indices_server::audit",
+            method = %method,
+            path = %path,
+            status = response.status().as_u16(),
+            auth_method = identity.auth_method,
+            issuer = identity.issuer,
+            kind = identity.kind,
+            subject = identity.subject.as_deref().unwrap_or("-"),
+            username = %identity.username,
+            role = ?identity.role,
+            "Authorized operation"
+        );
+    }
+    response
 }
 
-fn identity_from_headers(headers: &HeaderMap, config: &AuthConfig) -> Option<ProxyIdentity> {
+fn should_audit(method: &Method, path: &str, required: Role) -> bool {
+    (method != Method::GET && method != Method::HEAD && method != Method::OPTIONS)
+        || (required == Role::Admin && (path.ends_with("/export") || path.contains("/configs/")))
+}
+
+fn local_admin_principal() -> Principal {
+    Principal {
+        auth_method: "unauthenticated",
+        issuer: "local",
+        kind: "user",
+        subject: None,
+        username: "Local administrator".to_string(),
+        email: None,
+        groups: Vec::new(),
+        role: Role::Admin,
+        headers: Vec::new(),
+    }
+}
+
+fn identity_from_headers(headers: &HeaderMap, config: &AuthConfig) -> Option<Principal> {
     let username = first_header(headers, &["x-auth-user", "x-webauth-user"])?;
     let subject = first_header(headers, &["x-auth-subject", "x-webauth-subject"]);
     let email = first_header(headers, &["x-auth-email", "x-webauth-email"]);
     let groups = parse_groups(
         &first_header(headers, &["x-auth-groups", "x-webauth-groups"]).unwrap_or_default(),
     );
-    let explicit_role = first_header(headers, &["x-auth-role", "x-webauth-role"])
-        .and_then(|value| role_from_name(&value));
-    let role = explicit_role.or_else(|| role_from_groups(&groups, config))?;
+    let role = role_from_groups(&groups, config)?;
 
-    Some(ProxyIdentity {
+    Some(Principal {
+        auth_method: "trusted_proxy_headers",
+        issuer: "proxy",
+        kind: "user",
         subject,
         username,
         email,
@@ -144,15 +200,6 @@ fn parse_groups(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn role_from_name(value: &str) -> Option<Role> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "admin" => Some(Role::Admin),
-        "editor" | "operator" => Some(Role::Editor),
-        "viewer" | "reader" => Some(Role::Viewer),
-        _ => None,
-    }
-}
-
 fn role_from_groups(groups: &[String], config: &AuthConfig) -> Option<Role> {
     if groups.iter().any(|group| group == &config.admin_group) {
         Some(Role::Admin)
@@ -166,17 +213,15 @@ fn role_from_groups(groups: &[String], config: &AuthConfig) -> Option<Role> {
 }
 
 fn visible_identity_headers(headers: &HeaderMap) -> Vec<IdentityHeader> {
-    const VISIBLE_HEADERS: [(&str, &str); 10] = [
+    const VISIBLE_HEADERS: [(&str, &str); 8] = [
         ("x-auth-subject", "X-Auth-Subject"),
         ("x-auth-user", "X-Auth-User"),
         ("x-auth-email", "X-Auth-Email"),
         ("x-auth-groups", "X-Auth-Groups"),
-        ("x-auth-role", "X-Auth-Role"),
         ("x-webauth-subject", "X-WEBAUTH-SUBJECT"),
         ("x-webauth-user", "X-WEBAUTH-USER"),
         ("x-webauth-email", "X-WEBAUTH-EMAIL"),
         ("x-webauth-groups", "X-WEBAUTH-GROUPS"),
-        ("x-webauth-role", "X-WEBAUTH-ROLE"),
     ];
 
     VISIBLE_HEADERS
@@ -197,30 +242,25 @@ fn visible_identity_headers(headers: &HeaderMap) -> Vec<IdentityHeader> {
 
 pub async fn session(
     Extension(config): Extension<Arc<AuthConfig>>,
-    identity: Option<Extension<ProxyIdentity>>,
+    Extension(identity): Extension<Principal>,
 ) -> Json<AuthSession> {
-    let session = match identity {
-        Some(Extension(identity)) => AuthSession {
-            mode: "trusted-proxy",
-            enabled: true,
-            subject: identity.subject,
-            username: identity.username,
-            email: identity.email,
-            groups: identity.groups,
-            role: identity.role,
-            headers: identity.headers,
-            logout_url: config.logout_url.clone(),
+    let session = AuthSession {
+        mode: if config.enabled {
+            "trusted-proxy"
+        } else {
+            "unauthenticated"
         },
-        None => AuthSession {
-            mode: "disabled",
-            enabled: false,
-            subject: None,
-            username: "Local administrator".to_string(),
-            email: None,
-            groups: Vec::new(),
-            role: Role::Admin,
-            headers: Vec::new(),
-            logout_url: None,
+        enabled: config.enabled,
+        subject: identity.subject,
+        username: identity.username,
+        email: identity.email,
+        groups: identity.groups,
+        role: identity.role,
+        headers: identity.headers,
+        logout_url: if config.enabled {
+            config.logout_url.clone()
+        } else {
+            None
         },
     };
     Json(session)
@@ -259,20 +299,23 @@ mod tests {
     }
 
     #[test]
-    fn webauth_aliases_and_operator_role_are_accepted() {
+    fn webauth_aliases_and_groups_are_accepted() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-webauth-user", HeaderValue::from_static("mares"));
-        headers.insert("x-webauth-role", HeaderValue::from_static("operator"));
+        headers.insert("x-webauth-user", HeaderValue::from_static("operator"));
+        headers.insert(
+            "x-webauth-groups",
+            HeaderValue::from_static("es-copy-indices:editor"),
+        );
 
         let identity = identity_from_headers(&headers, &config()).unwrap();
-        assert_eq!(identity.username, "mares");
+        assert_eq!(identity.username, "operator");
         assert_eq!(identity.role, Role::Editor);
     }
 
     #[test]
     fn highest_group_role_wins() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-auth-user", HeaderValue::from_static("mares"));
+        headers.insert("x-auth-user", HeaderValue::from_static("operator"));
         headers.insert(
             "x-auth-groups",
             HeaderValue::from_static(
@@ -287,11 +330,30 @@ mod tests {
     #[test]
     fn missing_identity_or_role_is_rejected() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-auth-role", HeaderValue::from_static("viewer"));
+        headers.insert(
+            "x-auth-groups",
+            HeaderValue::from_static("es-copy-indices:viewer"),
+        );
         assert!(identity_from_headers(&headers, &config()).is_none());
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-auth-user", HeaderValue::from_static("mares"));
+        headers.insert("x-auth-user", HeaderValue::from_static("operator"));
         assert!(identity_from_headers(&headers, &config()).is_none());
+    }
+
+    #[test]
+    fn audit_covers_mutations_and_sensitive_admin_reads() {
+        assert!(should_audit(&Method::POST, "/runs", Role::Editor));
+        assert!(should_audit(
+            &Method::GET,
+            "/runs/run-1/export",
+            Role::Admin
+        ));
+        assert!(should_audit(
+            &Method::GET,
+            "/runs/run-1/configs/job.toml",
+            Role::Admin
+        ));
+        assert!(!should_audit(&Method::GET, "/status", Role::Viewer));
     }
 }

@@ -23,6 +23,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fs;
 use std::io::{ErrorKind, Write};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,7 +55,7 @@ struct ServerArgs {
     insecure: bool,
     #[arg(long, default_value = "runs")]
     runs_dir: PathBuf,
-    #[arg(long, default_value = "0.0.0.0:8080")]
+    #[arg(long, default_value = "127.0.0.1:8080")]
     bind: String,
     #[arg(long = "es-copy-indices-path", default_value = "es-copy-indices")]
     es_copy_path: PathBuf,
@@ -62,8 +63,10 @@ struct ServerArgs {
     base_path: String,
     #[arg(long, env = "LOGOUT_URL")]
     logout_url: Option<String>,
-    #[arg(long, env = "TRUSTED_PROXY_AUTH", default_value_t = false)]
+    #[arg(long, env = "TRUSTED_PROXY_AUTH", default_value_t = false, hide = true)]
     trusted_proxy_auth: bool,
+    #[arg(long, env = "ALLOW_UNAUTHENTICATED", default_value_t = false)]
+    allow_unauthenticated: bool,
     #[arg(
         long,
         env = "AUTH_GROUP_ADMIN",
@@ -716,7 +719,6 @@ struct OutputCustom {
 #[derive(Template)]
 #[template(path = "server/index.html")]
 struct IndexTemplate {
-    runs: Vec<RunSummary>,
     base_path: String,
     version: &'static str,
     active_nav: String,
@@ -725,6 +727,8 @@ struct IndexTemplate {
     endpoints_json: String,
     templates_json: String,
     metrics_samples_json: String,
+    runs_page_json: String,
+    runs_total: usize,
     running_total: usize,
     queued_total: usize,
     copy_suffix: Option<String>,
@@ -777,7 +781,6 @@ struct JobsTemplate {
     base_path: String,
     version: &'static str,
     runs: Vec<RunOption>,
-    runs_json: String,
     active_nav: String,
 }
 
@@ -931,6 +934,36 @@ struct JobListEntry {
     can_stop: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Default)]
+struct PageQuery {
+    page: Option<usize>,
+    per_page: Option<usize>,
+    q: Option<String>,
+    status: Option<String>,
+    run_id: Option<String>,
+    mode: Option<String>,
+    destination: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct PageResponse<T> {
+    items: Vec<T>,
+    page: usize,
+    per_page: usize,
+    total: usize,
+    total_pages: usize,
+}
+
+#[derive(Clone, Serialize)]
+struct RunsPageResponse {
+    history: PageResponse<RunSummary>,
+    active_runs: Vec<RunSummary>,
+    active_total: usize,
+    runs_total: usize,
+    running_jobs: usize,
+    queued_jobs: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 struct MetricsState {
     samples: VecDeque<MetricsSample>,
@@ -987,6 +1020,39 @@ pub async fn run() {
         .init();
 
     let args = ServerArgs::parse();
+    if args.trusted_proxy_auth && args.allow_unauthenticated {
+        panic!("--trusted-proxy-auth and --allow-unauthenticated cannot be used together");
+    }
+    if args.trusted_proxy_auth {
+        warn!(
+            "--trusted-proxy-auth is deprecated because trusted proxy authentication is now enabled by default"
+        );
+    }
+    if args.allow_unauthenticated {
+        warn!(
+            "AUTHENTICATION IS DISABLED: all requests have local administrator privileges; use only in an explicitly isolated environment"
+        );
+    }
+    if !bind_is_loopback(&args.bind) {
+        if args.allow_unauthenticated {
+            warn!(
+                bind = %args.bind,
+                "UNAUTHENTICATED listener is not bound to loopback; every reachable client has administrator privileges"
+            );
+        } else {
+            warn!(
+                bind = %args.bind,
+                "Trusted proxy authentication requires this listener to be reachable only through the trusted proxy"
+            );
+        }
+    }
+    if let Err(err) = validate_auth_group_names(
+        &args.auth_group_admin,
+        &args.auth_group_editor,
+        &args.auth_group_viewer,
+    ) {
+        panic!("Invalid authorization group configuration: {err}");
+    }
     if let Some(path) = &args.root_certificates {
         if !path.is_dir() {
             warn!(
@@ -1035,7 +1101,7 @@ pub async fn run() {
     };
     let destination_queues = build_destination_queues(&endpoints, default_max_concurrent_jobs);
     let auth_config = Arc::new(server_auth::AuthConfig {
-        enabled: args.trusted_proxy_auth,
+        enabled: !args.allow_unauthenticated,
         admin_group: args.auth_group_admin.clone(),
         editor_group: args.auth_group_editor.clone(),
         viewer_group: args.auth_group_viewer.clone(),
@@ -1094,9 +1160,6 @@ pub async fn run() {
         .route("/runs/stream", get(runs_stream))
         .route("/runs/{run_id}", get(run_view))
         .route("/runs/{run_id}/stream", get(run_stream))
-        .route("/runs/{run_id}/configs", get(run_configs_list))
-        .route("/runs/{run_id}/configs/{file_name}", get(run_config_fetch))
-        .route("/runs/{run_id}/export", get(export_run))
         .route("/runs/{run_id}/jobs/{job_id}", get(job_view))
         .route("/runs/{run_id}/jobs/{job_id}/stream", get(job_stream))
         .route(
@@ -1127,6 +1190,12 @@ pub async fn run() {
 
     let admin_routes = Router::new()
         .route("/settings", get(settings_view))
+        .route("/runs/{run_id}/configs", get(run_configs_list))
+        .route(
+            "/runs/{run_id}/configs/{file_name}",
+            get(run_config_fetch).post(run_config_save),
+        )
+        .route("/runs/{run_id}/export", get(export_run))
         .route(
             "/settings/max-concurrent-jobs",
             post(update_max_concurrent_jobs),
@@ -1136,7 +1205,6 @@ pub async fn run() {
             post(update_max_concurrent_jobs_for_endpoint),
         )
         .route("/runs/{run_id}/delete", post(delete_run))
-        .route("/runs/{run_id}/configs/{file_name}", post(run_config_save))
         .layer(middleware::from_fn_with_state(
             auth_config,
             server_auth::require_admin,
@@ -1169,10 +1237,11 @@ async fn healthz() -> StatusCode {
     StatusCode::OK
 }
 
-async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let runs = build_run_summaries(&state).await;
-    let running_total = runs.iter().map(|run| run.jobs_running).sum();
-    let queued_total = runs.iter().map(|run| run.jobs_queued).sum();
+async fn index(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PageQuery>,
+) -> impl IntoResponse {
+    let runs_page = build_runs_page(&state, &query).await;
     let backup_root_value = state
         .backup_dir
         .as_ref()
@@ -1184,7 +1253,6 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         backup_root_value.clone()
     };
     let template = IndexTemplate {
-        runs,
         base_path: template_base_path(state.as_ref()),
         version: env!("CARGO_PKG_VERSION"),
         active_nav: "dashboard".to_string(),
@@ -1193,8 +1261,10 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         endpoints_json: endpoints_json(&state),
         templates_json: templates_json(&state),
         metrics_samples_json: metrics_samples_json(state.as_ref()).await,
-        running_total,
-        queued_total,
+        runs_page_json: serde_json::to_string(&runs_page).unwrap_or_else(|_| "{}".to_string()),
+        runs_total: runs_page.runs_total,
+        running_total: runs_page.running_jobs,
+        queued_total: runs_page.queued_jobs,
         copy_suffix: state.copy_suffix.clone(),
         alias_suffix: state.alias_suffix.clone(),
         backup_root_display,
@@ -2930,7 +3000,12 @@ async fn status_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn status_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let metrics = state.metrics.read().await;
-    let samples: Vec<MetricsSample> = metrics.samples.iter().cloned().collect();
+    let samples: Vec<MetricsSample> = metrics
+        .samples
+        .iter()
+        .skip(metrics.samples.len().saturating_sub(120))
+        .cloned()
+        .collect();
     Json(samples)
 }
 
@@ -2948,7 +3023,10 @@ async fn status_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     Sse::new(stream).into_response()
 }
 
-async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn runs_stream(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PageQuery>,
+) -> impl IntoResponse {
     let seconds = if state.refresh_seconds == 0 {
         5
     } else {
@@ -2957,12 +3035,10 @@ async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let interval = tokio::time::interval(Duration::from_secs(seconds));
     let stream = IntervalStream::new(interval).then(move |_| {
         let state = Arc::clone(&state);
+        let query = query.clone();
         async move {
-            let runs = build_run_summaries(&state).await;
-            let payload = serde_json::to_string(&serde_json::json!({
-                "runs": runs
-            }))
-            .unwrap_or_else(|_| "{}".to_string());
+            let page = build_runs_page(&state, &query).await;
+            let payload = serde_json::to_string(&page).unwrap_or_else(|_| "{}".to_string());
             Ok::<axum::response::sse::Event, Infallible>(
                 axum::response::sse::Event::default().data(payload),
             )
@@ -2971,12 +3047,11 @@ async fn runs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Sse::new(stream).into_response()
 }
 
-async fn runs_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let runs = build_run_summaries(&state).await;
-    Json(json!({
-        "runs": runs
-    }))
-    .into_response()
+async fn runs_snapshot(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PageQuery>,
+) -> impl IntoResponse {
+    Json(build_runs_page(&state, &query).await).into_response()
 }
 
 async fn jobs_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -2985,18 +3060,22 @@ async fn jobs_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         base_path: template_base_path(state.as_ref()),
         version: env!("CARGO_PKG_VERSION"),
         runs,
-        runs_json: runs_json(&state).await,
         active_nav: "jobs".to_string(),
     };
     Html(render_template(&template)).into_response()
 }
 
-async fn jobs_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let jobs = build_jobs_list(&state).await;
-    Json(jobs).into_response()
+async fn jobs_snapshot(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PageQuery>,
+) -> impl IntoResponse {
+    Json(build_jobs_page(&state, &query).await).into_response()
 }
 
-async fn jobs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn jobs_stream(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PageQuery>,
+) -> impl IntoResponse {
     let seconds = if state.refresh_seconds == 0 {
         5
     } else {
@@ -3005,9 +3084,10 @@ async fn jobs_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let interval = tokio::time::interval(Duration::from_secs(seconds));
     let stream = IntervalStream::new(interval).then(move |_| {
         let state = Arc::clone(&state);
+        let query = query.clone();
         async move {
-            let jobs = build_jobs_list(&state).await;
-            let payload = serde_json::to_string(&jobs).unwrap_or_else(|_| "[]".to_string());
+            let page = build_jobs_page(&state, &query).await;
+            let payload = serde_json::to_string(&page).unwrap_or_else(|_| "{}".to_string());
             Ok::<axum::response::sse::Event, Infallible>(
                 axum::response::sse::Event::default().data(payload),
             )
@@ -4265,6 +4345,109 @@ async fn build_run_summaries(state: &Arc<AppState>) -> Vec<RunSummary> {
     summaries
 }
 
+fn paginate<T>(
+    items: Vec<T>,
+    requested_page: Option<usize>,
+    requested_size: Option<usize>,
+    default_size: usize,
+) -> PageResponse<T> {
+    let per_page = requested_size.unwrap_or(default_size).clamp(1, 100);
+    let total = items.len();
+    let total_pages = total.div_ceil(per_page).max(1);
+    let page = requested_page.unwrap_or(1).max(1).min(total_pages);
+    let offset = (page - 1) * per_page;
+    let items = items.into_iter().skip(offset).take(per_page).collect();
+    PageResponse {
+        items,
+        page,
+        per_page,
+        total,
+        total_pages,
+    }
+}
+
+fn run_matches_query(run: &RunSummary, query: &PageQuery) -> bool {
+    if let Some(destination) = query
+        .destination
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        && run.dst_id != destination
+    {
+        return false;
+    }
+    if let Some(mode) = query
+        .mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        && mode != "all"
+        && run.run_mode.as_str() != mode
+    {
+        return false;
+    }
+    if let Some(status) = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        let matches = match status {
+            "failed" => run.jobs_failed > 0,
+            "succeeded" => run.jobs_total > 0 && run.jobs_succeeded == run.jobs_total,
+            "pending" => {
+                run.jobs_running == 0
+                    && run.jobs_queued == 0
+                    && run.jobs_failed == 0
+                    && run.jobs_succeeded < run.jobs_total
+            }
+            _ => true,
+        };
+        if !matches {
+            return false;
+        }
+    }
+    if let Some(search) = query.q.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        let search = search.to_ascii_lowercase();
+        let haystack = format!(
+            "{} {} {} {} {}",
+            run.id, run.src_name, run.dst_name, run.template_name, run.created_at
+        )
+        .to_ascii_lowercase();
+        if !haystack.contains(&search) {
+            return false;
+        }
+    }
+    true
+}
+
+async fn build_runs_page(state: &Arc<AppState>, query: &PageQuery) -> RunsPageResponse {
+    let runs = build_run_summaries(state).await;
+    let runs_total = runs.len();
+    let running_jobs = runs.iter().map(|run| run.jobs_running).sum();
+    let queued_jobs = runs.iter().map(|run| run.jobs_queued).sum();
+    let active = runs
+        .iter()
+        .filter(|run| run.jobs_running > 0 || run.jobs_queued > 0)
+        .cloned()
+        .collect::<Vec<_>>();
+    let active_total = active.len();
+    let active_runs = active.into_iter().take(10).collect();
+    let history = runs
+        .into_iter()
+        .filter(|run| run.jobs_running == 0 && run.jobs_queued == 0)
+        .filter(|run| run_matches_query(run, query))
+        .collect();
+    RunsPageResponse {
+        history: paginate(history, query.page, query.per_page, 20),
+        active_runs,
+        active_total,
+        runs_total,
+        running_jobs,
+        queued_jobs,
+    }
+}
+
 fn count_jobs_by_destination(runs: &RunStore) -> HashMap<String, (usize, usize)> {
     let mut counts = HashMap::new();
     for run in runs.runs.values() {
@@ -4389,6 +4572,51 @@ async fn build_jobs_list(state: &Arc<AppState>) -> Vec<JobListEntry> {
         }
     }
     entries
+}
+
+async fn build_jobs_page(state: &Arc<AppState>, query: &PageQuery) -> PageResponse<JobListEntry> {
+    let selected_statuses = query
+        .status
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<HashSet<_>>();
+    let search = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    let items = build_jobs_list(state)
+        .await
+        .into_iter()
+        .filter(|job| {
+            if let Some(run_id) = query
+                .run_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                && job.run_id != run_id
+            {
+                return false;
+            }
+            if !selected_statuses.is_empty() && !selected_statuses.contains(job.status.as_str()) {
+                return false;
+            }
+            if let Some(search) = &search {
+                let haystack = format!(
+                    "{} {} {} {} {}",
+                    job.run_label, job.run_env_label, job.run_id, job.stage_name, job.job_name
+                )
+                .to_ascii_lowercase();
+                return haystack.contains(search);
+            }
+            true
+        })
+        .collect();
+    paginate(items, query.page, query.per_page, 50)
 }
 
 async fn build_run_view(state: &Arc<AppState>, run_id: &str) -> Option<RunView> {
@@ -5272,13 +5500,13 @@ fn templates_json(state: &AppState) -> String {
 
 async fn metrics_samples_json(state: &AppState) -> String {
     let metrics = state.metrics.read().await;
-    let samples: Vec<MetricsSample> = metrics.samples.iter().cloned().collect();
+    let samples: Vec<MetricsSample> = metrics
+        .samples
+        .iter()
+        .skip(metrics.samples.len().saturating_sub(120))
+        .cloned()
+        .collect();
     serde_json::to_string(&samples).unwrap_or_else(|_| "[]".to_string())
-}
-
-async fn runs_json(state: &Arc<AppState>) -> String {
-    let runs = build_run_options(state).await;
-    serde_json::to_string(&runs).unwrap_or_else(|_| "[]".to_string())
 }
 
 fn build_run_id() -> String {
@@ -6146,6 +6374,29 @@ fn normalize_endpoint_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
 
+fn bind_is_loopback(value: &str) -> bool {
+    value
+        .parse::<SocketAddr>()
+        .map(|address| address.ip().is_loopback())
+        .unwrap_or_else(|_| {
+            value
+                .rsplit_once(':')
+                .map(|(host, _)| host.eq_ignore_ascii_case("localhost"))
+                .unwrap_or(false)
+        })
+}
+
+fn validate_auth_group_names(admin: &str, editor: &str, viewer: &str) -> Result<(), String> {
+    let groups = [admin.trim(), editor.trim(), viewer.trim()];
+    if groups.iter().any(|group| group.is_empty()) {
+        return Err("admin, editor and viewer group names must not be empty".to_string());
+    }
+    if groups[0] == groups[1] || groups[0] == groups[2] || groups[1] == groups[2] {
+        return Err("admin, editor and viewer group names must be distinct".to_string());
+    }
+    Ok(())
+}
+
 fn is_sensitive_key(key: &str) -> bool {
     matches!(
         key.to_ascii_lowercase().as_str(),
@@ -6315,9 +6566,11 @@ fn with_base(state: &AppState, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_bytes, normalize_base_path, normalize_endpoint_url, normalize_logout_url,
-        process_cpu_as_host_percent,
+        PageQuery, RunMode, RunSummary, ServerArgs, bind_is_loopback, format_bytes,
+        normalize_base_path, normalize_endpoint_url, normalize_logout_url, paginate,
+        process_cpu_as_host_percent, run_matches_query, validate_auth_group_names,
     };
+    use clap::Parser;
 
     #[test]
     fn endpoint_url_without_trailing_slash_is_unchanged() {
@@ -6365,5 +6618,94 @@ mod tests {
             normalize_logout_url("https://sso.example/logout"),
             "https://sso.example/logout"
         );
+    }
+
+    #[test]
+    fn authorization_group_names_must_be_non_empty_and_distinct() {
+        assert!(validate_auth_group_names("app:admin", "app:editor", "app:viewer").is_ok());
+        assert!(validate_auth_group_names("", "app:editor", "app:viewer").is_err());
+        assert!(validate_auth_group_names("app:admin", "app:admin", "app:viewer").is_err());
+    }
+
+    #[test]
+    fn loopback_bind_detection_accepts_ipv4_ipv6_and_localhost() {
+        assert!(bind_is_loopback("127.0.0.1:8080"));
+        assert!(bind_is_loopback("[::1]:8080"));
+        assert!(bind_is_loopback("localhost:8080"));
+        assert!(!bind_is_loopback("0.0.0.0:8080"));
+    }
+
+    #[test]
+    fn server_defaults_to_trusted_proxy_auth_on_loopback() {
+        let args = ServerArgs::try_parse_from([
+            "es-copy-indices-server",
+            "--main-config",
+            "main.toml",
+            "--env-templates",
+            "templates",
+        ])
+        .unwrap();
+
+        assert_eq!(args.bind, "127.0.0.1:8080");
+        assert!(!args.allow_unauthenticated);
+    }
+
+    #[test]
+    fn unauthenticated_mode_requires_explicit_flag() {
+        let args = ServerArgs::try_parse_from([
+            "es-copy-indices-server",
+            "--main-config",
+            "main.toml",
+            "--env-templates",
+            "templates",
+            "--allow-unauthenticated",
+        ])
+        .unwrap();
+
+        assert!(args.allow_unauthenticated);
+    }
+
+    #[test]
+    fn pagination_clamps_page_and_page_size() {
+        let page = paginate((1..=120).collect::<Vec<_>>(), Some(99), Some(500), 20);
+        assert_eq!(page.page, 2);
+        assert_eq!(page.per_page, 100);
+        assert_eq!(page.total, 120);
+        assert_eq!(page.total_pages, 2);
+        assert_eq!(page.items, (101..=120).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn run_history_filters_are_combined() {
+        let run = RunSummary {
+            id: "run-001".to_string(),
+            created_at: "2026-08-30T10:00:00Z".to_string(),
+            jobs_total: 2,
+            jobs_running: 0,
+            jobs_queued: 0,
+            jobs_failed: 1,
+            jobs_succeeded: 1,
+            src_name: "Source".to_string(),
+            dst_name: "Destination".to_string(),
+            dst_id: "destination".to_string(),
+            template_name: "Orders".to_string(),
+            dry_run: false,
+            copy_suffix: None,
+            alias_suffix: None,
+            wizard: true,
+            run_mode: RunMode::Restore,
+        };
+        let matching = PageQuery {
+            q: Some("orders".to_string()),
+            status: Some("failed".to_string()),
+            mode: Some("restore".to_string()),
+            destination: Some("destination".to_string()),
+            ..PageQuery::default()
+        };
+        assert!(run_matches_query(&run, &matching));
+
+        let mut wrong_mode = matching;
+        wrong_mode.mode = Some("backup".to_string());
+        assert!(!run_matches_query(&run, &wrong_mode));
     }
 }

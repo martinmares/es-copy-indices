@@ -92,6 +92,13 @@
         </div>
       </header>
 
+      <div class="alert alert-danger rounded-0 mb-0 d-none" role="alert" id="auth-disabled-warning">
+        <div class="container-xl">
+          <i class="ti ti-shield-off me-2"></i>
+          <strong>Authentication disabled</strong> — all requests have local administrator privileges.
+        </div>
+      </div>
+
       <header class="navbar-expand-md d-print-none">
         <div class="collapse navbar-collapse" id="navbar-menu">
           <div class="navbar">
@@ -251,7 +258,11 @@
             document.getElementById("account-detail-role").textContent = role;
             document.getElementById("account-email").textContent = session.email || "";
             document.getElementById("account-auth-mode").textContent =
-              session.mode === "trusted-proxy" ? "Trusted proxy" : "Local";
+              session.mode === "trusted-proxy" ? "Trusted proxy" : "Unauthenticated";
+
+            if (!session.enabled) {
+              document.getElementById("auth-disabled-warning").classList.remove("d-none");
+            }
 
             if (session.subject) {
               document.getElementById("account-subject").textContent = session.subject;

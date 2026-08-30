@@ -11,6 +11,8 @@ const TABLER_ICONS_WOFF: &[u8] =
     include_bytes!("../static/vendor/tabler-icons/css/fonts/tabler-icons.woff");
 const TABLER_ICONS_WOFF2: &[u8] =
     include_bytes!("../static/vendor/tabler-icons/css/fonts/tabler-icons.woff2");
+const UPLOT_JS: &[u8] = include_bytes!("../static/vendor/uplot/uPlot.iife.min.js");
+const UPLOT_CSS: &[u8] = include_bytes!("../static/vendor/uplot/uPlot.min.css");
 const FAVICON_SVG: &[u8] = include_bytes!("../static/favicon.svg");
 
 pub async fn serve(Path(path): Path<String>) -> Response {
@@ -25,6 +27,8 @@ pub async fn serve(Path(path): Path<String>) -> Response {
         "vendor/tabler-icons/css/fonts/tabler-icons.woff2" => {
             Some((TABLER_ICONS_WOFF2, "font/woff2"))
         }
+        "vendor/uplot/uPlot.iife.min.js" => Some((UPLOT_JS, "text/javascript; charset=utf-8")),
+        "vendor/uplot/uPlot.min.css" => Some((UPLOT_CSS, "text/css; charset=utf-8")),
         "favicon.svg" => Some((FAVICON_SVG, "image/svg+xml")),
         _ => None,
     };
@@ -62,6 +66,13 @@ mod tests {
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),
             "image/svg+xml"
+        );
+
+        let response = serve(Path("vendor/uplot/uPlot.iife.min.js".to_string())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/javascript; charset=utf-8"
         );
     }
 
