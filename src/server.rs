@@ -718,6 +718,7 @@ struct OutputCustom {
 struct IndexTemplate {
     runs: Vec<RunSummary>,
     base_path: String,
+    version: &'static str,
     active_nav: String,
     endpoints: Vec<EndpointView>,
     templates: Vec<TemplateView>,
@@ -737,6 +738,7 @@ struct IndexTemplate {
 struct RunTemplate {
     run: RunView,
     base_path: String,
+    version: &'static str,
     active_nav: String,
 }
 
@@ -746,6 +748,7 @@ struct JobTemplate {
     run_id: String,
     job: JobView,
     base_path: String,
+    version: &'static str,
     active_nav: String,
 }
 
@@ -753,6 +756,7 @@ struct JobTemplate {
 #[template(path = "server/status.html")]
 struct StatusTemplate {
     base_path: String,
+    version: &'static str,
     summary: MetricsSummary,
     active_nav: String,
 }
@@ -761,6 +765,7 @@ struct StatusTemplate {
 #[template(path = "server/config.html")]
 struct ConfigTemplate {
     base_path: String,
+    version: &'static str,
     endpoints: Vec<EndpointView>,
     templates: Vec<TemplateView>,
     active_nav: String,
@@ -770,6 +775,7 @@ struct ConfigTemplate {
 #[template(path = "server/jobs.html")]
 struct JobsTemplate {
     base_path: String,
+    version: &'static str,
     runs: Vec<RunOption>,
     runs_json: String,
     active_nav: String,
@@ -779,6 +785,7 @@ struct JobsTemplate {
 #[template(path = "server/settings.html")]
 struct SettingsTemplate {
     base_path: String,
+    version: &'static str,
     queue_limits: Vec<QueueLimitView>,
     global_limit_value: String,
     active_nav: String,
@@ -1179,6 +1186,7 @@ async fn index(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let template = IndexTemplate {
         runs,
         base_path: template_base_path(state.as_ref()),
+        version: env!("CARGO_PKG_VERSION"),
         active_nav: "dashboard".to_string(),
         endpoints: build_endpoint_views(&state),
         templates: build_template_views(&state),
@@ -1300,6 +1308,7 @@ async fn backups_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn config_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let template = ConfigTemplate {
         base_path: template_base_path(state.as_ref()),
+        version: env!("CARGO_PKG_VERSION"),
         endpoints: build_endpoint_views(&state),
         templates: build_template_views(&state),
         active_nav: "config".to_string(),
@@ -1328,6 +1337,7 @@ async fn settings_view(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     };
     let template = SettingsTemplate {
         base_path: template_base_path(state.as_ref()),
+        version: env!("CARGO_PKG_VERSION"),
         queue_limits: build_queue_limits(&state).await,
         global_limit_value,
         active_nav: "settings".to_string(),
@@ -2642,6 +2652,7 @@ async fn run_view(
             let template = RunTemplate {
                 run,
                 base_path: template_base_path(state.as_ref()),
+                version: env!("CARGO_PKG_VERSION"),
                 active_nav: "dashboard".to_string(),
             };
             Html(render_template(&template)).into_response()
@@ -2809,6 +2820,7 @@ async fn job_view(
                 run_id,
                 job,
                 base_path: template_base_path(state.as_ref()),
+                version: env!("CARGO_PKG_VERSION"),
                 active_nav: "dashboard".to_string(),
             };
             Html(render_template(&template)).into_response()
@@ -2909,6 +2921,7 @@ async fn status_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     let template = StatusTemplate {
         base_path: template_base_path(state.as_ref()),
+        version: env!("CARGO_PKG_VERSION"),
         summary,
         active_nav: "status".to_string(),
     };
@@ -2970,6 +2983,7 @@ async fn jobs_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let runs = build_run_options(&state).await;
     let template = JobsTemplate {
         base_path: template_base_path(state.as_ref()),
+        version: env!("CARGO_PKG_VERSION"),
         runs,
         runs_json: runs_json(&state).await,
         active_nav: "jobs".to_string(),
