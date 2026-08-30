@@ -248,6 +248,8 @@
     const charts = {};
     let paused = false;
     let samples = [];
+    let chartsReady = null;
+    let disposed = false;
 
     function bytesToMiB(bytes) {
       return bytes / 1024 / 1024;
@@ -265,7 +267,7 @@
       return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
     }
 
-    function renderCharts() {
+    function chartSeries() {
       const cpuSeries = [
         { name: "Server", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.proc_cpu })) },
         { name: "Children", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.children_cpu })) },
@@ -285,18 +287,39 @@
         { name: "Load 5", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load5 })) },
         { name: "Load 15", data: samples.map((sample) => ({ x: sample.ts * 1000, y: sample.load15 })) },
       ];
-      charts.cpu ??= new ApexCharts(document.getElementById("cpuChart"), buildLineChart(cpuSeries));
-      charts.cpuTotal ??= new ApexCharts(document.getElementById("cpuTotalChart"), buildLineChart(cpuTotalSeries));
-      charts.mem ??= new ApexCharts(document.getElementById("memChart"), buildLineChart(memSeries));
-      charts.load ??= new ApexCharts(document.getElementById("loadChart"), buildLineChart(loadSeries));
-      charts.cpu.render();
-      charts.cpuTotal.render();
-      charts.mem.render();
-      charts.load.render();
-      charts.cpu.updateSeries(cpuSeries, true);
-      charts.cpuTotal.updateSeries(cpuTotalSeries, true);
-      charts.mem.updateSeries(memSeries, true);
-      charts.load.updateSeries(loadSeries, true);
+      return { cpuSeries, cpuTotalSeries, memSeries, loadSeries };
+    }
+
+    function renderCharts() {
+      if (disposed) return;
+      const series = chartSeries();
+      if (!chartsReady) {
+        charts.cpu = new ApexCharts(document.getElementById("cpuChart"), buildLineChart(series.cpuSeries));
+        charts.cpuTotal = new ApexCharts(document.getElementById("cpuTotalChart"), buildLineChart(series.cpuTotalSeries));
+        charts.mem = new ApexCharts(document.getElementById("memChart"), buildLineChart(series.memSeries));
+        charts.load = new ApexCharts(document.getElementById("loadChart"), buildLineChart(series.loadSeries));
+        chartsReady = Promise.all([
+          charts.cpu.render(),
+          charts.cpuTotal.render(),
+          charts.mem.render(),
+          charts.load.render(),
+        ]).catch((error) => {
+          console.error("Failed to render status charts", error);
+        });
+        return;
+      }
+
+      chartsReady.then(() => {
+        if (disposed) return;
+        return Promise.all([
+          charts.cpu.updateSeries(series.cpuSeries, false),
+          charts.cpuTotal.updateSeries(series.cpuTotalSeries, false),
+          charts.mem.updateSeries(series.memSeries, false),
+          charts.load.updateSeries(series.loadSeries, false),
+        ]);
+      }).catch((error) => {
+        console.error("Failed to update status charts", error);
+      });
     }
 
     function pauseLive() {
@@ -404,5 +427,10 @@
 
     document.getElementById("cpuChart")?.addEventListener("wheel", pauseLive);
     resumeLiveBtn.addEventListener("click", resumeLive);
+    window.addEventListener("pagehide", () => {
+      disposed = true;
+      stream.close();
+      Object.values(charts).forEach((chart) => chart.destroy());
+    }, { once: true });
   </script>
 {% endblock %}
