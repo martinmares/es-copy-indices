@@ -60,6 +60,65 @@
       background: var(--tblr-active-bg);
       outline: 0;
     }
+    .dashboard-action-groups {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 0.75rem;
+    }
+    .dashboard-action-group {
+      padding: 0.45rem 0.55rem 0.55rem;
+      border: 1px solid var(--tblr-border-color);
+      border-radius: var(--tblr-border-radius-lg);
+      background: var(--tblr-bg-surface-secondary);
+    }
+    .dashboard-action-label {
+      margin-bottom: 0.35rem;
+      color: var(--tblr-secondary-color);
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      line-height: 1;
+    }
+    .dashboard-action-buttons {
+      display: flex;
+      gap: 0.4rem;
+    }
+    .dashboard-action-wizard {
+      border-color: transparent;
+      color: #a78bfa;
+      background:
+        linear-gradient(var(--tblr-bg-surface-secondary), var(--tblr-bg-surface-secondary)) padding-box,
+        linear-gradient(135deg, #7048e8, #d6336c, #339af0) border-box;
+    }
+    .dashboard-action-wizard:hover,
+    .dashboard-action-wizard:focus-visible {
+      border-color: transparent;
+      color: #fff;
+      background: linear-gradient(135deg, #7048e8, #d6336c, #339af0) border-box;
+    }
+    .dashboard-action-restore {
+      border-color: var(--tblr-orange);
+      color: var(--tblr-orange);
+    }
+    .dashboard-action-restore:hover,
+    .dashboard-action-restore:focus-visible {
+      border-color: var(--tblr-orange);
+      color: #fff;
+      background-color: var(--tblr-orange);
+    }
+    @media (max-width: 767.98px) {
+      .dashboard-action-groups {
+        justify-content: stretch;
+        margin-top: 1rem;
+      }
+      .dashboard-action-group {
+        flex: 1 1 12rem;
+      }
+      .dashboard-action-buttons .btn {
+        flex: 1 1 auto;
+      }
+    }
   </style>
 {% endblock %}
 
@@ -72,19 +131,33 @@
         <div class="text-secondary">Manual stage/job control with live queue visibility.</div>
       </div>
       <div class="col-auto">
-        <div class="btn-list">
-          <button class="btn btn-outline-teal" id="openBackupRun" type="button" data-min-role="editor">
-            <i class="ti ti-database-export me-1"></i>Create backup
-          </button>
-          <button class="btn btn-outline-indigo" id="openRestoreRun" type="button" data-min-role="editor">
-            <i class="ti ti-database-import me-1"></i>Restore backup
-          </button>
-          <button class="btn btn-outline-primary" id="openClassicRun" type="button" data-min-role="editor">
-            <i class="ti ti-copy me-1"></i>New run
-          </button>
-          <button class="btn btn-primary" id="openWizardRun" type="button" data-min-role="editor">
-            <i class="ti ti-wand me-1"></i>Wizard
-          </button>
+        <div class="dashboard-action-groups">
+          <div class="dashboard-action-group">
+            <div class="dashboard-action-label">Copy Run</div>
+            <div class="dashboard-action-buttons">
+              <button class="btn btn-primary" id="openClassicRun" type="button"
+                      aria-label="Create run" data-min-role="editor">
+                <i class="ti ti-plus me-1"></i>Create
+              </button>
+              <button class="btn dashboard-action-wizard" id="openWizardRun" type="button"
+                      aria-label="Create run with Wizard" data-min-role="editor">
+                <i class="ti ti-wand me-1"></i>Wizard
+              </button>
+            </div>
+          </div>
+          <div class="dashboard-action-group">
+            <div class="dashboard-action-label">Backup Run</div>
+            <div class="dashboard-action-buttons">
+              <button class="btn btn-teal" id="openBackupRun" type="button"
+                      aria-label="Create backup" data-min-role="editor">
+                <i class="ti ti-database-export me-1"></i>Create
+              </button>
+              <button class="btn dashboard-action-restore" id="openRestoreRun" type="button"
+                      aria-label="Restore backup" data-min-role="editor">
+                <i class="ti ti-restore me-1"></i>Restore
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
